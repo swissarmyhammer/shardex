@@ -7,12 +7,14 @@
 pub mod config;
 pub mod error;
 pub mod identifiers;
+pub mod layout;
 pub mod memory;
 pub mod structures;
 
 pub use config::ShardexConfig;
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
+pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
 
