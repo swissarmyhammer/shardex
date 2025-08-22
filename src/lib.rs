@@ -6,9 +6,11 @@
 
 pub mod config;
 pub mod error;
+pub mod identifiers;
 
 pub use config::ShardexConfig;
 pub use error::ShardexError;
+pub use identifiers::{DocumentId, ShardId};
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;
