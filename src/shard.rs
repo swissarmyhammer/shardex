@@ -87,9 +87,9 @@
 //! ```
 
 use crate::error::ShardexError;
-use crate::identifiers::ShardId;
+use crate::identifiers::{DocumentId, ShardId};
 use crate::posting_storage::PostingStorage;
-use crate::structures::Posting;
+use crate::structures::{Posting, SearchResult};
 use crate::vector_storage::VectorStorage;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -423,6 +423,11 @@ impl Shard {
         self.capacity().saturating_sub(self.current_count())
     }
 
+    /// Get available capacity (alias for remaining_capacity for API consistency)
+    pub fn available_capacity(&self) -> usize {
+        self.remaining_capacity()
+    }
+
     /// Get shard metadata
     pub fn metadata(&self) -> &ShardMetadata {
         &self.metadata
@@ -580,6 +585,137 @@ impl Shard {
             .update_from_storages(&self.vector_storage, &self.posting_storage);
 
         Ok(())
+    }
+
+    /// Remove all postings for a specific document ID
+    ///
+    /// This method iterates through all postings and removes any that match
+    /// the given document ID. Returns the number of postings that were removed.
+    pub fn remove_document(&mut self, doc_id: DocumentId) -> Result<usize, ShardexError> {
+        if self.is_read_only() {
+            return Err(ShardexError::Config(
+                "Cannot remove documents from read-only shard".to_string(),
+            ));
+        }
+
+        let mut removed_count = 0;
+
+        // Iterate through all postings to find matches
+        // We iterate backwards to avoid index shifting issues
+        for index in (0..self.current_count()).rev() {
+            // Skip already deleted postings
+            if self.is_deleted(index)? {
+                continue;
+            }
+
+            // Get the document ID for this posting
+            let (posting_doc_id, _, _) = self
+                .posting_storage
+                .get_posting(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
+
+            // If this posting matches the document ID, remove it
+            if posting_doc_id == doc_id {
+                self.remove_posting(index)?;
+                removed_count += 1;
+            }
+        }
+
+        Ok(removed_count)
+    }
+
+    /// Search for the K nearest neighbors to the query vector within this shard
+    ///
+    /// This method performs a linear scan through all active (non-deleted) postings,
+    /// calculates dot product similarity scores, and returns the top K results
+    /// sorted by similarity score in descending order.
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>, ShardexError> {
+        // Validate query vector dimension
+        if query.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query.len(),
+            });
+        }
+
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::new();
+
+        // Scan through all postings
+        for index in 0..self.current_count() {
+            // Skip deleted postings
+            if self.is_deleted(index)? {
+                continue;
+            }
+
+            // Get the vector for this posting
+            let vector = self
+                .vector_storage
+                .get_vector(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get vector: {}", e)))?;
+
+            // Calculate cosine similarity 
+            let similarity_score = Self::calculate_cosine_similarity(query, vector);
+
+            // Get posting metadata
+            let (document_id, start, length) = self
+                .posting_storage
+                .get_posting(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
+
+            // Create search result
+            let search_result = SearchResult::from_posting(
+                Posting::new(document_id, start, length, vector.to_vec(), self.vector_size)?,
+                similarity_score,
+            )?;
+
+            results.push(search_result);
+        }
+
+        // Sort by similarity score in descending order
+        results.sort_by(|a, b| {
+            b.similarity_score
+                .partial_cmp(&a.similarity_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Return top K results
+        results.truncate(k);
+        Ok(results)
+    }
+
+    /// Calculate cosine similarity between two vectors
+    ///
+    /// Cosine similarity returns a value between -1.0 and 1.0, where:
+    /// - 1.0 means the vectors point in the same direction (most similar)
+    /// - 0.0 means the vectors are orthogonal (no similarity)
+    /// - -1.0 means the vectors point in opposite directions (least similar)
+    ///
+    /// We normalize it to 0.0-1.0 range for SearchResult compatibility by
+    /// applying the formula: (cosine + 1.0) / 2.0
+    fn calculate_cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
+        
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        
+        // Handle zero vectors to avoid division by zero
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.5; // Neutral similarity for zero vectors (maps to 0.0 cosine)
+        }
+        
+        let cosine = dot_product / (norm_a * norm_b);
+        
+        // Clamp cosine to valid range to handle floating point precision issues
+        let cosine = cosine.clamp(-1.0, 1.0);
+        
+        // Normalize to 0.0-1.0 range: (cosine + 1.0) / 2.0
+        // This maps -1.0 -> 0.0, 0.0 -> 0.5, 1.0 -> 1.0
+        (cosine + 1.0) / 2.0
     }
 
     /// Synchronize the shard to disk
@@ -988,5 +1124,368 @@ mod tests {
 
         let result = shard.get_posting(5);
         assert!(matches!(result, Err(ShardexError::Config(_))));
+    }
+
+    #[test]
+    fn test_shard_available_capacity() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 5, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Initially should have full capacity available
+        assert_eq!(shard.available_capacity(), 5);
+        assert_eq!(shard.remaining_capacity(), 5);
+
+        // Add a posting
+        let doc_id = DocumentId::new();
+        let vector = vec![1.0, 2.0];
+        let posting = Posting::new(doc_id, 100, 50, vector, 2).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Available capacity should decrease
+        assert_eq!(shard.available_capacity(), 4);
+        assert_eq!(shard.remaining_capacity(), 4);
+
+        // Add more postings
+        for i in 1..5 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, (i + 1) as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Should be full now
+        assert_eq!(shard.available_capacity(), 0);
+        assert!(shard.is_full());
+    }
+
+    #[test]
+    fn test_shard_remove_document_single() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+
+        // Add postings for different documents
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 2.0, 3.0], 3).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 75, vec![4.0, 5.0, 6.0], 3).unwrap();
+        let posting3 = Posting::new(doc_id1, 300, 25, vec![7.0, 8.0, 9.0], 3).unwrap(); // Same doc as posting1
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        assert_eq!(shard.active_count(), 3);
+
+        // Remove all postings for doc_id1
+        let removed_count = shard.remove_document(doc_id1).unwrap();
+        assert_eq!(removed_count, 2); // Should remove posting1 and posting3
+
+        assert_eq!(shard.current_count(), 3); // Still 3 total
+        assert_eq!(shard.active_count(), 1); // Only 1 active (posting2)
+
+        // Verify the right posting remains active
+        assert!(!shard.is_deleted(1).unwrap()); // posting2 at index 1 should be active
+        assert!(shard.is_deleted(0).unwrap()); // posting1 at index 0 should be deleted
+        assert!(shard.is_deleted(2).unwrap()); // posting3 at index 2 should be deleted
+    }
+
+    #[test]
+    fn test_shard_remove_document_multiple() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+
+        // Add multiple postings for the same document
+        for i in 0..5 {
+            let vector = vec![i as f32, (i + 1) as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        assert_eq!(shard.active_count(), 5);
+
+        // Remove all postings for the document
+        let removed_count = shard.remove_document(doc_id).unwrap();
+        assert_eq!(removed_count, 5);
+
+        assert_eq!(shard.current_count(), 5); // Still 5 total
+        assert_eq!(shard.active_count(), 0); // None active
+    }
+
+    #[test]
+    fn test_shard_remove_document_nonexistent() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new(); // This one won't be added
+
+        // Add a posting
+        let posting = Posting::new(doc_id1, 100, 50, vec![1.0, 2.0, 3.0], 3).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Try to remove a document that doesn't exist
+        let removed_count = shard.remove_document(doc_id2).unwrap();
+        assert_eq!(removed_count, 0);
+
+        // Original posting should still be there
+        assert_eq!(shard.active_count(), 1);
+        assert!(!shard.is_deleted(0).unwrap());
+    }
+
+    #[test]
+    fn test_shard_remove_document_read_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let directory = temp_dir.path().to_path_buf();
+
+        // Create shard with data
+        {
+            let mut shard = Shard::create(shard_id, 5, 2, directory.clone()).unwrap();
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 100, 50, vec![1.0, 2.0], 2).unwrap();
+            shard.add_posting(posting).unwrap();
+            shard.sync().unwrap();
+        }
+
+        // Open in read-only mode
+        {
+            let mut shard = Shard::open_read_only(shard_id, &directory).unwrap();
+            let doc_id = DocumentId::new();
+
+            // Should fail to remove from read-only shard
+            let result = shard.remove_document(doc_id);
+            assert!(matches!(result, Err(ShardexError::Config(_))));
+        }
+    }
+
+    #[test]
+    fn test_shard_search_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings with known vectors
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 0.0, 0.0], 3).unwrap(); // Unit vector along x-axis
+        let posting2 = Posting::new(doc_id2, 200, 75, vec![0.0, 1.0, 0.0], 3).unwrap(); // Unit vector along y-axis
+        let posting3 = Posting::new(doc_id3, 300, 25, vec![0.0, 0.0, 1.0], 3).unwrap(); // Unit vector along z-axis
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Query with x-axis vector - should match posting1 best
+        let query = vec![1.0, 0.0, 0.0];
+        let results = shard.search(&query, 3).unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].document_id, doc_id1); // Best match first
+        assert_eq!(results[0].similarity_score, 1.0); // Perfect match
+
+        // The other two should have similarity score of 0.5 (orthogonal vectors in normalized range)
+        assert_eq!(results[1].similarity_score, 0.5);
+        assert_eq!(results[2].similarity_score, 0.5);
+    }
+
+    #[test]
+    fn test_shard_search_k_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add multiple postings with unit vectors for predictable cosine similarity
+        let vectors = [
+            [1.0, 0.0],  // Same direction as query
+            [0.0, 1.0],  // Orthogonal to query
+            [-1.0, 0.0], // Opposite to query
+            [0.5, 0.5],  // At 45 degrees
+            [1.0, 1.0],  // At 45 degrees but not normalized
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Query for top 2 results
+        let query = vec![1.0, 0.0]; // Unit vector in x direction
+        let results = shard.search(&query, 2).unwrap();
+
+        assert_eq!(results.len(), 2);
+        // Results should be sorted by similarity (highest first)
+        assert!(results[0].similarity_score >= results[1].similarity_score);
+        // All scores should be between 0.0 and 1.0
+        for result in &results {
+            assert!(result.similarity_score >= 0.0 && result.similarity_score <= 1.0,
+                    "Similarity score {} is out of valid range [0.0, 1.0]", result.similarity_score);
+        }
+    }
+
+    #[test]
+    fn test_shard_search_with_deleted_postings() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+
+        // Add postings
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 0.0], 2).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 75, vec![0.0, 1.0], 2).unwrap();
+
+        let idx1 = shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        // Remove one posting
+        shard.remove_posting(idx1).unwrap();
+
+        // Search should only return the non-deleted posting
+        let query = vec![1.0, 1.0];
+        let results = shard.search(&query, 10).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].document_id, doc_id2);
+    }
+
+    #[test]
+    fn test_shard_search_dimension_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Query with wrong dimension should fail
+        let wrong_query = vec![1.0, 2.0]; // 2D instead of 3D
+        let result = shard.search(&wrong_query, 5);
+
+        match result {
+            Err(ShardexError::InvalidDimension { expected, actual }) => {
+                assert_eq!(expected, 3);
+                assert_eq!(actual, 2);
+            }
+            _ => panic!("Expected InvalidDimension error"),
+        }
+    }
+
+    #[test]
+    fn test_shard_search_empty_k() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add a posting
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 100, 50, vec![1.0, 2.0], 2).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Search with k=0 should return empty results
+        let query = vec![1.0, 2.0];
+        let results = shard.search(&query, 0).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_shard_search_empty_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Search empty shard should return empty results
+        let query = vec![1.0, 2.0];
+        let results = shard.search(&query, 5).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_cosine_similarity_calculation() {
+        // Test the internal cosine similarity function via search
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+        // Use unit vector for predictable cosine similarity
+        let posting = Posting::new(doc_id, 100, 50, vec![1.0, 0.0], 2).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Query with same direction - should give cosine similarity = 1.0 -> normalized to 1.0
+        let query = vec![2.0, 0.0]; // Same direction, different magnitude
+        let results = shard.search(&query, 1).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].similarity_score, 1.0); // Perfect similarity
+
+        // Test orthogonal vectors - should give cosine similarity = 0.0 -> normalized to 0.5
+        let doc_id2 = DocumentId::new();
+        let posting2 = Posting::new(doc_id2, 200, 50, vec![0.0, 1.0], 2).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        let results2 = shard.search(&query, 2).unwrap();
+        assert_eq!(results2.len(), 2);
+        assert_eq!(results2[0].similarity_score, 1.0); // First posting (same direction)
+        assert_eq!(results2[1].similarity_score, 0.5); // Second posting (orthogonal)
+    }
+
+    #[test]
+    fn test_shard_search_sorting() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 1, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings with different similarity scores using unit vectors for predictable results
+        let vectors = [
+            [1.0],   // Same direction as query [1.0] -> cosine = 1.0 -> normalized = 1.0
+            [-1.0],  // Opposite direction -> cosine = -1.0 -> normalized = 0.0
+            [0.5],   // Same direction, smaller magnitude -> cosine = 1.0 -> normalized = 1.0
+            [2.0],   // Same direction, larger magnitude -> cosine = 1.0 -> normalized = 1.0
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 1).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Query in positive direction
+        let query = vec![1.0];
+        let results = shard.search(&query, 4).unwrap();
+
+        assert_eq!(results.len(), 4);
+
+        // Results should be sorted by similarity score (descending)
+        // Vectors in same direction (positive) should have similarity 1.0
+        // Vector in opposite direction (negative) should have similarity 0.0
+        assert_eq!(results[0].similarity_score, 1.0); // Same direction vectors
+        assert_eq!(results[1].similarity_score, 1.0);
+        assert_eq!(results[2].similarity_score, 1.0);
+        assert_eq!(results[3].similarity_score, 0.0); // Opposite direction
+
+        // Verify they are in descending order
+        for i in 0..results.len() - 1 {
+            assert!(results[i].similarity_score >= results[i + 1].similarity_score);
+        }
     }
 }
