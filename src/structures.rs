@@ -14,11 +14,10 @@
 //! ```rust
 //! use shardex::structures::Posting;
 //! use shardex::identifiers::DocumentId;
-//! use ulid::Ulid;
 //!
-//! // Create a new posting with a 128-dimensional vector
-//! let doc_id = DocumentId::new(Ulid::new());
-//! let vector = vec![0.1, 0.2, 0.3]; // Usually 128 or more dimensions
+//! // Create a new posting with a 3-dimensional vector
+//! let doc_id = DocumentId::new();
+//! let vector = vec![0.1, 0.2, 0.3];
 //!
 //! let posting = Posting::new(doc_id, 100, 50, vector, 3)?;
 //!
@@ -34,10 +33,9 @@
 //! ```rust
 //! use shardex::structures::SearchResult;
 //! use shardex::identifiers::DocumentId;
-//! use ulid::Ulid;
 //!
 //! // Create search results with similarity scores
-//! let doc_id = DocumentId::new(Ulid::new());
+//! let doc_id = DocumentId::new();
 //! let vector = vec![0.5, 0.6, 0.7]; // Query embedding
 //!
 //! let result = SearchResult::new(doc_id, 200, 100, vector, 0.85, 3)?;
@@ -55,15 +53,14 @@
 //! ```rust
 //! use shardex::structures::{PostingHeader, SearchResultHeader};
 //! use shardex::identifiers::DocumentId;
-//! use ulid::Ulid;
 //!
 //! // Headers are memory-mappable and reference vector data externally
 //! let header = PostingHeader {
-//!     document_id: DocumentId::new(Ulid::new()),
+//!     document_id: DocumentId::new(),
 //!     start: 100,
 //!     length: 50,
 //!     vector_offset: 1024,  // Offset in the mapped file
-//!     vector_length: 128,   // Number of f32 elements
+//!     vector_len: 128,      // Number of f32 elements
 //! };
 //!
 //! // Headers can be safely cast from raw memory using bytemuck
@@ -77,17 +74,20 @@
 //! use shardex::structures::IndexStats;
 //!
 //! let stats = IndexStats {
-//!     total_documents: 10_000,
+//!     total_shards: 5,
 //!     total_postings: 50_000,
-//!     total_vectors: 50_000,
-//!     vector_dimensions: 128,
-//!     memory_usage_bytes: 26_214_400, // ~25MB
-//!     index_size_bytes: 52_428_800,   // ~50MB on disk
+//!     pending_operations: 10,
+//!     memory_usage: 26_214_400,     // ~25MB
+//!     active_postings: 45_000,
+//!     deleted_postings: 5_000,
+//!     average_shard_utilization: 0.8,
+//!     vector_dimension: 128,
+//!     disk_usage: 52_428_800,       // ~50MB on disk
 //! };
 //!
 //! // Display provides human-readable formatting
 //! println!("{}", stats);
-//! // Output: "IndexStats { docs: 10000, postings: 50000, vectors: 50000 (128-dim), memory: 25.0 MB, disk: 50.0 MB }"
+//! // Output shows comprehensive statistics
 //! ```
 //!
 //! ## Performance Characteristics
