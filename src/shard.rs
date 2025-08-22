@@ -1050,6 +1050,272 @@ impl Shard {
         }
         self.active_vector_count = count;
     }
+
+    /// Check if the shard should be split based on capacity utilization
+    /// 
+    /// Returns true when the shard is at 90% capacity or greater.
+    /// This threshold ensures splits happen before the shard becomes completely full.
+    pub fn should_split(&self) -> bool {
+        if self.capacity == 0 {
+            return false;
+        }
+        
+        // Split when at 90% capacity
+        let split_threshold = (self.capacity as f64 * 0.9) as usize;
+        self.current_count() >= split_threshold
+    }
+
+    /// Split the shard into two balanced sub-shards using k-means clustering
+    ///
+    /// This method creates two new shards with approximately half the capacity each,
+    /// and distributes the postings using k-means clustering (k=2) for balanced splits.
+    ///
+    /// # Returns
+    /// A tuple of two new shards: (shard_a, shard_b)
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The shard is read-only
+    /// - The shard has insufficient data to split (< 2 active postings)
+    /// - Clustering fails
+    /// - Shard creation fails
+    pub async fn split(&self) -> Result<(Shard, Shard), ShardexError> {
+        if self.is_read_only() {
+            return Err(ShardexError::Config(
+                "Cannot split read-only shard".to_string(),
+            ));
+        }
+
+        if self.active_count() < 2 {
+            return Err(ShardexError::Config(
+                "Cannot split shard with less than 2 active postings".to_string(),
+            ));
+        }
+
+        // Use k-means clustering to determine how to split the vectors
+        let (cluster_a_indices, cluster_b_indices) = self.cluster_vectors()?;
+
+        // Create two new shards with half capacity each (minimum 5)  
+        let new_capacity = std::cmp::max(self.capacity / 2, 5);
+
+        let shard_a_id = ShardId::new();
+        let shard_b_id = ShardId::new();
+
+        let mut shard_a = Shard::create(
+            shard_a_id,
+            new_capacity,
+            self.vector_size,
+            self.directory.clone(),
+        )?;
+
+        let mut shard_b = Shard::create(
+            shard_b_id,
+            new_capacity,
+            self.vector_size,
+            self.directory.clone(),
+        )?;
+
+        // Transfer postings to appropriate shards based on clustering
+        for &index in &cluster_a_indices {
+            if !self.is_deleted(index)? {
+                let posting = self.get_posting(index)?;
+                shard_a.add_posting(posting)?;
+            }
+        }
+
+        for &index in &cluster_b_indices {
+            if !self.is_deleted(index)? {
+                let posting = self.get_posting(index)?;
+                shard_b.add_posting(posting)?;
+            }
+        }
+
+        Ok((shard_a, shard_b))
+    }
+
+    /// Cluster vectors into two groups using k-means algorithm (k=2)
+    ///
+    /// This internal method performs k-means clustering to determine the best way
+    /// to split the shard's vectors into two balanced groups.
+    ///
+    /// # Returns
+    /// A tuple of two vectors containing the indices of postings for each cluster:
+    /// (cluster_a_indices, cluster_b_indices)
+    fn cluster_vectors(&self) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
+        let active_indices: Vec<usize> = (0..self.current_count())
+            .filter(|&i| !self.is_deleted(i).unwrap_or(true))
+            .collect();
+
+        if active_indices.len() < 2 {
+            return Err(ShardexError::Config(
+                "Need at least 2 active vectors for clustering".to_string(),
+            ));
+        }
+
+        // For very small sets, just split in half
+        if active_indices.len() <= 4 {
+            let mid = active_indices.len() / 2;
+            let cluster_a = active_indices[..mid].to_vec();
+            let cluster_b = active_indices[mid..].to_vec();
+            return Ok((cluster_a, cluster_b));
+        }
+
+        // Initialize centroids using the two most distant vectors (furthest pair)
+        let (centroid_a_idx, centroid_b_idx) = self.find_furthest_pair(&active_indices)?;
+        
+        // Check if all vectors are identical (pathological case for k-means)
+        let first_vector = self.vector_storage.get_vector(active_indices[0])
+            .map_err(|e| ShardexError::Shard(format!("Failed to get first vector: {}", e)))?;
+        let mut all_identical = true;
+        
+        for &idx in &active_indices[1..] {
+            let vector = self.vector_storage.get_vector(idx)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get vector for identity check: {}", e)))?;
+            if Self::euclidean_distance(first_vector, vector) > 1e-6 {
+                all_identical = false;
+                break;
+            }
+        }
+        
+        // If all vectors are identical, split evenly rather than using k-means
+        if all_identical {
+            let mid = active_indices.len() / 2;
+            let cluster_a = active_indices[..mid].to_vec();
+            let cluster_b = active_indices[mid..].to_vec();
+            return Ok((cluster_a, cluster_b));
+        }
+        
+        let centroid_a_vector = self.vector_storage.get_vector(centroid_a_idx)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid A vector: {}", e)))?;
+        let centroid_b_vector = self.vector_storage.get_vector(centroid_b_idx)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid B vector: {}", e)))?;
+
+        let mut centroid_a = centroid_a_vector.to_vec();
+        let mut centroid_b = centroid_b_vector.to_vec();
+
+        let mut cluster_a_indices = Vec::new();
+        let mut cluster_b_indices = Vec::new();
+        let max_iterations = 10;
+
+        // K-means iterations
+        for iteration in 0..max_iterations {
+            cluster_a_indices.clear();
+            cluster_b_indices.clear();
+
+            // Assign each vector to the nearest centroid
+            for &index in &active_indices {
+                let vector = self.vector_storage.get_vector(index)
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for clustering: {}", e)))?;
+
+                let dist_a = Self::euclidean_distance(vector, &centroid_a);
+                let dist_b = Self::euclidean_distance(vector, &centroid_b);
+
+                if dist_a <= dist_b {
+                    cluster_a_indices.push(index);
+                } else {
+                    cluster_b_indices.push(index);
+                }
+            }
+
+            // Ensure both clusters have at least one vector
+            if cluster_a_indices.is_empty() {
+                cluster_a_indices.push(cluster_b_indices.pop().unwrap());
+            } else if cluster_b_indices.is_empty() {
+                cluster_b_indices.push(cluster_a_indices.pop().unwrap());
+            }
+
+            // Update centroids
+            let new_centroid_a = self.calculate_cluster_centroid(&cluster_a_indices)?;
+            let new_centroid_b = self.calculate_cluster_centroid(&cluster_b_indices)?;
+
+            // Check for convergence
+            let centroid_a_change = Self::euclidean_distance(&centroid_a, &new_centroid_a);
+            let centroid_b_change = Self::euclidean_distance(&centroid_b, &new_centroid_b);
+
+            centroid_a = new_centroid_a;
+            centroid_b = new_centroid_b;
+
+            // Converged if centroids don't move much
+            if centroid_a_change < 1e-6 && centroid_b_change < 1e-6 {
+                break;
+            }
+
+            // For debugging: prevent infinite loops
+            if iteration == max_iterations - 1 {
+                tracing::warn!("K-means clustering reached max iterations without convergence");
+            }
+        }
+
+        Ok((cluster_a_indices, cluster_b_indices))
+    }
+
+    /// Find the pair of vectors with maximum distance (furthest pair)
+    /// 
+    /// This is used to initialize k-means centroids with a good starting point.
+    fn find_furthest_pair(&self, indices: &[usize]) -> Result<(usize, usize), ShardexError> {
+        if indices.len() < 2 {
+            return Err(ShardexError::Config(
+                "Need at least 2 vectors to find furthest pair".to_string(),
+            ));
+        }
+
+        let mut max_distance = 0.0;
+        let mut furthest_pair = (indices[0], indices[1]);
+
+        for i in 0..indices.len() {
+            for j in i + 1..indices.len() {
+                let vector_i = self.vector_storage.get_vector(indices[i])
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
+                let vector_j = self.vector_storage.get_vector(indices[j])
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
+
+                let distance = Self::euclidean_distance(vector_i, vector_j);
+                if distance > max_distance {
+                    max_distance = distance;
+                    furthest_pair = (indices[i], indices[j]);
+                }
+            }
+        }
+
+        Ok(furthest_pair)
+    }
+
+    /// Calculate the centroid (mean) of a cluster of vectors
+    fn calculate_cluster_centroid(&self, indices: &[usize]) -> Result<Vec<f32>, ShardexError> {
+        if indices.is_empty() {
+            return Ok(vec![0.0; self.vector_size]);
+        }
+
+        let mut centroid = vec![0.0; self.vector_size];
+        
+        for &index in indices {
+            let vector = self.vector_storage.get_vector(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get vector for centroid calculation: {}", e)))?;
+
+            for (i, &value) in vector.iter().enumerate() {
+                centroid[i] += value;
+            }
+        }
+
+        // Calculate mean
+        let count = indices.len() as f32;
+        for value in &mut centroid {
+            *value /= count;
+        }
+
+        Ok(centroid)
+    }
+
+    /// Calculate Euclidean distance between two vectors
+    fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
+        
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
 }
 
 #[cfg(test)]
@@ -2030,5 +2296,456 @@ mod tests {
         for i in 0..results.len() - 1 {
             assert!(results[i].similarity_score >= results[i + 1].similarity_score);
         }
+    }
+
+    // ========== Shard Splitting Tests ==========
+
+    #[test]
+    fn test_should_split_empty_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Empty shard should not need splitting
+        assert!(!shard.should_split());
+    }
+
+    #[test]
+    fn test_should_split_below_threshold() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 8 postings (80% capacity - below 90% threshold)
+        for i in 0..8 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 3).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        assert!(!shard.should_split());
+    }
+
+    #[test]
+    fn test_should_split_at_threshold() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 9 postings (90% capacity - at threshold)
+        for i in 0..9 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 3).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+
+
+        assert!(shard.should_split());
+    }
+
+    #[test]
+    fn test_should_split_zero_capacity() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        // This shouldn't be possible in practice, but test the edge case
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+        // Artificially set capacity to 0 for testing
+        shard.capacity = 0;
+
+        assert!(!shard.should_split());
+    }
+
+    #[tokio::test]
+    async fn test_split_read_only_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let directory = temp_dir.path().to_path_buf();
+
+        // Create and populate shard
+        {
+            let mut shard = Shard::create(shard_id, 10, 2, directory.clone()).unwrap();
+
+            for i in 0..9 {
+                let doc_id = DocumentId::new();
+                let vector = vec![i as f32, (i + 1) as f32];
+                let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+                shard.add_posting(posting).unwrap();
+            }
+
+            shard.sync().unwrap();
+        }
+
+        // Open in read-only mode and try to split
+        {
+            let shard = Shard::open_read_only(shard_id, &directory).unwrap();
+            assert!(shard.should_split());
+
+            let result = shard.split().await;
+            assert!(matches!(result, Err(ShardexError::Config(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_split_insufficient_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add only one posting
+        let doc_id = DocumentId::new();
+        let vector = vec![1.0, 2.0];
+        let posting = Posting::new(doc_id, 100, 50, vector, 2).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Should fail to split with insufficient data
+        let result = shard.split().await;
+        assert!(matches!(result, Err(ShardexError::Config(_))));
+    }
+
+    #[tokio::test]
+    async fn test_debug_split_capacity() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        for i in 0..9 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, i as f32];
+            let posting = Posting::new(doc_id, 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        eprintln!("Before split:");
+        eprintln!("  Original capacity: {}", shard.capacity());
+        eprintln!("  Should split: {}", shard.should_split());
+        
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+        
+        eprintln!("After split:");
+        eprintln!("  Shard A capacity: {}", shard_a.capacity());
+        eprintln!("  Shard B capacity: {}", shard_b.capacity());
+        
+        // For now, let's just see what the actual capacities are
+        assert!(shard_a.capacity() > 0);
+        assert!(shard_b.capacity() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_split_basic_functionality() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add vectors with clear clustering - two groups
+        let group_a_vectors = [
+            [1.0, 1.0],
+            [1.1, 1.1],
+            [1.2, 1.2],
+            [0.9, 0.9],
+        ];
+
+        let group_b_vectors = [
+            [5.0, 5.0],
+            [5.1, 5.1],
+            [4.9, 4.9],
+            [5.2, 5.0],
+        ];
+
+        // Add group A vectors
+        for vector in group_a_vectors {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 100, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Add group B vectors
+        for vector in group_b_vectors {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 200, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Add one more to reach 90% threshold (9/10)
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 300, 50, vec![2.5, 2.5], 2).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        assert!(shard.should_split());
+        assert_eq!(shard.active_count(), 9);
+
+        // Perform split
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Verify both shards have data
+        assert!(shard_a.active_count() > 0);
+        assert!(shard_b.active_count() > 0);
+        assert_eq!(shard_a.active_count() + shard_b.active_count(), 9);
+
+        // Verify capacity distribution
+        assert_eq!(shard_a.capacity(), 5); // Half of original
+        assert_eq!(shard_b.capacity(), 5); // Half of original
+        assert_eq!(shard_a.vector_size(), 2);
+        assert_eq!(shard_b.vector_size(), 2);
+
+        // Verify shards have different IDs
+        assert_ne!(shard_a.id(), shard_b.id());
+        assert_ne!(shard_a.id(), shard.id());
+        assert_ne!(shard_b.id(), shard.id());
+    }
+
+    #[tokio::test]
+    async fn test_split_balanced_distribution() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 20, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 18 vectors (90% capacity) in two clear clusters
+        for i in 0..9 {
+            // Cluster A: around (0, 0)
+            let doc_id_a = DocumentId::new();
+            let vector_a = vec![i as f32 * 0.1, i as f32 * 0.1];
+            let posting_a = Posting::new(doc_id_a, i * 100, 50, vector_a, 2).unwrap();
+            shard.add_posting(posting_a).unwrap();
+
+            // Cluster B: around (10, 10)
+            let doc_id_b = DocumentId::new();
+            let vector_b = vec![10.0 + i as f32 * 0.1, 10.0 + i as f32 * 0.1];
+            let posting_b = Posting::new(doc_id_b, (i + 100) * 100, 50, vector_b, 2).unwrap();
+            shard.add_posting(posting_b).unwrap();
+        }
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Should be reasonably balanced (within 1 posting difference is fine)
+        let count_diff = (shard_a.active_count() as i32 - shard_b.active_count() as i32).abs();
+        assert!(count_diff <= 1, "Split should be balanced: {} vs {}", 
+                shard_a.active_count(), shard_b.active_count());
+
+        // Total count should be preserved
+        assert_eq!(shard_a.active_count() + shard_b.active_count(), 18);
+    }
+
+    #[tokio::test]
+    async fn test_split_with_deleted_postings() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 20, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 18 postings
+        for i in 0..18 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, i as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Delete some postings
+        shard.remove_posting(1).unwrap();
+        shard.remove_posting(3).unwrap();
+        shard.remove_posting(5).unwrap();
+
+        assert_eq!(shard.current_count(), 18); // Total including deleted
+        assert_eq!(shard.active_count(), 15); // Only active ones
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Only active postings should be transferred
+        assert_eq!(shard_a.active_count() + shard_b.active_count(), 15);
+        assert!(shard_a.active_count() > 0);
+        assert!(shard_b.active_count() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_split_small_dataset() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add exactly 4 postings (small dataset that triggers simple splitting)
+        let vectors = [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+        ];
+
+        for vector in vectors {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 100, 50, vector.to_vec(), 3).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Should split roughly in half
+        assert_eq!(shard_a.active_count(), 2);
+        assert_eq!(shard_b.active_count(), 2);
+    }
+
+    #[test]
+    fn test_euclidean_distance_calculation() {
+        // Test basic distance calculation
+        let a = [0.0, 0.0];
+        let b = [3.0, 4.0];
+        let distance = Shard::euclidean_distance(&a, &b);
+        assert!((distance - 5.0).abs() < 1e-6); // 3-4-5 triangle
+
+        // Test same vectors
+        let c = [1.0, 2.0, 3.0];
+        let d = [1.0, 2.0, 3.0];
+        let distance2 = Shard::euclidean_distance(&c, &d);
+        assert!(distance2 < 1e-6); // Should be ~0
+
+        // Test unit vectors
+        let e = [1.0, 0.0];
+        let f = [0.0, 1.0];
+        let distance3 = Shard::euclidean_distance(&e, &f);
+        assert!((distance3 - 2.0_f32.sqrt()).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn test_split_data_integrity() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 12, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Keep track of all postings we add
+        let mut original_postings = Vec::new();
+
+        for i in 0..10 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, (i * 2) as f32];
+            let posting = Posting::new(doc_id, i * 100 + 1000, 50 + i, vector, 2).unwrap();
+            original_postings.push(posting.clone());
+            shard.add_posting(posting).unwrap();
+        }
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Collect all postings from both new shards
+        let mut recovered_postings = Vec::new();
+
+        for i in 0..shard_a.active_count() {
+            recovered_postings.push(shard_a.get_posting(i).unwrap());
+        }
+
+        for i in 0..shard_b.active_count() {
+            recovered_postings.push(shard_b.get_posting(i).unwrap());
+        }
+
+        // Verify all postings are preserved (order may differ)
+        assert_eq!(recovered_postings.len(), original_postings.len());
+
+        for original in &original_postings {
+            let found = recovered_postings.iter().any(|recovered| {
+                recovered.document_id == original.document_id
+                    && recovered.start == original.start
+                    && recovered.length == original.length
+                    && recovered.vector == original.vector
+            });
+            assert!(found, "Original posting not found in recovered postings");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_split_centroid_calculation() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Create two distinct clusters for predictable centroids
+        let group_a = [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]; // Centroid should be ~[1.0, 1.0]
+        let group_b = [[8.0, 8.0], [9.0, 9.0], [10.0, 10.0]]; // Centroid should be ~[9.0, 9.0]
+
+        for vector in group_a.iter().chain(group_b.iter()) {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 100, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Verify both shards have valid centroids
+        assert_eq!(shard_a.get_centroid().len(), 2);
+        assert_eq!(shard_b.get_centroid().len(), 2);
+
+        // Centroids should be different (not both zero)
+        let centroid_a = shard_a.get_centroid();
+        let centroid_b = shard_b.get_centroid();
+
+        let distance_between_centroids = Shard::euclidean_distance(centroid_a, centroid_b);
+        assert!(distance_between_centroids > 1.0, 
+                "Centroids should be well separated: A={:?}, B={:?}", 
+                centroid_a, centroid_b);
+    }
+
+    #[tokio::test]
+    async fn test_split_minimum_capacity() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        // Create shard with small capacity
+        let mut shard = Shard::create(shard_id, 6, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        for i in 0..6 {
+            let doc_id = DocumentId::new();
+            let vector = vec![i as f32, i as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Even with small original capacity, new shards should have minimum capacity of 5
+        assert_eq!(shard_a.capacity(), 5);
+        assert_eq!(shard_b.capacity(), 5);
+    }
+
+    #[tokio::test] 
+    async fn test_split_identical_vectors() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 12, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 4 identical vectors (pathological case)
+        for _i in 0..4 {
+            let doc_id = DocumentId::new();
+            let vector = vec![5.0, 5.0]; // All identical
+            let posting = Posting::new(doc_id, 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Split should still work even with identical vectors
+        let (shard_a, shard_b) = shard.split().await.unwrap();
+
+        // Should be split roughly evenly
+        assert!(shard_a.active_count() > 0);
+        assert!(shard_b.active_count() > 0);
+        assert_eq!(shard_a.active_count() + shard_b.active_count(), 4);
+
+        // Both centroids should be approximately the same (the identical vector)
+        let centroid_a = shard_a.get_centroid();
+        let centroid_b = shard_b.get_centroid();
+
+        assert!((centroid_a[0] - 5.0).abs() < 0.1);
+        assert!((centroid_a[1] - 5.0).abs() < 0.1);
+        assert!((centroid_b[0] - 5.0).abs() < 0.1);
+        assert!((centroid_b[1] - 5.0).abs() < 0.1);
     }
 }
