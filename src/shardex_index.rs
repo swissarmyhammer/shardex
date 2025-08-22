@@ -1145,6 +1145,47 @@ impl ShardexIndex {
         std::fs::write(&metadata_path, metadata_json).map_err(ShardexError::Io)?;
         Ok(())
     }
+
+    /// Get index statistics in a format compatible with structures::IndexStats
+    pub fn stats(&self) -> Result<crate::structures::IndexStats, ShardexError> {
+        let stats = self.statistics();
+        
+        Ok(crate::structures::IndexStats {
+            total_shards: stats.total_shards,
+            total_postings: stats.total_postings,
+            pending_operations: 0, // WAL operations not implemented yet
+            memory_usage: stats.total_memory_usage,
+            active_postings: stats.total_postings, // Assume all postings are active for now
+            deleted_postings: 0, // Deleted postings tracking not implemented yet
+            average_shard_utilization: stats.average_utilization,
+            vector_dimension: stats.vector_dimension,
+            disk_usage: stats.total_memory_usage, // Approximate disk usage
+        })
+    }
+
+    /// Create a deep copy of this ShardexIndex for copy-on-write operations
+    ///
+    /// This method creates a complete copy of the index including all shard metadata
+    /// but does not duplicate the actual shard cache. The copy will have an empty
+    /// cache that will be populated as shards are accessed.
+    ///
+    /// # Performance Notes
+    /// - O(n) complexity where n is the number of shards
+    /// - Shard cache is not copied to avoid excessive memory usage
+    /// - Metadata is cloned but actual shard files remain shared
+    ///
+    /// # Returns
+    /// A new ShardexIndex instance with identical metadata but empty cache
+    pub fn deep_clone(&self) -> Result<ShardexIndex, ShardexError> {
+        Ok(ShardexIndex {
+            shards: self.shards.clone(),
+            directory: self.directory.clone(),
+            vector_size: self.vector_size,
+            segment_capacity: self.segment_capacity,
+            shard_cache: HashMap::new(), // Start with empty cache
+            cache_limit: self.cache_limit,
+        })
+    }
 }
 
 /// Index metadata stored in the shardex.meta file
