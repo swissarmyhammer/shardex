@@ -933,7 +933,7 @@ mod tests {
         let corrupted_data = vec![99u8; 100]; // Different data
         
         // Create header with checksum for original data
-        let header = FileHeader::new(b"TEST", 1, &original_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
         
         // But write corrupted data instead
         mmf.write_at(0, &header).unwrap();
@@ -959,7 +959,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, &test_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -985,7 +985,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, &test_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -1013,7 +1013,7 @@ mod tests {
         // Create a valid file
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let test_data = vec![42u8; 100];
-        let header = FileHeader::new(b"TEST", 1, &test_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -1044,20 +1044,7 @@ mod tests {
         assert!(manager.needs_validation(file_path));
     }
 
-    #[test]
-    fn test_crc32_consistency() {
-        let data1 = b"Hello, World!";
-        let data2 = b"Hello, World!";
-        let data3 = b"Different data";
 
-        // Use FileHeader to test checksum consistency
-        let header1 = FileHeader::new(b"TEST", 1, data1);
-        let header2 = FileHeader::new(b"TEST", 1, data2);
-        let header3 = FileHeader::new(b"TEST", 1, data3);
-
-        assert_eq!(header1.checksum, header2.checksum);
-        assert_ne!(header1.checksum, header3.checksum);
-    }
 
     #[test]
     fn test_corruption_report_serialization() {
@@ -1143,7 +1130,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, &test_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -1189,7 +1176,7 @@ mod tests {
         let corrupted_data = vec![99u8; 100];
         
         // Create header with checksum for original data but write corrupted data
-        let header = FileHeader::new(b"TEST", 1, &original_data);
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &corrupted_data).unwrap();
@@ -1219,7 +1206,7 @@ mod tests {
             let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
             let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
             let test_data = vec![42u8; data_size];
-            let header = FileHeader::new(b"TEST", 1, &test_data);
+            let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
             
             mmf.write_at(0, &header).unwrap();
             mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -1285,7 +1272,7 @@ mod tests {
         test_data[50] = 0xFF;
         test_data[51] = 0xFF;
         
-        let header = FileHeader::new(b"TEST", 1, &vec![42u8; data_size]); // Original checksum
+        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &vec![42u8; data_size]); // Original checksum
         
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap(); // Corrupted data

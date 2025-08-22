@@ -163,6 +163,7 @@ impl VectorStorageHeader {
             file_header: FileHeader::new_without_checksum(
                 VECTOR_STORAGE_MAGIC,
                 VECTOR_STORAGE_VERSION,
+                FileHeader::SIZE as u64,
             ),
             vector_dimension: vector_dimension as u32,
             capacity: capacity as u32,

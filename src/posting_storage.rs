@@ -170,6 +170,7 @@ impl PostingStorageHeader {
             file_header: FileHeader::new_without_checksum(
                 POSTING_STORAGE_MAGIC,
                 POSTING_STORAGE_VERSION,
+                FileHeader::SIZE as u64,
             ),
             capacity: capacity as u32,
             current_count: 0,

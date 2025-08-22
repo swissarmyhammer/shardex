@@ -19,7 +19,7 @@ pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
 pub use integrity::{IntegrityConfig, IntegrityManager, CorruptionReport, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
-pub use memory::{FileHeader, MemoryMappedFile};
+pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
 pub use vector_storage::VectorStorage;

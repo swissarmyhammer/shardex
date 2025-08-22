@@ -7,7 +7,7 @@
 //! # Key Components
 //!
 //! - [`MemoryMappedFile`]: Core wrapper around memmap2 with safety abstractions
-//! - [`FileHeader`]: Structured header with magic bytes and checksum validation
+//! - [`StandardHeader`]: Comprehensive file header with metadata and version control
 //! - File creation and resizing utilities with proper error handling
 //!
 //! # Usage Examples
@@ -15,7 +15,7 @@
 //! ## Creating and Writing to a Memory-Mapped File
 //!
 //! ```rust
-//! use shardex::memory::{MemoryMappedFile, FileHeader};
+//! use shardex::memory::{MemoryMappedFile, StandardHeader};
 //! use tempfile::TempDir;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,12 +26,12 @@
 //! let mut mmf = MemoryMappedFile::create(&file_path, 1024)?;
 //!
 //! // Write a header with magic bytes and version
-//! let header = FileHeader::new(b"SHRD", 1, &[42u8; 100]);
+//! let header = StandardHeader::new(b"SHRD", 1, StandardHeader::SIZE as u64, &[42u8; 100]);
 //! mmf.write_at(0, &header)?;
 //!
 //! // Write some data
 //! let data: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-//! mmf.write_at(FileHeader::SIZE, &data)?;
+//! mmf.write_at(StandardHeader::SIZE, &data)?;
 //!
 //! // Sync to disk
 //! mmf.sync()?;
@@ -42,7 +42,7 @@
 //! ## Reading from a Memory-Mapped File
 //!
 //! ```rust
-//! use shardex::memory::{MemoryMappedFile, FileHeader};
+//! use shardex::memory::{MemoryMappedFile, StandardHeader};
 //! use std::path::Path;
 //!
 //! # fn read_example(file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -50,12 +50,12 @@
 //! let mmf = MemoryMappedFile::open_read_only(file_path)?;
 //!
 //! // Read and validate header
-//! let header: FileHeader = mmf.read_at(0)?;
+//! let header: StandardHeader = mmf.read_at(0)?;
 //! header.validate_magic(b"SHRD")?;
-//! header.validate_checksum(&mmf.as_slice()[FileHeader::SIZE..])?;
+//! header.validate_checksum(&mmf.as_slice()[StandardHeader::SIZE..])?;
 //!
 //! // Read typed data
-//! let data: [u32; 10] = mmf.read_at(FileHeader::SIZE)?;
+//! let data: [u32; 10] = mmf.read_at(StandardHeader::SIZE)?;
 //! println!("First element: {}", data[0]);
 //! # Ok(())
 //! # }
@@ -105,28 +105,56 @@ enum MmapVariant {
     ReadWrite(MmapMut),
 }
 
-/// File header structure with magic bytes and checksum validation
+/// Standardized file header for all Shardex file types
 ///
-/// FileHeader provides a standardized way to identify file formats and
-/// validate data integrity. It includes version information for compatibility
-/// checking and CRC32 checksums for corruption detection.
+/// StandardHeader provides comprehensive file header management with version control,
+/// metadata tracking, and integrity validation. All file types in Shardex use this
+/// standardized header format for consistency and forward compatibility.
+///
+/// # Layout
+/// ```text
+/// Offset  | Size | Field         | Description
+/// --------|------|---------------|------------------------------------------
+/// 0       | 4    | magic         | File type identifier (e.g., "SHRD", "VECT")  
+/// 4       | 4    | version       | Format version number
+/// 8       | 4    | header_size   | Size of complete header in bytes
+/// 12      | 4    | padding       | Alignment padding for data_offset
+/// 16      | 8    | data_offset   | Offset to data section from file start
+/// 24      | 4    | checksum      | Header + data checksum (CRC32)
+/// 28      | 4    | padding       | Alignment padding for timestamps
+/// 32      | 8    | created_at    | Creation timestamp (Unix epoch microseconds)
+/// 40      | 8    | modified_at   | Last modification timestamp
+/// 48      | 32   | reserved      | Reserved for future use (zeroed)
+/// Total   | 80   |               | Complete header size (with alignment)
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
-pub struct FileHeader {
-    /// Magic bytes for file format identification (4 bytes)
+pub struct StandardHeader {
+    /// Magic bytes for file type identification (4 bytes)
     pub magic: [u8; 4],
-    /// File format version
+    /// Format version number
     pub version: u32,
-    /// CRC32 checksum of the data following the header
+    /// Size of complete header in bytes
+    pub header_size: u32,
+    /// Offset to data section from file start
+    pub data_offset: u64,
+    /// CRC32 checksum of header + data
     pub checksum: u32,
-    /// Reserved bytes for future use (align to 16 bytes total)
-    pub reserved: [u8; 4],
+    /// Creation timestamp (Unix epoch microseconds)
+    pub created_at: u64,
+    /// Last modification timestamp (Unix epoch microseconds)
+    pub modified_at: u64,
+    /// Reserved for future use (must be zero)
+    pub reserved: [u8; 32],
 }
 
-// SAFETY: FileHeader contains only Pod types and has repr(C) layout
-unsafe impl Pod for FileHeader {}
-// SAFETY: FileHeader can be safely zero-initialized
-unsafe impl Zeroable for FileHeader {}
+/// Legacy file header type alias for backward compatibility
+pub type FileHeader = StandardHeader;
+
+// SAFETY: StandardHeader contains only Pod types and has repr(C) layout
+unsafe impl Pod for StandardHeader {}
+// SAFETY: StandardHeader can be safely zero-initialized
+unsafe impl Zeroable for StandardHeader {}
 
 impl MemoryMappedFile {
     /// Create a new memory-mapped file with the specified size
@@ -476,33 +504,78 @@ impl MemoryMappedFile {
     }
 }
 
-impl FileHeader {
-    /// Size of the FileHeader structure in bytes
-    pub const SIZE: usize = std::mem::size_of::<FileHeader>();
+impl StandardHeader {
+    /// Size of the StandardHeader structure in bytes
+    pub const SIZE: usize = std::mem::size_of::<StandardHeader>();
 
-    /// Create a new file header with magic bytes and checksum
+    /// Current timestamp in microseconds since Unix epoch
+    fn current_timestamp() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64
+    }
+
+    /// Create a new standard header with magic bytes, version, and data
     ///
-    /// The checksum is calculated from the provided data slice.
-    pub fn new(magic: &[u8; 4], version: u32, data: &[u8]) -> Self {
-        let checksum = Self::calculate_checksum(data);
+    /// The header is created with current timestamps and checksum calculated
+    /// from the provided data slice.
+    pub fn new(magic: &[u8; 4], version: u32, data_offset: u64, data: &[u8]) -> Self {
+        let now = Self::current_timestamp();
+        let mut header = Self {
+            magic: *magic,
+            version,
+            header_size: Self::SIZE as u32,
+            data_offset,
+            checksum: 0, // Will be calculated below
+            created_at: now,
+            modified_at: now,
+            reserved: [0; 32],
+        };
+        
+        header.update_checksum(data);
+        header
+    }
+
+    /// Create a standard header without checksum validation
+    ///
+    /// Use this when the checksum will be calculated and set later.
+    pub fn new_without_checksum(magic: &[u8; 4], version: u32, data_offset: u64) -> Self {
+        let now = Self::current_timestamp();
         Self {
             magic: *magic,
             version,
-            checksum,
-            reserved: [0; 4],
+            header_size: Self::SIZE as u32,
+            data_offset,
+            checksum: 0,
+            created_at: now,
+            modified_at: now,
+            reserved: [0; 32],
         }
     }
 
-    /// Create a file header without checksum validation
-    ///
-    /// Use this when the checksum will be calculated and set later.
-    pub fn new_without_checksum(magic: &[u8; 4], version: u32) -> Self {
-        Self {
+    /// Create a header with explicit timestamps (for testing)
+    pub fn new_with_timestamps(
+        magic: &[u8; 4],
+        version: u32,
+        data_offset: u64,
+        created_at: u64,
+        modified_at: u64,
+        data: &[u8],
+    ) -> Self {
+        let mut header = Self {
             magic: *magic,
             version,
+            header_size: Self::SIZE as u32,
+            data_offset,
             checksum: 0,
-            reserved: [0; 4],
-        }
+            created_at,
+            modified_at,
+            reserved: [0; 32],
+        };
+        
+        header.update_checksum(data);
+        header
     }
 
     /// Validate that the magic bytes match expected values
@@ -516,9 +589,91 @@ impl FileHeader {
         Ok(())
     }
 
+    /// Validate version compatibility
+    pub fn validate_version(&self, min_version: u32, max_version: u32) -> Result<(), ShardexError> {
+        if self.version < min_version {
+            return Err(ShardexError::Corruption(format!(
+                "Version {} is too old (minimum supported: {})",
+                self.version, min_version
+            )));
+        }
+        
+        if self.version > max_version {
+            return Err(ShardexError::Corruption(format!(
+                "Version {} is too new (maximum supported: {})",
+                self.version, max_version
+            )));
+        }
+        
+        Ok(())
+    }
+
+    /// Check if version is exactly the expected version
+    pub fn is_version(&self, expected_version: u32) -> bool {
+        self.version == expected_version
+    }
+
+    /// Check if version is compatible (within range)
+    pub fn is_compatible(&self, min_version: u32, max_version: u32) -> bool {
+        self.version >= min_version && self.version <= max_version
+    }
+
+    /// Validate header structure integrity
+    pub fn validate_structure(&self) -> Result<(), ShardexError> {
+        // Check header size matches expected
+        if self.header_size != Self::SIZE as u32 {
+            return Err(ShardexError::Corruption(format!(
+                "Invalid header size: expected {}, found {}",
+                Self::SIZE,
+                self.header_size
+            )));
+        }
+
+        // Check data offset is reasonable (at least past header)
+        if self.data_offset < Self::SIZE as u64 {
+            return Err(ShardexError::Corruption(format!(
+                "Invalid data offset: {} is less than header size {}",
+                self.data_offset,
+                Self::SIZE
+            )));
+        }
+
+        // Check timestamps are reasonable (not in future, created <= modified)
+        let now = Self::current_timestamp();
+        if self.created_at > now {
+            return Err(ShardexError::Corruption(format!(
+                "Creation timestamp {} is in the future",
+                self.created_at
+            )));
+        }
+
+        if self.modified_at > now {
+            return Err(ShardexError::Corruption(format!(
+                "Modification timestamp {} is in the future",
+                self.modified_at
+            )));
+        }
+
+        if self.created_at > self.modified_at {
+            return Err(ShardexError::Corruption(format!(
+                "Creation timestamp {} is after modification timestamp {}",
+                self.created_at, self.modified_at
+            )));
+        }
+
+        // Check reserved bytes are zero
+        if self.reserved != [0; 32] {
+            return Err(ShardexError::Corruption(
+                "Reserved bytes are not zero".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Validate the checksum against provided data
     pub fn validate_checksum(&self, data: &[u8]) -> Result<(), ShardexError> {
-        let expected_checksum = Self::calculate_checksum(data);
+        let expected_checksum = Self::calculate_checksum_with_header(self, data);
         if self.checksum != expected_checksum {
             return Err(ShardexError::Corruption(format!(
                 "Checksum mismatch: expected {}, found {}",
@@ -528,23 +683,66 @@ impl FileHeader {
         Ok(())
     }
 
-    /// Update the checksum based on provided data
-    pub fn update_checksum(&mut self, data: &[u8]) {
-        self.checksum = Self::calculate_checksum(data);
+    /// Perform complete header validation
+    pub fn validate_complete(&self, expected_magic: &[u8; 4], min_version: u32, max_version: u32, data: &[u8]) -> Result<(), ShardexError> {
+        self.validate_magic(expected_magic)?;
+        self.validate_version(min_version, max_version)?;
+        self.validate_structure()?;
+        self.validate_checksum(data)?;
+        Ok(())
     }
 
-    /// Calculate CRC32 checksum for data
-    fn calculate_checksum(data: &[u8]) -> u32 {
-        // Simple CRC32 implementation
-        const CRC32_TABLE: [u32; 256] = generate_crc32_table();
-        let mut crc = 0xFFFFFFFF;
+    /// Update the header for modification (timestamp and checksum)
+    pub fn update_for_modification(&mut self, data: &[u8]) {
+        self.modified_at = Self::current_timestamp();
+        self.update_checksum(data);
+    }
 
+    /// Update the checksum based on provided data
+    pub fn update_checksum(&mut self, data: &[u8]) {
+        self.checksum = Self::calculate_checksum_with_header(self, data);
+    }
+
+    /// Calculate CRC32 checksum for data only (legacy method)
+    fn calculate_checksum(data: &[u8]) -> u32 {
+        Self::crc32_hash(data)
+    }
+
+    /// Calculate CRC32 checksum including header metadata (excluding checksum field)
+    fn calculate_checksum_with_header(header: &Self, data: &[u8]) -> u32 {
+        // Create a copy of the header with checksum set to zero for calculation
+        let mut header_copy = *header;
+        header_copy.checksum = 0;
+
+        // Calculate checksum of header bytes (excluding checksum field)
+        let header_bytes = bytemuck::bytes_of(&header_copy);
+        let mut crc = 0xFFFFFFFF;
+        
+        // Hash header bytes
+        crc = Self::crc32_update(crc, header_bytes);
+        // Hash data bytes
+        crc = Self::crc32_update(crc, data);
+        
+        crc ^ 0xFFFFFFFF
+    }
+
+    /// Core CRC32 hash implementation
+    pub fn crc32_hash(data: &[u8]) -> u32 {
+        let mut crc = 0xFFFFFFFF;
+        crc = Self::crc32_update(crc, data);
+        crc ^ 0xFFFFFFFF
+    }
+
+    /// Update CRC32 with additional data
+    fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+        const CRC32_TABLE: [u32; 256] = generate_crc32_table();
+        
         for &byte in data {
             let table_index = ((crc ^ u32::from(byte)) & 0xFF) as usize;
             crc = (crc >> 8) ^ CRC32_TABLE[table_index];
         }
-
-        crc ^ 0xFFFFFFFF
+        
+        crc
     }
 }
 
@@ -699,19 +897,24 @@ mod tests {
     }
 
     #[test]
-    fn test_file_header_creation() {
+    fn test_standard_header_creation() {
         let magic = b"TEST";
         let data = b"Hello, World!";
-        let header = FileHeader::new(magic, 1, data);
+        let header = StandardHeader::new(magic, 1, StandardHeader::SIZE as u64, data);
 
         assert_eq!(header.magic, *magic);
         assert_eq!(header.version, 1);
+        assert_eq!(header.header_size, StandardHeader::SIZE as u32);
+        assert_eq!(header.data_offset, StandardHeader::SIZE as u64);
         assert_ne!(header.checksum, 0); // Should have calculated checksum
+        assert!(header.created_at > 0);
+        assert!(header.modified_at > 0);
+        assert_eq!(header.reserved, [0; 32]);
     }
 
     #[test]
-    fn test_file_header_magic_validation() {
-        let header = FileHeader::new(b"TEST", 1, b"data");
+    fn test_standard_header_magic_validation() {
+        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
 
         // Valid magic
         assert!(header.validate_magic(b"TEST").is_ok());
@@ -721,9 +924,9 @@ mod tests {
     }
 
     #[test]
-    fn test_file_header_checksum_validation() {
+    fn test_standard_header_checksum_validation() {
         let data = b"Hello, World!";
-        let header = FileHeader::new(b"TEST", 1, data);
+        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, data);
 
         // Valid checksum
         assert!(header.validate_checksum(data).is_ok());
@@ -733,8 +936,8 @@ mod tests {
     }
 
     #[test]
-    fn test_file_header_update_checksum() {
-        let mut header = FileHeader::new_without_checksum(b"TEST", 1);
+    fn test_standard_header_update_checksum() {
+        let mut header = StandardHeader::new_without_checksum(b"TEST", 1, StandardHeader::SIZE as u64);
         assert_eq!(header.checksum, 0);
 
         let data = b"Some data";
@@ -746,33 +949,26 @@ mod tests {
     }
 
     #[test]
-    fn test_file_header_bytemuck() {
-        let header = FileHeader::new(b"TEST", 1, b"data");
+    fn test_standard_header_bytemuck() {
+        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
 
         // Should be able to convert to bytes
         let bytes = bytemuck::bytes_of(&header);
-        assert_eq!(bytes.len(), FileHeader::SIZE);
+        assert_eq!(bytes.len(), StandardHeader::SIZE);
 
         // Should be able to convert back
-        let header_restored = bytemuck::from_bytes::<FileHeader>(bytes);
+        let header_restored = bytemuck::from_bytes::<StandardHeader>(bytes);
         assert_eq!(header.magic, header_restored.magic);
         assert_eq!(header.version, header_restored.version);
         assert_eq!(header.checksum, header_restored.checksum);
+        assert_eq!(header.header_size, header_restored.header_size);
+        assert_eq!(header.data_offset, header_restored.data_offset);
+        assert_eq!(header.created_at, header_restored.created_at);
+        assert_eq!(header.modified_at, header_restored.modified_at);
+        assert_eq!(header.reserved, header_restored.reserved);
     }
 
-    #[test]
-    fn test_crc32_consistency() {
-        let data1 = b"Hello, World!";
-        let data2 = b"Hello, World!";
-        let data3 = b"Different data";
 
-        let checksum1 = FileHeader::calculate_checksum(data1);
-        let checksum2 = FileHeader::calculate_checksum(data2);
-        let checksum3 = FileHeader::calculate_checksum(data3);
-
-        assert_eq!(checksum1, checksum2);
-        assert_ne!(checksum1, checksum3);
-    }
 
     #[test]
     fn test_memory_mapped_file_with_header() {
@@ -786,9 +982,9 @@ mod tests {
         {
             let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
 
-            let header = FileHeader::new(b"SHRD", 1, data_bytes);
+            let header = StandardHeader::new(b"SHRD", 1, StandardHeader::SIZE as u64, data_bytes);
             mmf.write_at(0, &header).unwrap();
-            mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
+            mmf.write_slice_at(StandardHeader::SIZE, &test_data).unwrap();
             mmf.sync().unwrap();
         }
 
@@ -796,11 +992,11 @@ mod tests {
         {
             let mmf = MemoryMappedFile::open_read_only(&file_path).unwrap();
 
-            let header: FileHeader = mmf.read_at(0).unwrap();
+            let header: StandardHeader = mmf.read_at(0).unwrap();
             header.validate_magic(b"SHRD").unwrap();
 
             let read_data: &[u32] = mmf
-                .read_slice_at(FileHeader::SIZE, test_data.len())
+                .read_slice_at(StandardHeader::SIZE, test_data.len())
                 .unwrap();
             header
                 .validate_checksum(bytemuck::cast_slice(read_data))
@@ -829,6 +1025,170 @@ mod tests {
         let mmf = MemoryMappedFile::create(&file_path, 0).unwrap();
         assert_eq!(mmf.len(), 0);
         assert!(mmf.is_empty());
+    }
+
+    #[test]
+    fn test_standard_header_version_validation() {
+        let header = StandardHeader::new(b"TEST", 5, StandardHeader::SIZE as u64, b"data");
+
+        // Valid version ranges
+        assert!(header.validate_version(1, 10).is_ok());
+        assert!(header.validate_version(5, 5).is_ok());
+
+        // Version too old
+        assert!(header.validate_version(6, 10).is_err());
+
+        // Version too new
+        assert!(header.validate_version(1, 4).is_err());
+
+        // Test convenience methods
+        assert!(header.is_version(5));
+        assert!(!header.is_version(4));
+        assert!(header.is_compatible(1, 10));
+        assert!(!header.is_compatible(6, 10));
+    }
+
+    #[test]
+    fn test_standard_header_structure_validation() {
+        let mut header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        
+        // Valid structure
+        assert!(header.validate_structure().is_ok());
+
+        // Invalid header size
+        header.header_size = 50;
+        assert!(header.validate_structure().is_err());
+        header.header_size = StandardHeader::SIZE as u32;
+
+        // Invalid data offset (too small)
+        header.data_offset = 10;
+        assert!(header.validate_structure().is_err());
+        header.data_offset = StandardHeader::SIZE as u64;
+
+        // Invalid timestamps (created after modified)
+        header.created_at = 2000;
+        header.modified_at = 1000;
+        assert!(header.validate_structure().is_err());
+        header.created_at = 1000;
+        header.modified_at = 2000;
+
+        // Invalid reserved bytes
+        header.reserved[0] = 1;
+        assert!(header.validate_structure().is_err());
+        header.reserved[0] = 0;
+
+        // Should be valid again
+        assert!(header.validate_structure().is_ok());
+    }
+
+    #[test]
+    fn test_standard_header_complete_validation() {
+        let data = b"test data";
+        let header = StandardHeader::new(b"TEST", 2, StandardHeader::SIZE as u64, data);
+
+        // Complete validation should pass
+        assert!(header.validate_complete(b"TEST", 1, 5, data).is_ok());
+
+        // Should fail with wrong magic
+        assert!(header.validate_complete(b"FAIL", 1, 5, data).is_err());
+
+        // Should fail with version out of range
+        assert!(header.validate_complete(b"TEST", 3, 5, data).is_err());
+        assert!(header.validate_complete(b"TEST", 1, 1, data).is_err());
+
+        // Should fail with wrong data
+        assert!(header.validate_complete(b"TEST", 1, 5, b"wrong data").is_err());
+    }
+
+    #[test]
+    fn test_standard_header_update_for_modification() {
+        let initial_data = b"initial data";
+        let mut header = StandardHeader::new_with_timestamps(
+            b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, initial_data
+        );
+
+        // Simulate some time passing and data changing
+        let new_data = b"modified data";
+        header.update_for_modification(new_data);
+
+        // Modified timestamp should be updated (greater than 1000)
+        assert!(header.modified_at > 1000);
+        // Created timestamp should remain the same
+        assert_eq!(header.created_at, 1000);
+
+        // Should validate with new data
+        assert!(header.validate_checksum(new_data).is_ok());
+        // Should not validate with old data
+        assert!(header.validate_checksum(initial_data).is_err());
+    }
+
+    #[test]
+    fn test_standard_header_with_timestamps() {
+        let created = 1000;
+        let modified = 2000;
+        let data = b"test data";
+        
+        let header = StandardHeader::new_with_timestamps(
+            b"TEST", 1, StandardHeader::SIZE as u64, created, modified, data
+        );
+
+        assert_eq!(header.created_at, created);
+        assert_eq!(header.modified_at, modified);
+        assert!(header.validate_checksum(data).is_ok());
+    }
+
+    #[test]
+    fn test_standard_header_size_constants() {
+        // Verify the header size is exactly what we expect (80 bytes with alignment)
+        assert_eq!(StandardHeader::SIZE, 80);
+        
+        // Verify the structure layout
+        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let bytes = bytemuck::bytes_of(&header);
+        assert_eq!(bytes.len(), 80);
+    }
+
+    #[test]
+    fn test_file_header_compatibility() {
+        // Test that FileHeader is an alias for StandardHeader
+        let header: FileHeader = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        assert_eq!(header.magic, *b"TEST");
+        assert_eq!(header.version, 1);
+        
+        // Test that FileHeader methods work
+        assert!(header.validate_magic(b"TEST").is_ok());
+        assert!(header.validate_checksum(b"data").is_ok());
+    }
+
+    #[test]
+    fn test_crc32_consistency() {
+        let data1 = b"Hello, World!";
+        let data2 = b"Hello, World!";
+        let data3 = b"Different data";
+
+        // Direct CRC32 should be consistent
+        let checksum1 = StandardHeader::crc32_hash(data1);
+        let checksum2 = StandardHeader::crc32_hash(data2);
+        let checksum3 = StandardHeader::crc32_hash(data3);
+
+        assert_eq!(checksum1, checksum2);
+        assert_ne!(checksum1, checksum3);
+
+        // Headers with identical header metadata and same data should have same checksum
+        // Use explicit timestamps to ensure headers are identical
+        let header1 = StandardHeader::new_with_timestamps(
+            b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data1
+        );
+        let header2 = StandardHeader::new_with_timestamps(
+            b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data2
+        );
+        assert_eq!(header1.checksum, header2.checksum);
+        
+        // Different data should produce different checksums
+        let header3 = StandardHeader::new_with_timestamps(
+            b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data3
+        );
+        assert_ne!(header1.checksum, header3.checksum);
     }
 
     #[test]
