@@ -995,8 +995,8 @@ impl Shard {
             let count_f32 = self.active_vector_count as f32;
             
             // Incremental mean update: new_centroid = old_centroid + (new_vector - old_centroid) / count
-            for i in 0..self.vector_size {
-                self.centroid[i] += (vector[i] - self.centroid[i]) / count_f32;
+            for (i, &vector_val) in vector.iter().enumerate() {
+                self.centroid[i] += (vector_val - self.centroid[i]) / count_f32;
             }
         }
     }
@@ -1027,8 +1027,8 @@ impl Shard {
             let new_count_f32 = self.active_vector_count as f32;
 
             // Remove vector from centroid: new_centroid = (old_centroid * old_count - removed_vector) / new_count
-            for i in 0..self.vector_size {
-                self.centroid[i] = (self.centroid[i] * old_count_f32 - vector[i]) / new_count_f32;
+            for (i, &vector_val) in vector.iter().enumerate() {
+                self.centroid[i] = (self.centroid[i] * old_count_f32 - vector_val) / new_count_f32;
             }
         }
     }
@@ -1740,7 +1740,7 @@ mod tests {
 
         // Add three vectors: [1, 2], [3, 4], [5, 6]
         // Expected centroid: [(1+3+5)/3, (2+4+6)/3] = [3.0, 4.0]
-        let vectors = vec![
+        let vectors = [
             vec![1.0, 2.0],
             vec![3.0, 4.0],
             vec![5.0, 6.0],
@@ -1754,7 +1754,7 @@ mod tests {
         shard.add_posting(posting2).unwrap();
         shard.add_posting(posting3).unwrap();
 
-        let expected_centroid = vec![3.0, 4.0];
+        let expected_centroid = [3.0, 4.0];
         let centroid = shard.get_centroid();
 
         assert_eq!(centroid.len(), 2);
@@ -1917,7 +1917,7 @@ mod tests {
         let shard_id = ShardId::new();
         let directory = temp_dir.path().to_path_buf();
 
-        let expected_centroid = vec![3.0, 4.0];
+        let expected_centroid = [3.0, 4.0];
 
         // Create and populate shard
         {
