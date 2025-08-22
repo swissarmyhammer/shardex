@@ -12,6 +12,7 @@ pub mod layout;
 pub mod memory;
 pub mod posting_storage;
 pub mod shard;
+pub mod shardex_index;
 pub mod structures;
 pub mod vector_storage;
 
@@ -23,6 +24,7 @@ pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use shard::{Shard, ShardMetadata};
+pub use shardex_index::{ShardexIndex, ShardexMetadata, IndexStatistics};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
 pub use vector_storage::VectorStorage;
 
