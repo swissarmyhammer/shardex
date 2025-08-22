@@ -209,7 +209,7 @@ impl Shard {
         }
 
         // Ensure directory exists
-        std::fs::create_dir_all(&directory).map_err(|e| ShardexError::Io(e))?;
+        std::fs::create_dir_all(&directory).map_err(ShardexError::Io)?;
 
         // Calculate file paths
         let vector_path = directory.join(format!("{}.vectors", id));
