@@ -196,20 +196,19 @@ impl MemoryMappedFile {
         let path = path.as_ref();
 
         let file = File::open(path).map_err(|e| {
-            ShardexError::MemoryMapping(format!(
-                "Failed to open file {}: {}",
-                path.display(),
-                e
-            ))
+            ShardexError::MemoryMapping(format!("Failed to open file {}: {}", path.display(), e))
         })?;
 
-        let len = file.metadata().map_err(|e| {
-            ShardexError::MemoryMapping(format!(
-                "Failed to get file metadata for {}: {}",
-                path.display(),
-                e
-            ))
-        })?.len() as usize;
+        let len = file
+            .metadata()
+            .map_err(|e| {
+                ShardexError::MemoryMapping(format!(
+                    "Failed to get file metadata for {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?
+            .len() as usize;
 
         let mmap = unsafe {
             MmapOptions::new().map(&file).map_err(|e| {
@@ -246,13 +245,16 @@ impl MemoryMappedFile {
                 ))
             })?;
 
-        let len = file.metadata().map_err(|e| {
-            ShardexError::MemoryMapping(format!(
-                "Failed to get file metadata for {}: {}",
-                path.display(),
-                e
-            ))
-        })?.len() as usize;
+        let len = file
+            .metadata()
+            .map_err(|e| {
+                ShardexError::MemoryMapping(format!(
+                    "Failed to get file metadata for {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?
+            .len() as usize;
 
         let mmap = unsafe {
             MmapOptions::new().map_mut(&file).map_err(|e| {
@@ -306,7 +308,7 @@ impl MemoryMappedFile {
     /// Performs bounds checking and alignment verification before reading.
     pub fn read_at<T: Pod>(&self, offset: usize) -> Result<T, ShardexError> {
         let size = std::mem::size_of::<T>();
-        
+
         if offset + size > self.len {
             return Err(ShardexError::MemoryMapping(format!(
                 "Read at offset {} with size {} exceeds file length {}",
@@ -333,7 +335,7 @@ impl MemoryMappedFile {
     /// Performs bounds checking and alignment verification before writing.
     pub fn write_at<T: Pod>(&mut self, offset: usize, value: &T) -> Result<(), ShardexError> {
         let size = std::mem::size_of::<T>();
-        
+
         if offset + size > self.len {
             return Err(ShardexError::MemoryMapping(format!(
                 "Write at offset {} with size {} exceeds file length {}",
@@ -362,7 +364,7 @@ impl MemoryMappedFile {
     /// Returns a slice view into the mapped memory without copying data.
     pub fn read_slice_at<T: Pod>(&self, offset: usize, count: usize) -> Result<&[T], ShardexError> {
         let size = std::mem::size_of::<T>() * count;
-        
+
         if offset + size > self.len {
             return Err(ShardexError::MemoryMapping(format!(
                 "Read slice at offset {} with size {} exceeds file length {}",
@@ -385,9 +387,13 @@ impl MemoryMappedFile {
     }
 
     /// Write multiple Pod values to the specified offset
-    pub fn write_slice_at<T: Pod>(&mut self, offset: usize, values: &[T]) -> Result<(), ShardexError> {
+    pub fn write_slice_at<T: Pod>(
+        &mut self,
+        offset: usize,
+        values: &[T],
+    ) -> Result<(), ShardexError> {
         let size = std::mem::size_of_val(values);
-        
+
         if offset + size > self.len {
             return Err(ShardexError::MemoryMapping(format!(
                 "Write slice at offset {} with size {} exceeds file length {}",
@@ -433,9 +439,8 @@ impl MemoryMappedFile {
         })?);
 
         // Resize the file
-        file.set_len(new_size as u64).map_err(|e| {
-            ShardexError::MemoryMapping(format!("Failed to resize file: {}", e))
-        })?;
+        file.set_len(new_size as u64)
+            .map_err(|e| ShardexError::MemoryMapping(format!("Failed to resize file: {}", e)))?;
 
         // Create new mapping
         let new_mmap = unsafe {
@@ -533,12 +538,12 @@ impl FileHeader {
         // Simple CRC32 implementation
         const CRC32_TABLE: [u32; 256] = generate_crc32_table();
         let mut crc = 0xFFFFFFFF;
-        
+
         for &byte in data {
             let table_index = ((crc ^ u32::from(byte)) & 0xFF) as usize;
             crc = (crc >> 8) ^ CRC32_TABLE[table_index];
         }
-        
+
         crc ^ 0xFFFFFFFF
     }
 }
@@ -547,11 +552,11 @@ impl FileHeader {
 const fn generate_crc32_table() -> [u32; 256] {
     let mut table = [0u32; 256];
     let mut i = 0;
-    
+
     while i < 256 {
         let mut crc = i as u32;
         let mut j = 0;
-        
+
         while j < 8 {
             if crc & 1 != 0 {
                 crc = (crc >> 1) ^ 0xEDB88320;
@@ -560,24 +565,24 @@ const fn generate_crc32_table() -> [u32; 256] {
             }
             j += 1;
         }
-        
+
         table[i] = crc;
         i += 1;
     }
-    
+
     table
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::{TempDir, NamedTempFile};
+    use tempfile::{NamedTempFile, TempDir};
 
     #[test]
     fn test_create_memory_mapped_file() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.dat");
-        
+
         let mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         assert_eq!(mmf.len(), 1024);
         assert!(!mmf.is_empty());
@@ -588,13 +593,13 @@ mod tests {
     fn test_read_write_operations() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("rw_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
-        
+
         // Write a u64
         let value: u64 = 0x1234567890ABCDEF;
         mmf.write_at(0, &value).unwrap();
-        
+
         // Read it back
         let read_value: u64 = mmf.read_at(0).unwrap();
         assert_eq!(value, read_value);
@@ -604,13 +609,13 @@ mod tests {
     fn test_slice_operations() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("slice_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
-        
+
         // Write an array
         let values: [u32; 5] = [1, 2, 3, 4, 5];
         mmf.write_slice_at(0, &values).unwrap();
-        
+
         // Read it back
         let read_values: &[u32] = mmf.read_slice_at(0, 5).unwrap();
         assert_eq!(&values[..], read_values);
@@ -620,13 +625,13 @@ mod tests {
     fn test_bounds_checking() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("bounds_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 64).unwrap();
-        
+
         // Try to read beyond bounds
         let result: Result<u64, _> = mmf.read_at(60);
         assert!(result.is_err());
-        
+
         // Try to write beyond bounds
         let value: u64 = 42;
         let result = mmf.write_at(60, &value);
@@ -637,13 +642,13 @@ mod tests {
     fn test_alignment_checking() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("align_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
-        
+
         // Try to read u64 at unaligned offset
         let result: Result<u64, _> = mmf.read_at(1);
         assert!(result.is_err());
-        
+
         // Try to write u64 at unaligned offset
         let value: u64 = 42;
         let result = mmf.write_at(1, &value);
@@ -654,18 +659,18 @@ mod tests {
     fn test_file_resize() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("resize_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 512).unwrap();
         assert_eq!(mmf.len(), 512);
-        
+
         // Write some data
         let value: u64 = 0xDEADBEEF;
         mmf.write_at(0, &value).unwrap();
-        
+
         // Resize
         mmf.resize(1024).unwrap();
         assert_eq!(mmf.len(), 1024);
-        
+
         // Verify data is still there
         let read_value: u64 = mmf.read_at(0).unwrap();
         assert_eq!(value, read_value);
@@ -675,7 +680,7 @@ mod tests {
     fn test_read_only_mapping() {
         let temp_file = NamedTempFile::new().unwrap();
         let file_path = temp_file.path();
-        
+
         // Write some data to the file first
         {
             let mut mmf = MemoryMappedFile::create(file_path, 64).unwrap();
@@ -683,11 +688,11 @@ mod tests {
             mmf.write_at(0, &value).unwrap();
             mmf.sync().unwrap();
         }
-        
+
         // Open read-only
         let mmf = MemoryMappedFile::open_read_only(file_path).unwrap();
         assert!(mmf.is_read_only());
-        
+
         // Should be able to read
         let value: u32 = mmf.read_at(0).unwrap();
         assert_eq!(value, 42);
@@ -698,7 +703,7 @@ mod tests {
         let magic = b"TEST";
         let data = b"Hello, World!";
         let header = FileHeader::new(magic, 1, data);
-        
+
         assert_eq!(header.magic, *magic);
         assert_eq!(header.version, 1);
         assert_ne!(header.checksum, 0); // Should have calculated checksum
@@ -707,10 +712,10 @@ mod tests {
     #[test]
     fn test_file_header_magic_validation() {
         let header = FileHeader::new(b"TEST", 1, b"data");
-        
+
         // Valid magic
         assert!(header.validate_magic(b"TEST").is_ok());
-        
+
         // Invalid magic
         assert!(header.validate_magic(b"FAIL").is_err());
     }
@@ -719,10 +724,10 @@ mod tests {
     fn test_file_header_checksum_validation() {
         let data = b"Hello, World!";
         let header = FileHeader::new(b"TEST", 1, data);
-        
+
         // Valid checksum
         assert!(header.validate_checksum(data).is_ok());
-        
+
         // Invalid checksum
         assert!(header.validate_checksum(b"Different data").is_err());
     }
@@ -731,11 +736,11 @@ mod tests {
     fn test_file_header_update_checksum() {
         let mut header = FileHeader::new_without_checksum(b"TEST", 1);
         assert_eq!(header.checksum, 0);
-        
+
         let data = b"Some data";
         header.update_checksum(data);
         assert_ne!(header.checksum, 0);
-        
+
         // Should validate correctly
         assert!(header.validate_checksum(data).is_ok());
     }
@@ -743,11 +748,11 @@ mod tests {
     #[test]
     fn test_file_header_bytemuck() {
         let header = FileHeader::new(b"TEST", 1, b"data");
-        
+
         // Should be able to convert to bytes
         let bytes = bytemuck::bytes_of(&header);
         assert_eq!(bytes.len(), FileHeader::SIZE);
-        
+
         // Should be able to convert back
         let header_restored = bytemuck::from_bytes::<FileHeader>(bytes);
         assert_eq!(header.magic, header_restored.magic);
@@ -760,11 +765,11 @@ mod tests {
         let data1 = b"Hello, World!";
         let data2 = b"Hello, World!";
         let data3 = b"Different data";
-        
+
         let checksum1 = FileHeader::calculate_checksum(data1);
         let checksum2 = FileHeader::calculate_checksum(data2);
         let checksum3 = FileHeader::calculate_checksum(data3);
-        
+
         assert_eq!(checksum1, checksum2);
         assert_ne!(checksum1, checksum3);
     }
@@ -773,30 +778,34 @@ mod tests {
     fn test_memory_mapped_file_with_header() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("header_test.dat");
-        
+
         let test_data = vec![1u32, 2, 3, 4, 5];
         let data_bytes = bytemuck::cast_slice(&test_data);
-        
+
         // Create file and write header + data
         {
             let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
-            
+
             let header = FileHeader::new(b"SHRD", 1, data_bytes);
             mmf.write_at(0, &header).unwrap();
             mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
             mmf.sync().unwrap();
         }
-        
+
         // Read back and validate
         {
             let mmf = MemoryMappedFile::open_read_only(&file_path).unwrap();
-            
+
             let header: FileHeader = mmf.read_at(0).unwrap();
             header.validate_magic(b"SHRD").unwrap();
-            
-            let read_data: &[u32] = mmf.read_slice_at(FileHeader::SIZE, test_data.len()).unwrap();
-            header.validate_checksum(bytemuck::cast_slice(read_data)).unwrap();
-            
+
+            let read_data: &[u32] = mmf
+                .read_slice_at(FileHeader::SIZE, test_data.len())
+                .unwrap();
+            header
+                .validate_checksum(bytemuck::cast_slice(read_data))
+                .unwrap();
+
             assert_eq!(read_data, &test_data[..]);
         }
     }
@@ -805,7 +814,7 @@ mod tests {
     fn test_parent_directory_creation() {
         let temp_dir = TempDir::new().unwrap();
         let nested_path = temp_dir.path().join("nested").join("dirs").join("test.dat");
-        
+
         // Should create parent directories automatically
         let mmf = MemoryMappedFile::create(&nested_path, 64).unwrap();
         assert_eq!(mmf.len(), 64);
@@ -816,7 +825,7 @@ mod tests {
     fn test_zero_size_file() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("empty.dat");
-        
+
         let mmf = MemoryMappedFile::create(&file_path, 0).unwrap();
         assert_eq!(mmf.len(), 0);
         assert!(mmf.is_empty());
@@ -826,11 +835,11 @@ mod tests {
     fn test_sync_operations() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("sync_test.dat");
-        
+
         let mut mmf = MemoryMappedFile::create(&file_path, 64).unwrap();
         let value: u64 = 0x123456789ABCDEF0;
         mmf.write_at(0, &value).unwrap();
-        
+
         // Sync should not fail
         mmf.sync().unwrap();
     }
