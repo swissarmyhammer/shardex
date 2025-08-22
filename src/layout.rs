@@ -712,9 +712,10 @@ impl CleanupManager {
         self.temp_files.clear();
 
         if !errors.is_empty() {
-            return Err(ShardexError::Io(std::io::Error::other(
-                format!("Cleanup errors: {}", errors.join(", ")),
-            )));
+            return Err(ShardexError::Io(std::io::Error::other(format!(
+                "Cleanup errors: {}",
+                errors.join(", ")
+            ))));
         }
 
         Ok(())
@@ -737,12 +738,18 @@ impl CleanupManager {
         }
 
         if !errors.is_empty() {
-            return Err(ShardexError::Io(std::io::Error::other(
-                format!("Orphaned file cleanup errors: {}", errors.join(", ")),
-            )));
+            return Err(ShardexError::Io(std::io::Error::other(format!(
+                "Orphaned file cleanup errors: {}",
+                errors.join(", ")
+            ))));
         }
 
         Ok(())
+    }
+
+    /// Get the directory layout
+    pub fn layout(&self) -> &DirectoryLayout {
+        &self.layout
     }
 }
 
