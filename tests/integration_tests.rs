@@ -188,7 +188,7 @@ fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
         );
 
         // Verify specific data integrity
-        for i in 0..doc_ids.len() {
+        for (i, _) in doc_ids.iter().enumerate() {
             let vector_deleted = vector_storage.is_deleted(i)?;
             let posting_deleted = posting_storage.is_deleted(i)?;
 

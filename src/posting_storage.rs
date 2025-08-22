@@ -170,6 +170,7 @@ impl PostingStorageHeader {
             file_header: FileHeader::new_without_checksum(
                 POSTING_STORAGE_MAGIC,
                 POSTING_STORAGE_VERSION,
+                FileHeader::SIZE as u64,
             ),
             capacity: capacity as u32,
             current_count: 0,
@@ -584,23 +585,23 @@ impl PostingStorage {
     pub fn validate_integrity(&self) -> Result<(), ShardexError> {
         // Validate header
         self.header.validate()?;
-        
+
         // Validate file header checksum against data
         let data_start = PostingStorageHeader::SIZE;
         let data_size = self.header.calculate_file_size() - PostingStorageHeader::SIZE;
-        
+
         if data_start + data_size > self.mmap_file.len() {
             return Err(ShardexError::Corruption(
                 "File size is inconsistent with header metadata".to_string(),
             ));
         }
-        
+
         let data = &self.mmap_file.as_slice()[data_start..data_start + data_size];
         self.header.file_header.validate_checksum(data)?;
-        
+
         // Validate data structure consistency
         self.validate_data_consistency()?;
-        
+
         Ok(())
     }
 
@@ -610,14 +611,14 @@ impl PostingStorage {
     /// and that all data structures are consistent.
     fn validate_data_consistency(&self) -> Result<(), ShardexError> {
         let mut actual_active_count = 0u32;
-        
+
         // Count actual active postings
         for i in 0..self.current_count() {
             if !self.is_deleted(i)? {
                 actual_active_count += 1;
             }
         }
-        
+
         // Check active count consistency
         if actual_active_count != self.header.active_count {
             return Err(ShardexError::Corruption(format!(
@@ -625,11 +626,11 @@ impl PostingStorage {
                 self.header.active_count, actual_active_count
             )));
         }
-        
+
         // Validate that all data within bounds makes sense
         for i in 0..self.current_count() {
             let (doc_id, start, length) = self.read_posting_at_index(i)?;
-            
+
             // Basic sanity checks on the data
             if length > u32::MAX / 2 {
                 return Err(ShardexError::Corruption(format!(
@@ -637,7 +638,7 @@ impl PostingStorage {
                     i, length
                 )));
             }
-            
+
             // Check for overflow in position + length
             if let Some(end_pos) = start.checked_add(length) {
                 if end_pos < start {
@@ -652,7 +653,7 @@ impl PostingStorage {
                     i, start, length
                 )));
             }
-            
+
             // Validate document ID is not all zeros (which would be invalid)
             if doc_id.raw() == 0 && !self.is_deleted(i)? {
                 return Err(ShardexError::Corruption(format!(
@@ -661,7 +662,7 @@ impl PostingStorage {
                 )));
             }
         }
-        
+
         Ok(())
     }
 

@@ -163,6 +163,7 @@ impl VectorStorageHeader {
             file_header: FileHeader::new_without_checksum(
                 VECTOR_STORAGE_MAGIC,
                 VECTOR_STORAGE_VERSION,
+                FileHeader::SIZE as u64,
             ),
             vector_dimension: vector_dimension as u32,
             capacity: capacity as u32,
@@ -514,26 +515,27 @@ impl VectorStorage {
     pub fn validate_integrity(&self) -> Result<(), ShardexError> {
         // Validate header
         self.header.validate()?;
-        
+
         // Validate file header checksum against data
         let vector_data_start = self.header.vector_data_offset as usize;
         let vector_data_size = (self.header.capacity as usize)
             * (self.header.vector_dimension as usize)
             * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, self.header.simd_alignment as usize);
-        
+
         if vector_data_start + aligned_size > self.mmap_file.len() {
             return Err(ShardexError::Corruption(
                 "File size is inconsistent with header metadata".to_string(),
             ));
         }
-        
-        let vector_data = &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
+
+        let vector_data =
+            &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
         self.header.file_header.validate_checksum(vector_data)?;
-        
+
         // Validate vector data consistency
         self.validate_vector_consistency()?;
-        
+
         Ok(())
     }
 
@@ -544,14 +546,14 @@ impl VectorStorage {
     fn validate_vector_consistency(&self) -> Result<(), ShardexError> {
         let mut actual_active_count = 0u32;
         let mut actual_deleted_count = 0u32;
-        
+
         // Count actual active and deleted vectors
         for i in 0..self.current_count() {
             if self.is_deleted(i)? {
                 actual_deleted_count += 1;
             } else {
                 actual_active_count += 1;
-                
+
                 // Validate that active vectors have valid data
                 let vector = self.get_vector(i)?;
                 for (j, &value) in vector.iter().enumerate() {
@@ -571,7 +573,7 @@ impl VectorStorage {
                 }
             }
         }
-        
+
         // Check active count consistency
         if actual_active_count != self.header.active_count {
             return Err(ShardexError::Corruption(format!(
@@ -579,16 +581,19 @@ impl VectorStorage {
                 self.header.active_count, actual_active_count
             )));
         }
-        
+
         // Check that total counts are consistent
         let total_accounted = actual_active_count + actual_deleted_count;
         if total_accounted != self.header.current_count {
             return Err(ShardexError::Corruption(format!(
                 "Count mismatch: header claims {} total, but found {} active + {} deleted = {}",
-                self.header.current_count, actual_active_count, actual_deleted_count, total_accounted
+                self.header.current_count,
+                actual_active_count,
+                actual_deleted_count,
+                total_accounted
             )));
         }
-        
+
         Ok(())
     }
 
