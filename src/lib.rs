@@ -5,6 +5,7 @@
 //! in shards, each consisting of embedding vectors and postings data structures.
 
 pub mod config;
+pub mod cow_index;
 pub mod error;
 pub mod identifiers;
 pub mod integrity;
@@ -16,7 +17,11 @@ pub mod shardex_index;
 pub mod structures;
 pub mod vector_storage;
 
+#[cfg(test)]
+pub mod test_utils;
+
 pub use config::ShardexConfig;
+pub use cow_index::{CowShardexIndex, IndexWriter};
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
