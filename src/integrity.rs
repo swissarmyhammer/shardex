@@ -309,11 +309,11 @@ impl IntegrityManager {
             match magic {
                 b"PSTR" => {
                     // PostingStorage file - magic is at beginning of FileHeader
-                    return self.validate_posting_storage_file(mmf, start_time);
+                    self.validate_posting_storage_file(mmf, start_time)
                 }
                 b"VSTR" => {
                     // VectorStorage file - magic is at beginning of FileHeader
-                    return self.validate_vector_storage_file(mmf, start_time);
+                    self.validate_vector_storage_file(mmf, start_time)
                 }
                 _ => {
 
