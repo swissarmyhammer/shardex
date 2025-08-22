@@ -1310,17 +1310,17 @@ mod tests {
         let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Add multiple postings with unit vectors for predictable cosine similarity
-        let vectors = vec![
-            vec![1.0, 0.0],  // Same direction as query
-            vec![0.0, 1.0],  // Orthogonal to query
-            vec![-1.0, 0.0], // Opposite to query
-            vec![0.5, 0.5],  // At 45 degrees
-            vec![1.0, 1.0],  // At 45 degrees but not normalized
+        let vectors = [
+            [1.0, 0.0],  // Same direction as query
+            [0.0, 1.0],  // Orthogonal to query
+            [-1.0, 0.0], // Opposite to query
+            [0.5, 0.5],  // At 45 degrees
+            [1.0, 1.0],  // At 45 degrees but not normalized
         ];
 
         for (i, vector) in vectors.iter().enumerate() {
             let doc_id = DocumentId::new();
-            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.clone(), 2).unwrap();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 2).unwrap();
             shard.add_posting(posting).unwrap();
         }
 
@@ -1456,16 +1456,16 @@ mod tests {
         let mut shard = Shard::create(shard_id, 10, 1, temp_dir.path().to_path_buf()).unwrap();
 
         // Add postings with different similarity scores using unit vectors for predictable results
-        let vectors = vec![
-            vec![1.0],   // Same direction as query [1.0] -> cosine = 1.0 -> normalized = 1.0
-            vec![-1.0],  // Opposite direction -> cosine = -1.0 -> normalized = 0.0
-            vec![0.5],   // Same direction, smaller magnitude -> cosine = 1.0 -> normalized = 1.0
-            vec![2.0],   // Same direction, larger magnitude -> cosine = 1.0 -> normalized = 1.0
+        let vectors = [
+            [1.0],   // Same direction as query [1.0] -> cosine = 1.0 -> normalized = 1.0
+            [-1.0],  // Opposite direction -> cosine = -1.0 -> normalized = 0.0
+            [0.5],   // Same direction, smaller magnitude -> cosine = 1.0 -> normalized = 1.0
+            [2.0],   // Same direction, larger magnitude -> cosine = 1.0 -> normalized = 1.0
         ];
 
         for (i, vector) in vectors.iter().enumerate() {
             let doc_id = DocumentId::new();
-            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.clone(), 1).unwrap();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 1).unwrap();
             shard.add_posting(posting).unwrap();
         }
 
