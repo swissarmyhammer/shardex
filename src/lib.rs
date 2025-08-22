@@ -9,6 +9,7 @@ pub mod error;
 pub mod identifiers;
 pub mod layout;
 pub mod memory;
+pub mod posting_storage;
 pub mod structures;
 pub mod vector_storage;
 
@@ -17,6 +18,7 @@ pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile};
+pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
 pub use vector_storage::VectorStorage;
 
