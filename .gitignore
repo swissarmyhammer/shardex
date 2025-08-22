@@ -3,3 +3,18 @@ mcp.log
 .swissarmyhammer/tmp
 .swissarmyhammer/workflow-runs/
 target/
+
+# Rust
+Cargo.lock
+*.pdb
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

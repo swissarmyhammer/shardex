@@ -181,17 +181,39 @@ impl ShardexMetadata {
     }
 
     /// Calculate Euclidean distance between two vectors
+    ///
+    /// This implementation is optimized for cache-friendly memory access patterns
+    /// and can take advantage of compiler auto-vectorization and SIMD operations.
     fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
 
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| {
-                let diff = x - y;
-                diff * diff
-            })
-            .sum::<f32>()
-            .sqrt()
+        // Use a more cache-friendly approach that helps with SIMD optimization
+        let mut sum_squared = 0.0f32;
+
+        // Process in chunks to enable better auto-vectorization
+        for chunk in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            let (a_chunk, b_chunk) = chunk;
+
+            // Unroll loop for better SIMD utilization
+            let diff0 = a_chunk[0] - b_chunk[0];
+            let diff1 = a_chunk[1] - b_chunk[1];
+            let diff2 = a_chunk[2] - b_chunk[2];
+            let diff3 = a_chunk[3] - b_chunk[3];
+
+            sum_squared += diff0 * diff0 + diff1 * diff1 + diff2 * diff2 + diff3 * diff3;
+        }
+
+        // Handle remaining elements
+        let remainder_len = a.len() % 4;
+        if remainder_len > 0 {
+            let start = a.len() - remainder_len;
+            for i in start..a.len() {
+                let diff = a[i] - b[i];
+                sum_squared += diff * diff;
+            }
+        }
+
+        sum_squared.sqrt()
     }
 
     /// Get age of this shard since last modification
@@ -351,6 +373,118 @@ impl ShardexIndex {
         Ok(removed)
     }
 
+    /// Find the single nearest shard to a query vector
+    ///
+    /// This method is optimized for write operations where only the closest shard
+    /// is needed. It returns the ID of the shard with the centroid closest to the
+    /// query vector.
+    ///
+    /// # Arguments
+    /// * `query_vector` - The vector to find the nearest shard for
+    ///
+    /// # Returns
+    /// The ID of the nearest shard, or None if the index is empty
+    pub fn find_nearest_shard(
+        &self,
+        query_vector: &[f32],
+    ) -> Result<Option<ShardId>, ShardexError> {
+        // Validate query vector dimension
+        if query_vector.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query_vector.len(),
+            });
+        }
+
+        if self.shards.is_empty() {
+            return Ok(None);
+        }
+
+        let mut nearest_shard_id: Option<ShardId> = None;
+        let mut nearest_distance = f32::INFINITY;
+
+        // Find the closest shard without storing all distances
+        for shard_metadata in &self.shards {
+            let distance = shard_metadata.distance_to_query(query_vector)?;
+            if distance < nearest_distance {
+                nearest_distance = distance;
+                nearest_shard_id = Some(shard_metadata.id);
+            }
+        }
+
+        Ok(nearest_shard_id)
+    }
+
+    /// Find multiple candidate shards for search operations
+    ///
+    /// This method calculates the distance from the query vector to each shard's
+    /// centroid and returns the IDs of the nearest shards up to the slop factor limit.
+    /// This is an alias for find_nearest_shards with a more descriptive name for search contexts.
+    ///
+    /// # Arguments
+    /// * `query_vector` - The vector to find candidate shards for
+    /// * `slop_factor` - Maximum number of candidate shards to return
+    pub fn find_candidate_shards(
+        &self,
+        query_vector: &[f32],
+        slop_factor: usize,
+    ) -> Result<Vec<ShardId>, ShardexError> {
+        self.find_nearest_shards(query_vector, slop_factor)
+    }
+
+    /// Calculate centroid distances for all shards in parallel
+    ///
+    /// This method computes the distance from the query vector to each shard's
+    /// centroid and returns the distances in the same order as the shards.
+    /// Useful for external analysis and custom selection logic.
+    ///
+    /// Uses parallel computation when there are many shards to improve performance
+    /// on multi-core systems.
+    ///
+    /// # Arguments
+    /// * `query_vector` - The vector to calculate distances from
+    ///
+    /// # Returns
+    /// Vector of distances corresponding to each shard in index order
+    pub fn calculate_centroid_distances(
+        &self,
+        query_vector: &[f32],
+    ) -> Result<Vec<f32>, ShardexError> {
+        use rayon::prelude::*;
+
+        // Validate query vector dimension
+        if query_vector.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query_vector.len(),
+            });
+        }
+
+        // For small numbers of shards, sequential processing is more efficient
+        // due to reduced overhead. Use parallel processing for larger collections.
+        const PARALLEL_THRESHOLD: usize = 10;
+
+        if self.shards.len() >= PARALLEL_THRESHOLD {
+            // Parallel calculation for large shard collections
+            let distances: Result<Vec<f32>, ShardexError> = self
+                .shards
+                .par_iter()
+                .map(|shard_metadata| shard_metadata.distance_to_query(query_vector))
+                .collect();
+
+            distances
+        } else {
+            // Sequential calculation for small collections
+            let distances: Result<Vec<f32>, ShardexError> = self
+                .shards
+                .iter()
+                .map(|shard_metadata| shard_metadata.distance_to_query(query_vector))
+                .collect();
+
+            distances
+        }
+    }
+
     /// Find the nearest shards to a query vector
     ///
     /// This method calculates the distance from the query vector to each shard's
@@ -377,12 +511,15 @@ impl ShardexIndex {
         }
 
         // Calculate distances to all shard centroids
-        let mut shard_distances: Vec<(ShardId, f32)> = Vec::new();
+        let distances = self.calculate_centroid_distances(query_vector)?;
 
-        for shard_metadata in &self.shards {
-            let distance = shard_metadata.distance_to_query(query_vector)?;
-            shard_distances.push((shard_metadata.id, distance));
-        }
+        // Create paired vector of (ShardId, distance) and sort by distance
+        let mut shard_distances: Vec<(ShardId, f32)> = self
+            .shards
+            .iter()
+            .zip(distances.iter())
+            .map(|(metadata, &distance)| (metadata.id, distance))
+            .collect();
 
         // Sort by distance (ascending - nearest first)
         shard_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1330,5 +1467,273 @@ mod tests {
         // Test with slop factor larger than available shards
         let nearest = index.find_nearest_shards(&query, 10).unwrap();
         assert_eq!(nearest.len(), 4); // Should return all 4 shards
+    }
+
+    #[test]
+    fn test_find_nearest_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(3);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Test with empty index
+        let query = vec![1.0, 0.0, 0.0];
+        let result = index.find_nearest_shard(&query).unwrap();
+        assert!(result.is_none());
+
+        // Add shards with different centroids
+        let centroids = vec![
+            (vec![1.0, 0.0, 0.0], "shard_east"),  // Distance 0 from query
+            (vec![0.0, 1.0, 0.0], "shard_north"), // Distance sqrt(2) from query
+            (vec![0.0, 0.0, 1.0], "shard_up"),    // Distance sqrt(2) from query
+        ];
+
+        let mut shard_ids = Vec::new();
+        for (centroid, _name) in &centroids {
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+            // Add posting with the desired centroid vector
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 0, 10, centroid.clone(), 3).unwrap();
+            shard.add_posting(posting).unwrap();
+
+            shard_ids.push(shard_id);
+            index.add_shard(shard).unwrap();
+        }
+
+        // Query closest to first centroid
+        let query = vec![1.0, 0.0, 0.0];
+        let nearest = index.find_nearest_shard(&query).unwrap().unwrap();
+        assert_eq!(nearest, shard_ids[0]);
+
+        // Query closest to second centroid
+        let query = vec![0.0, 1.0, 0.0];
+        let nearest = index.find_nearest_shard(&query).unwrap().unwrap();
+        assert_eq!(nearest, shard_ids[1]);
+
+        // Test with invalid dimensions
+        let invalid_query = vec![1.0, 0.0]; // Wrong dimension
+        let result = index.find_nearest_shard(&invalid_query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_candidate_shards() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(2);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create shards at unit circle positions
+        let num_shards = 8;
+        let mut shard_ids = Vec::new();
+
+        for i in 0..num_shards {
+            let angle = 2.0 * std::f32::consts::PI * (i as f32) / (num_shards as f32);
+            let centroid = vec![angle.cos(), angle.sin()];
+
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 0, 10, centroid, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+
+            shard_ids.push(shard_id);
+            index.add_shard(shard).unwrap();
+        }
+
+        // Query from origin - should return requested number of candidates
+        let query = vec![0.0, 0.0];
+        let candidates = index.find_candidate_shards(&query, 3).unwrap();
+        assert_eq!(candidates.len(), 3);
+
+        // Query close to first shard
+        let query = vec![1.0, 0.0];
+        let candidates = index.find_candidate_shards(&query, 2).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0], shard_ids[0]); // Should be closest to angle 0
+
+        // Test with slop factor larger than available shards
+        let candidates = index.find_candidate_shards(&query, 20).unwrap();
+        assert_eq!(candidates.len(), num_shards);
+
+        // Test with zero slop factor
+        let candidates = index.find_candidate_shards(&query, 0).unwrap();
+        assert_eq!(candidates.len(), 0);
+    }
+
+    #[test]
+    fn test_calculate_centroid_distances() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(2);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Test with empty index
+        let query = vec![0.0, 0.0];
+        let distances = index.calculate_centroid_distances(&query).unwrap();
+        assert!(distances.is_empty());
+
+        // Add shards at known positions
+        let centroids = vec![
+            vec![3.0, 4.0], // Distance 5 from origin
+            vec![1.0, 0.0], // Distance 1 from origin
+            vec![0.0, 0.0], // Distance 0 from origin
+        ];
+
+        for centroid in &centroids {
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 0, 10, centroid.clone(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+
+            index.add_shard(shard).unwrap();
+        }
+
+        // Calculate distances from origin
+        let query = vec![0.0, 0.0];
+        let distances = index.calculate_centroid_distances(&query).unwrap();
+
+        assert_eq!(distances.len(), 3);
+        assert!((distances[0] - 5.0).abs() < 1e-6); // Distance to (3,4)
+        assert!((distances[1] - 1.0).abs() < 1e-6); // Distance to (1,0)
+        assert!((distances[2] - 0.0).abs() < 1e-6); // Distance to (0,0)
+
+        // Test with invalid dimensions
+        let invalid_query = vec![1.0]; // Wrong dimension
+        let result = index.calculate_centroid_distances(&invalid_query);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_centroid_distance_calculation_edge_cases() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(1);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Single shard case
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 1, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 0, 10, vec![5.0], 1).unwrap();
+        shard.add_posting(posting).unwrap();
+        index.add_shard(shard).unwrap();
+
+        // Test single shard selection
+        let query = vec![0.0];
+        let nearest = index.find_nearest_shard(&query).unwrap().unwrap();
+        assert_eq!(nearest, shard_id);
+
+        // Test distance calculation
+        let distances = index.calculate_centroid_distances(&query).unwrap();
+        assert_eq!(distances.len(), 1);
+        assert!((distances[0] - 5.0).abs() < 1e-6);
+
+        // Test candidate shards with single shard
+        let candidates = index.find_candidate_shards(&query, 5).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0], shard_id);
+    }
+
+    #[test]
+    fn test_simd_optimized_distance_calculation() {
+        // Test the SIMD-optimized distance calculation with various vector sizes
+        let test_cases = vec![
+            // Test different alignment scenarios
+            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]), // Length 3 (not aligned to 4)
+            (vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]), // Length 4 (aligned)
+            (
+                vec![1.0, 2.0, 3.0, 4.0, 5.0],
+                vec![6.0, 7.0, 8.0, 9.0, 10.0],
+            ), // Length 5 (one remainder)
+            (vec![0.0; 16], vec![1.0; 16]),             // Length 16 (multiple of 4)
+            (vec![0.0; 17], vec![1.0; 17]),             // Length 17 (with remainder)
+        ];
+
+        for (a, b) in test_cases {
+            // Calculate expected distance using simple method
+            let expected: f32 = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| {
+                    let diff = x - y;
+                    diff * diff
+                })
+                .sum::<f32>()
+                .sqrt();
+
+            // Calculate using optimized method
+            let actual = ShardexMetadata::euclidean_distance(&a, &b);
+
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "Distance mismatch for vectors of length {}: expected {}, got {}",
+                a.len(),
+                expected,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_distance_calculation() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(4);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create enough shards to trigger parallel processing (>= 10)
+        let num_shards = 15;
+        for i in 0..num_shards {
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 10, 4, temp_dir.path().to_path_buf()).unwrap();
+
+            // Create a unique centroid for each shard
+            let centroid = vec![i as f32, 0.0, 0.0, 0.0];
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, 0, 10, centroid, 4).unwrap();
+            shard.add_posting(posting).unwrap();
+
+            index.add_shard(shard).unwrap();
+        }
+
+        // Test parallel distance calculation
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let distances = index.calculate_centroid_distances(&query).unwrap();
+
+        assert_eq!(distances.len(), num_shards);
+
+        // Verify distances are correct (should be 0, 1, 2, 3, ..., 14)
+        for (i, &distance) in distances.iter().enumerate() {
+            let expected = i as f32;
+            assert!(
+                (distance - expected).abs() < 1e-6,
+                "Distance {} should be {}, got {}",
+                i,
+                expected,
+                distance
+            );
+        }
+
+        // Test that find_nearest_shard returns the closest (first) shard
+        let nearest = index.find_nearest_shard(&query).unwrap().unwrap();
+        let shard_ids = index.shard_ids();
+        assert_eq!(nearest, shard_ids[0]); // Should be shard with centroid [0,0,0,0]
     }
 }
