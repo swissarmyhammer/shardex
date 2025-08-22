@@ -144,11 +144,11 @@ pub trait Shardex {
     where
         Self: Sized;
     
-    /// Add a posting to the index
-    async fn add_posting(&mut self, posting: Posting) -> Result<(), Self::Error>;
+    /// Add postings to the index (batch operation only)
+    async fn add_postings(&mut self, postings: Vec<Posting>) -> Result<(), Self::Error>;
     
-    /// Remove all postings for a document
-    async fn remove_document(&mut self, document_id: u128) -> Result<(), Self::Error>;
+    /// Remove all postings for documents (batch operation only)
+    async fn remove_documents(&mut self, document_ids: Vec<u128>) -> Result<(), Self::Error>;
     
     /// Search for K nearest neighbors
     async fn search(
