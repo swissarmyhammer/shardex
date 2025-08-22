@@ -129,6 +129,10 @@ pub struct Shard {
     directory: PathBuf,
     /// Metadata for monitoring and statistics
     metadata: ShardMetadata,
+    /// Centroid vector representing the center of all non-deleted vectors
+    centroid: Vec<f32>,
+    /// Count of active vectors used for incremental centroid updates
+    active_vector_count: usize,
 }
 
 impl ShardMetadata {
@@ -256,6 +260,9 @@ impl Shard {
         let mut metadata = ShardMetadata::new(false);
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
+        // Initialize centroid as zero vector
+        let centroid = vec![0.0; vector_size];
+
         Ok(Self {
             id,
             vector_storage,
@@ -264,6 +271,8 @@ impl Shard {
             vector_size,
             directory,
             metadata,
+            centroid,
+            active_vector_count: 0,
         })
     }
 
@@ -314,7 +323,11 @@ impl Shard {
             ShardMetadata::new(vector_storage.is_read_only() || posting_storage.is_read_only());
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
-        Ok(Self {
+        // Initialize centroid and calculate from existing data
+        let centroid = vec![0.0; vector_size];
+        let active_vector_count = vector_storage.active_count();
+        
+        let mut shard = Self {
             id,
             vector_storage,
             posting_storage,
@@ -322,7 +335,16 @@ impl Shard {
             vector_size,
             directory: directory.to_path_buf(),
             metadata,
-        })
+            centroid,
+            active_vector_count,
+        };
+        
+        // Calculate centroid from existing vectors only if there are vectors
+        if active_vector_count > 0 {
+            shard.recalculate_centroid();
+        }
+        
+        Ok(shard)
     }
 
     /// Open an existing shard in read-only mode
@@ -367,7 +389,11 @@ impl Shard {
         let mut metadata = ShardMetadata::new(true);
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
-        Ok(Self {
+        // Initialize centroid and calculate from existing data
+        let centroid = vec![0.0; vector_size];
+        let active_vector_count = vector_storage.active_count();
+        
+        let mut shard = Self {
             id,
             vector_storage,
             posting_storage,
@@ -375,7 +401,16 @@ impl Shard {
             vector_size,
             directory: directory.to_path_buf(),
             metadata,
-        })
+            centroid,
+            active_vector_count,
+        };
+        
+        // Calculate centroid from existing vectors only if there are vectors
+        if active_vector_count > 0 {
+            shard.recalculate_centroid();
+        }
+        
+        Ok(shard)
     }
 
     /// Get the shard ID
@@ -486,6 +521,9 @@ impl Shard {
             )));
         }
 
+        // Update centroid with the new vector
+        self.update_centroid_add(&posting.vector);
+
         // Update metadata
         self.metadata
             .update_from_storages(&self.vector_storage, &self.posting_storage);
@@ -571,6 +609,13 @@ impl Shard {
             )));
         }
 
+        // Get the vector before removing it for centroid update
+        let vector = self
+            .vector_storage
+            .get_vector(index)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get vector for centroid update: {}", e)))?;
+        let vector_copy = vector.to_vec(); // Copy to owned vector
+
         // Remove from both storages
         self.vector_storage
             .remove_vector(index)
@@ -579,6 +624,9 @@ impl Shard {
         self.posting_storage
             .remove_posting(index)
             .map_err(|e| ShardexError::Shard(format!("Failed to remove posting: {}", e)))?;
+
+        // Update centroid after successful removal
+        self.update_centroid_remove(&vector_copy);
 
         // Update metadata
         self.metadata
@@ -598,9 +646,34 @@ impl Shard {
             ));
         }
 
+        let mut removed_vectors = Vec::new();
+
+        // First pass: collect vectors to remove for centroid update
+        for index in 0..self.current_count() {
+            // Skip already deleted postings
+            if self.is_deleted(index)? {
+                continue;
+            }
+
+            // Get the document ID for this posting
+            let (posting_doc_id, _, _) = self
+                .posting_storage
+                .get_posting(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
+
+            // If this posting matches the document ID, collect its vector
+            if posting_doc_id == doc_id {
+                let vector = self
+                    .vector_storage
+                    .get_vector(index)
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector: {}", e)))?;
+                removed_vectors.push(vector.to_vec());
+            }
+        }
+
         let mut removed_count = 0;
 
-        // Iterate through all postings to find matches
+        // Second pass: actually remove the postings
         // We iterate backwards to avoid index shifting issues
         for index in (0..self.current_count()).rev() {
             // Skip already deleted postings
@@ -614,12 +687,29 @@ impl Shard {
                 .get_posting(index)
                 .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
 
-            // If this posting matches the document ID, remove it
+            // If this posting matches the document ID, remove it (but don't update centroid yet)
             if posting_doc_id == doc_id {
-                self.remove_posting(index)?;
+                // Remove from both storages directly without centroid update
+                self.vector_storage
+                    .remove_vector(index)
+                    .map_err(|e| ShardexError::Shard(format!("Failed to remove vector: {}", e)))?;
+
+                self.posting_storage
+                    .remove_posting(index)
+                    .map_err(|e| ShardexError::Shard(format!("Failed to remove posting: {}", e)))?;
+
                 removed_count += 1;
             }
         }
+
+        // Update centroid for all removed vectors
+        for vector in &removed_vectors {
+            self.update_centroid_remove(vector);
+        }
+
+        // Update metadata
+        self.metadata
+            .update_from_storages(&self.vector_storage, &self.posting_storage);
 
         Ok(removed_count)
     }
@@ -805,7 +895,160 @@ impl Shard {
             }
         }
 
+        // Validate centroid consistency
+        let expected_centroid = self.calculate_centroid();
+        
+        // Check centroid dimension
+        if self.centroid.len() != self.vector_size {
+            return Err(ShardexError::Corruption(format!(
+                "Centroid dimension mismatch: expected {}, got {}",
+                self.vector_size,
+                self.centroid.len()
+            )));
+        }
+
+        // Check if active vector count matches actual count
+        let actual_active_count = vector_active;
+        if self.active_vector_count != actual_active_count {
+            return Err(ShardexError::Corruption(format!(
+                "Active vector count mismatch: stored {}, actual {}",
+                self.active_vector_count,
+                actual_active_count
+            )));
+        }
+
+        // Check centroid accuracy (with floating-point tolerance)
+        const CENTROID_TOLERANCE: f32 = 1e-5;
+        for (i, (&stored, &expected)) in self.centroid.iter().zip(expected_centroid.iter()).enumerate() {
+            let diff = (stored - expected).abs();
+            if diff > CENTROID_TOLERANCE {
+                return Err(ShardexError::Corruption(format!(
+                    "Centroid component {} mismatch: stored {}, calculated {} (diff: {})",
+                    i, stored, expected, diff
+                )));
+            }
+        }
+
         Ok(())
+    }
+
+    /// Calculate centroid from all non-deleted vectors
+    ///
+    /// This method performs a fresh calculation of the centroid by scanning all
+    /// non-deleted vectors in the shard. The centroid is the mean position of all
+    /// active vectors.
+    ///
+    /// Returns a vector representing the centroid, or a zero vector if no active vectors exist.
+    pub fn calculate_centroid(&self) -> Vec<f32> {
+        let mut centroid = vec![0.0; self.vector_size];
+        let mut active_count = 0;
+
+        // Sum all non-deleted vectors
+        for i in 0..self.current_count() {
+            if let Ok(false) = self.is_deleted(i) {
+                if let Ok(vector) = self.vector_storage.get_vector(i) {
+                    for (j, &value) in vector.iter().enumerate() {
+                        centroid[j] += value;
+                    }
+                    active_count += 1;
+                }
+            }
+        }
+
+        // Calculate mean (centroid)
+        if active_count > 0 {
+            let count_f32 = active_count as f32;
+            for value in &mut centroid {
+                *value /= count_f32;
+            }
+        }
+
+        centroid
+    }
+
+    /// Get the current centroid (read-only access)
+    ///
+    /// Returns a slice reference to the current centroid vector.
+    /// The centroid represents the mean position of all non-deleted vectors in this shard.
+    pub fn get_centroid(&self) -> &[f32] {
+        &self.centroid
+    }
+
+    /// Incrementally update centroid when adding a new vector
+    ///
+    /// Uses the incremental mean formula to update the centroid efficiently:
+    /// `new_centroid = old_centroid + (new_vector - old_centroid) / new_count`
+    ///
+    /// This is more efficient than recalculating the entire centroid.
+    ///
+    /// # Arguments
+    /// * `vector` - The vector being added to the shard
+    pub fn update_centroid_add(&mut self, vector: &[f32]) {
+        debug_assert_eq!(vector.len(), self.vector_size, "Vector dimension mismatch");
+
+        self.active_vector_count += 1;
+        
+        if self.active_vector_count == 1 {
+            // First vector becomes the centroid
+            self.centroid.copy_from_slice(vector);
+        } else {
+            let count_f32 = self.active_vector_count as f32;
+            
+            // Incremental mean update: new_centroid = old_centroid + (new_vector - old_centroid) / count
+            for i in 0..self.vector_size {
+                self.centroid[i] += (vector[i] - self.centroid[i]) / count_f32;
+            }
+        }
+    }
+
+    /// Incrementally update centroid when removing a vector
+    ///
+    /// Uses the incremental mean formula to update the centroid efficiently when a vector is removed:
+    /// `new_centroid = (old_centroid * old_count - removed_vector) / new_count`
+    ///
+    /// # Arguments
+    /// * `vector` - The vector being removed from the shard
+    pub fn update_centroid_remove(&mut self, vector: &[f32]) {
+        debug_assert_eq!(vector.len(), self.vector_size, "Vector dimension mismatch");
+
+        if self.active_vector_count == 0 {
+            return; // No vectors to remove
+        }
+
+        if self.active_vector_count == 1 {
+            // Removing the last vector - reset to zero centroid
+            for value in &mut self.centroid {
+                *value = 0.0;
+            }
+            self.active_vector_count = 0;
+        } else {
+            let old_count_f32 = self.active_vector_count as f32;
+            self.active_vector_count -= 1;
+            let new_count_f32 = self.active_vector_count as f32;
+
+            // Remove vector from centroid: new_centroid = (old_centroid * old_count - removed_vector) / new_count
+            for i in 0..self.vector_size {
+                self.centroid[i] = (self.centroid[i] * old_count_f32 - vector[i]) / new_count_f32;
+            }
+        }
+    }
+
+    /// Recalculate centroid from scratch for accuracy
+    ///
+    /// This method performs a full recalculation of the centroid by scanning all vectors.
+    /// Use this method periodically to correct any drift from incremental updates due to
+    /// floating-point precision errors.
+    pub fn recalculate_centroid(&mut self) {
+        self.centroid = self.calculate_centroid();
+        
+        // Update active vector count to match actual count
+        let mut count = 0;
+        for i in 0..self.current_count() {
+            if let Ok(false) = self.is_deleted(i) {
+                count += 1;
+            }
+        }
+        self.active_vector_count = count;
     }
 }
 
@@ -1447,6 +1690,306 @@ mod tests {
         assert_eq!(results2[0].similarity_score, 1.0); // First posting (same direction)
         assert_eq!(results2[1].similarity_score, 0.5); // Second posting (orthogonal)
     }
+
+    #[test]
+    fn test_centroid_calculation_empty_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Empty shard should have zero centroid
+        let centroid = shard.calculate_centroid();
+        assert_eq!(centroid, vec![0.0, 0.0, 0.0]);
+        assert_eq!(shard.get_centroid(), &[0.0, 0.0, 0.0]);
+        assert_eq!(shard.active_vector_count, 0);
+    }
+
+    #[test]
+    fn test_centroid_single_vector() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add single vector
+        let doc_id = DocumentId::new();
+        let vector = vec![2.0, 4.0, 6.0];
+        let posting = Posting::new(doc_id, 100, 50, vector.clone(), 3).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Centroid should equal the single vector
+        assert_eq!(shard.get_centroid(), &vector);
+        assert_eq!(shard.active_vector_count, 1);
+
+        // Calculate centroid should also return the same
+        let calculated = shard.calculate_centroid();
+        assert_eq!(calculated, vector);
+    }
+
+    #[test]
+    fn test_centroid_multiple_vectors() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+
+        // Add three vectors: [1, 2], [3, 4], [5, 6]
+        // Expected centroid: [(1+3+5)/3, (2+4+6)/3] = [3.0, 4.0]
+        let vectors = vec![
+            vec![1.0, 2.0],
+            vec![3.0, 4.0],
+            vec![5.0, 6.0],
+        ];
+
+        let posting1 = Posting::new(doc_id1, 100, 50, vectors[0].clone(), 2).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 50, vectors[1].clone(), 2).unwrap();
+        let posting3 = Posting::new(doc_id3, 300, 50, vectors[2].clone(), 2).unwrap();
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        let expected_centroid = vec![3.0, 4.0];
+        let centroid = shard.get_centroid();
+
+        assert_eq!(centroid.len(), 2);
+        assert_eq!(shard.active_vector_count, 3);
+        
+        // Use approximate comparison for floating-point
+        assert!((centroid[0] - expected_centroid[0]).abs() < 1e-6);
+        assert!((centroid[1] - expected_centroid[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_centroid_incremental_updates() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Test incremental add
+        shard.update_centroid_add(&[2.0, 4.0]);
+        assert_eq!(shard.get_centroid(), &[2.0, 4.0]);
+        assert_eq!(shard.active_vector_count, 1);
+
+        shard.update_centroid_add(&[4.0, 2.0]);
+        assert_eq!(shard.get_centroid(), &[3.0, 3.0]); // Mean of [2,4] and [4,2]
+        assert_eq!(shard.active_vector_count, 2);
+
+        shard.update_centroid_add(&[0.0, 6.0]);
+        assert_eq!(shard.get_centroid(), &[2.0, 4.0]); // Mean of [2,4], [4,2], [0,6]
+        assert_eq!(shard.active_vector_count, 3);
+
+        // Test incremental remove
+        shard.update_centroid_remove(&[0.0, 6.0]);
+        assert_eq!(shard.get_centroid(), &[3.0, 3.0]); // Back to mean of [2,4] and [4,2]
+        assert_eq!(shard.active_vector_count, 2);
+
+        shard.update_centroid_remove(&[4.0, 2.0]);
+        assert_eq!(shard.get_centroid(), &[2.0, 4.0]); // Back to just [2,4]
+        assert_eq!(shard.active_vector_count, 1);
+
+        shard.update_centroid_remove(&[2.0, 4.0]);
+        assert_eq!(shard.get_centroid(), &[0.0, 0.0]); // Empty
+        assert_eq!(shard.active_vector_count, 0);
+    }
+
+    #[test]
+    fn test_centroid_with_deleted_vectors() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+
+        // Add vectors
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 2.0], 2).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 50, vec![3.0, 4.0], 2).unwrap();
+        let posting3 = Posting::new(doc_id3, 300, 50, vec![5.0, 6.0], 2).unwrap();
+
+        let idx1 = shard.add_posting(posting1).unwrap();
+        let idx2 = shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Initial centroid should be mean of all vectors: [3.0, 4.0]
+        let initial_centroid = shard.get_centroid().to_vec();
+        assert!((initial_centroid[0] - 3.0).abs() < 1e-6);
+        assert!((initial_centroid[1] - 4.0).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 3);
+
+        // Remove middle vector [3.0, 4.0]
+        shard.remove_posting(idx2).unwrap();
+
+        // Centroid should now be mean of [1,2] and [5,6]: [3.0, 4.0]
+        let updated_centroid = shard.get_centroid().to_vec();
+        assert!((updated_centroid[0] - 3.0).abs() < 1e-6);
+        assert!((updated_centroid[1] - 4.0).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 2);
+
+        // Remove first vector [1.0, 2.0]
+        shard.remove_posting(idx1).unwrap();
+
+        // Centroid should now just be [5.0, 6.0]
+        let final_centroid = shard.get_centroid().to_vec();
+        assert!((final_centroid[0] - 5.0).abs() < 1e-6);
+        assert!((final_centroid[1] - 6.0).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 1);
+    }
+
+    #[test]
+    fn test_centroid_recalculation() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+
+        // Add vectors through regular posting API
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![2.0, 4.0], 2).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 50, vec![6.0, 8.0], 2).unwrap();
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        let initial_centroid = shard.get_centroid().to_vec();
+
+        // Artificially corrupt the centroid and count
+        shard.centroid = vec![999.0, 999.0];
+        shard.active_vector_count = 999;
+
+        // Recalculate should restore correct centroid
+        shard.recalculate_centroid();
+
+        let corrected_centroid = shard.get_centroid().to_vec();
+        assert!((corrected_centroid[0] - initial_centroid[0]).abs() < 1e-6);
+        assert!((corrected_centroid[1] - initial_centroid[1]).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 2);
+    }
+
+    #[test]
+    fn test_centroid_remove_document() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+
+        // Add multiple postings for same document
+        let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 2.0], 2).unwrap();
+        let posting2 = Posting::new(doc_id1, 200, 50, vec![3.0, 4.0], 2).unwrap();
+        let posting3 = Posting::new(doc_id2, 300, 50, vec![5.0, 6.0], 2).unwrap();
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Initial centroid: mean of [1,2], [3,4], [5,6] = [3.0, 4.0]
+        let initial_centroid = shard.get_centroid().to_vec();
+        assert!((initial_centroid[0] - 3.0).abs() < 1e-6);
+        assert!((initial_centroid[1] - 4.0).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 3);
+
+        // Remove all postings for doc_id1 (vectors [1,2] and [3,4])
+        let removed_count = shard.remove_document(doc_id1).unwrap();
+        assert_eq!(removed_count, 2);
+
+        // Centroid should now just be [5.0, 6.0]
+        let final_centroid = shard.get_centroid().to_vec();
+        assert!((final_centroid[0] - 5.0).abs() < 1e-6);
+        assert!((final_centroid[1] - 6.0).abs() < 1e-6);
+        assert_eq!(shard.active_vector_count, 1);
+    }
+
+    #[test]
+    fn test_centroid_persistence_on_reopen() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let directory = temp_dir.path().to_path_buf();
+
+        let expected_centroid = vec![3.0, 4.0];
+
+        // Create and populate shard
+        {
+            let mut shard = Shard::create(shard_id, 10, 2, directory.clone()).unwrap();
+
+            let doc_id1 = DocumentId::new();
+            let doc_id2 = DocumentId::new();
+            let doc_id3 = DocumentId::new();
+
+            let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 2.0], 2).unwrap();
+            let posting2 = Posting::new(doc_id2, 200, 50, vec![3.0, 4.0], 2).unwrap();
+            let posting3 = Posting::new(doc_id3, 300, 50, vec![5.0, 6.0], 2).unwrap();
+
+            shard.add_posting(posting1).unwrap();
+            shard.add_posting(posting2).unwrap();
+            shard.add_posting(posting3).unwrap();
+
+            shard.sync().unwrap();
+        }
+
+        // Reopen and verify centroid is recalculated correctly
+        {
+            let shard = Shard::open(shard_id, &directory).unwrap();
+
+            let centroid = shard.get_centroid();
+            assert!((centroid[0] - expected_centroid[0]).abs() < 1e-6);
+            assert!((centroid[1] - expected_centroid[1]).abs() < 1e-6);
+            assert_eq!(shard.active_vector_count, 3);
+        }
+    }
+
+    #[test]
+    fn test_centroid_integrity_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 100, 50, vec![1.0, 2.0, 3.0], 3).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Should pass validation initially
+        assert!(shard.validate_integrity().is_ok());
+
+        // Corrupt the centroid dimension
+        shard.centroid = vec![1.0, 2.0]; // Wrong dimension
+
+        // Should fail validation
+        let result = shard.validate_integrity();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Centroid dimension mismatch"));
+
+        // Fix dimension but corrupt the values
+        shard.centroid = vec![999.0, 999.0, 999.0];
+
+        // Should fail validation due to centroid accuracy
+        let result = shard.validate_integrity();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Centroid component"));
+
+        // Fix centroid but corrupt active vector count
+        shard.centroid = vec![1.0, 2.0, 3.0]; // Correct centroid
+        shard.active_vector_count = 999; // Wrong count
+
+        // Should fail validation due to count mismatch
+        let result = shard.validate_integrity();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Active vector count mismatch"));
+    }
+
+
 
     #[test]
     fn test_shard_search_sorting() {
