@@ -4,10 +4,11 @@
 //! parameter validation and builder pattern implementation.
 
 use crate::error::ShardexError;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Configuration for a Shardex index
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShardexConfig {
     /// Directory path where the index will be stored
     pub directory_path: PathBuf,

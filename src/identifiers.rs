@@ -52,6 +52,11 @@ impl ShardId {
         Ulid(self.0)
     }
 
+    /// Parse from string (alias for FromStr implementation)
+    pub fn parse_str(s: &str) -> Result<Self, ulid::DecodeError> {
+        Self::from_str(s)
+    }
+
     /// Create from raw bytes (little-endian)
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(u128::from_le_bytes(bytes))
@@ -82,6 +87,11 @@ impl DocumentId {
     /// Convert to ULID
     pub fn as_ulid(self) -> Ulid {
         Ulid(self.0)
+    }
+
+    /// Parse from string (alias for FromStr implementation)
+    pub fn parse_str(s: &str) -> Result<Self, ulid::DecodeError> {
+        Self::from_str(s)
     }
 
     /// Create from raw bytes (little-endian)
