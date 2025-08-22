@@ -16,6 +16,10 @@ pub enum ShardexError {
     #[error("Invalid vector dimension: expected {expected}, got {actual}")]
     InvalidDimension { expected: usize, actual: usize },
 
+    /// Similarity score out of valid range
+    #[error("Invalid similarity score: {score} (must be between 0.0 and 1.0)")]
+    InvalidSimilarityScore { score: f32 },
+
     /// Index data corruption detected
     #[error("Index corruption detected: {0}")]
     Corruption(String),
@@ -75,6 +79,16 @@ mod tests {
         assert_eq!(
             display_str,
             "Invalid vector dimension: expected 384, got 512"
+        );
+    }
+
+    #[test]
+    fn test_invalid_similarity_score_display() {
+        let error = ShardexError::InvalidSimilarityScore { score: 1.5 };
+        let display_str = format!("{}", error);
+        assert_eq!(
+            display_str,
+            "Invalid similarity score: 1.5 (must be between 0.0 and 1.0)"
         );
     }
 
