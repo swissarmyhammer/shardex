@@ -16,6 +16,7 @@ pub mod shard;
 pub mod shardex_index;
 pub mod structures;
 pub mod vector_storage;
+pub mod wal;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -32,6 +33,7 @@ pub use shard::{Shard, ShardMetadata};
 pub use shardex_index::{IndexStatistics, ShardexIndex, ShardexMetadata};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
 pub use vector_storage::VectorStorage;
+pub use wal::{WalManager, WalSegment};
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;
