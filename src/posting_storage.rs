@@ -230,7 +230,7 @@ impl PostingStorageHeader {
         let document_ids_size = capacity * 16; // 16 bytes per DocumentId
         let starts_size = capacity * 4; // 4 bytes per u32
         let lengths_size = capacity * 4; // 4 bytes per u32
-        let deleted_flags_size = (capacity + 7) / 8; // Bits to bytes
+        let deleted_flags_size = capacity.div_ceil(8); // Bits to bytes
 
         Self::SIZE + document_ids_size + starts_size + lengths_size + deleted_flags_size
     }
@@ -463,7 +463,7 @@ impl PostingStorage {
     /// Find all indices with the specified document ID
     pub fn find_by_document_id(&self, document_id: DocumentId) -> Result<Vec<usize>, ShardexError> {
         let mut indices = Vec::new();
-        
+
         for i in 0..self.current_count() {
             if !self.is_deleted(i)? {
                 let (doc_id, _, _) = self.get_posting(i)?;
@@ -472,21 +472,21 @@ impl PostingStorage {
                 }
             }
         }
-        
+
         Ok(indices)
     }
 
     /// Iterate over all active (non-deleted) postings
-    pub fn iter_active(&self) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
+    pub fn iter_active(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
         (0..self.current_count()).filter_map(move |index| {
             match self.is_deleted(index) {
                 Ok(true) => None, // Skip deleted postings
-                Ok(false) => {
-                    match self.get_posting(index) {
-                        Ok((doc_id, start, length)) => Some(Ok((index, doc_id, start, length))),
-                        Err(e) => Some(Err(e)),
-                    }
-                }
+                Ok(false) => match self.get_posting(index) {
+                    Ok((doc_id, start, length)) => Some(Ok((index, doc_id, start, length))),
+                    Err(e) => Some(Err(e)),
+                },
                 Err(e) => Some(Err(e)),
             }
         })
@@ -526,10 +526,7 @@ impl PostingStorage {
     }
 
     /// Internal method to read a posting at a specific index
-    fn read_posting_at_index(
-        &self,
-        index: usize,
-    ) -> Result<(DocumentId, u32, u32), ShardexError> {
+    fn read_posting_at_index(&self, index: usize) -> Result<(DocumentId, u32, u32), ShardexError> {
         // Read document ID
         let doc_id_offset = self.header.document_ids_offset as usize + (index * 16);
         let document_id: DocumentId = self.mmap_file.read_at(doc_id_offset)?;
@@ -750,7 +747,7 @@ mod tests {
         // Add multiple postings for the same document
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
-        
+
         let idx1 = storage.add_posting(doc_id1, 100, 50).unwrap();
         let idx2 = storage.add_posting(doc_id2, 200, 75).unwrap();
         let idx3 = storage.add_posting(doc_id1, 300, 25).unwrap(); // Same doc as idx1
@@ -779,7 +776,7 @@ mod tests {
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
         let doc_id3 = DocumentId::new();
-        
+
         let idx1 = storage.add_posting(doc_id1, 100, 50).unwrap();
         let idx2 = storage.add_posting(doc_id2, 200, 75).unwrap();
         let idx3 = storage.add_posting(doc_id3, 300, 25).unwrap();
@@ -792,7 +789,7 @@ mod tests {
         let active_postings = active_postings.unwrap();
 
         assert_eq!(active_postings.len(), 2);
-        
+
         // Check that we get the right postings (idx1 and idx3)
         let indices: Vec<usize> = active_postings.iter().map(|(idx, _, _, _)| *idx).collect();
         assert!(indices.contains(&idx1));
@@ -844,7 +841,9 @@ mod tests {
             assert_eq!(storage.current_count(), 3);
             assert_eq!(storage.active_count(), 3);
 
-            for (i, (expected_doc_id, expected_start, expected_length)) in postings_to_add.iter().enumerate() {
+            for (i, (expected_doc_id, expected_start, expected_length)) in
+                postings_to_add.iter().enumerate()
+            {
                 let (retrieved_doc_id, start, length) = storage.get_posting(i).unwrap();
                 assert_eq!(retrieved_doc_id, *expected_doc_id);
                 assert_eq!(start, *expected_start);
@@ -974,12 +973,12 @@ mod tests {
     #[test]
     fn test_file_size_calculation() {
         let header = PostingStorageHeader::new(1000).unwrap();
-        let expected_size = PostingStorageHeader::SIZE + 
+        let expected_size = PostingStorageHeader::SIZE +
                            (1000 * 16) + // document IDs
                            (1000 * 4) + // starts
                            (1000 * 4) + // lengths
-                           ((1000 + 7) / 8); // deleted flags bitset
-        
+                           1000_usize.div_ceil(8); // deleted flags bitset
+
         assert_eq!(header.calculate_file_size(), expected_size);
     }
 
@@ -998,7 +997,7 @@ mod tests {
 
         // Test various bit positions
         let test_indices = [0, 1, 7, 8, 15, 16, 31, 32, 63];
-        
+
         for &idx in &test_indices {
             storage.remove_posting(idx).unwrap();
             assert!(storage.is_deleted(idx).unwrap());

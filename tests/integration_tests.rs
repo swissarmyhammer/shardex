@@ -4,7 +4,7 @@
 //! together for parallel access patterns, ensuring indices correspond between
 //! the two storage systems.
 
-use shardex::{PostingStorage, VectorStorage, DocumentId, ShardexError};
+use shardex::{DocumentId, PostingStorage, ShardexError, VectorStorage};
 use tempfile::TempDir;
 
 /// Test that PostingStorage and VectorStorage can be used together with aligned indices
@@ -51,7 +51,7 @@ fn test_parallel_storage_alignment() -> Result<(), ShardexError> {
 
         // Verify the vector has the expected values
         assert_eq!(vector[0], (i * vector_dimension) as f32);
-        
+
         // Verify the posting has the expected values
         assert_eq!(posting_doc_id, doc_ids[i]);
         assert_eq!(start, (i * 100) as u32);
@@ -82,7 +82,7 @@ fn test_parallel_storage_removal_alignment() -> Result<(), ShardexError> {
         let vector = vec![i as f32; vector_dimension];
         let vector_idx = vector_storage.add_vector(&vector)?;
         let posting_idx = posting_storage.add_posting(doc_id, i as u32 * 10, 25)?;
-        
+
         assert_eq!(vector_idx, posting_idx);
         indices.push(vector_idx);
     }
@@ -120,9 +120,15 @@ fn test_parallel_storage_removal_alignment() -> Result<(), ShardexError> {
     }
 
     // Verify counts are consistent
-    assert_eq!(vector_storage.current_count(), posting_storage.current_count());
-    assert_eq!(vector_storage.active_count(), posting_storage.active_count());
-    
+    assert_eq!(
+        vector_storage.current_count(),
+        posting_storage.current_count()
+    );
+    assert_eq!(
+        vector_storage.active_count(),
+        posting_storage.active_count()
+    );
+
     // Should be 20 total - 4 removed = 16 active
     assert_eq!(vector_storage.active_count(), 16);
     assert_eq!(posting_storage.active_count(), 16);
@@ -148,10 +154,10 @@ fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
 
         for (i, &doc_id) in doc_ids.iter().enumerate() {
             let vector: Vec<f32> = (0..vector_dimension).map(|j| (i + j) as f32).collect();
-            
+
             let vector_idx = vector_storage.add_vector(&vector)?;
             let posting_idx = posting_storage.add_posting(doc_id, (i * 50) as u32, 30)?;
-            
+
             assert_eq!(vector_idx, posting_idx);
         }
 
@@ -172,14 +178,20 @@ fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
 
         // Verify basic counts match
         assert_eq!(vector_storage.capacity(), posting_storage.capacity());
-        assert_eq!(vector_storage.current_count(), posting_storage.current_count());
-        assert_eq!(vector_storage.active_count(), posting_storage.active_count());
+        assert_eq!(
+            vector_storage.current_count(),
+            posting_storage.current_count()
+        );
+        assert_eq!(
+            vector_storage.active_count(),
+            posting_storage.active_count()
+        );
 
         // Verify specific data integrity
         for i in 0..doc_ids.len() {
             let vector_deleted = vector_storage.is_deleted(i)?;
             let posting_deleted = posting_storage.is_deleted(i)?;
-            
+
             // Deletion status should match
             assert_eq!(vector_deleted, posting_deleted);
 
@@ -216,10 +228,10 @@ fn test_parallel_storage_capacity_limits() -> Result<(), ShardexError> {
     for i in 0..capacity {
         let vector = vec![(i + 1) as f32; vector_dimension];
         let doc_id = DocumentId::new();
-        
+
         let vector_idx = vector_storage.add_vector(&vector)?;
         let posting_idx = posting_storage.add_posting(doc_id, i as u32 * 10, 20)?;
-        
+
         assert_eq!(vector_idx, posting_idx);
         assert_eq!(vector_idx, i);
     }
@@ -233,10 +245,10 @@ fn test_parallel_storage_capacity_limits() -> Result<(), ShardexError> {
     // Trying to add more should fail for both
     let overflow_vector = vec![999.0; vector_dimension];
     let overflow_doc_id = DocumentId::new();
-    
+
     let vector_result = vector_storage.add_vector(&overflow_vector);
     let posting_result = posting_storage.add_posting(overflow_doc_id, 999, 10);
-    
+
     assert!(vector_result.is_err());
     assert!(posting_result.is_err());
 
@@ -282,7 +294,7 @@ fn test_parallel_storage_active_iteration() -> Result<(), ShardexError> {
     for (posting_idx, doc_id, start, length) in active_postings {
         // Vector at this index should not be deleted
         assert!(!vector_storage.is_deleted(posting_idx)?);
-        
+
         // Vector should be accessible
         let vector = vector_storage.get_vector(posting_idx)?;
         assert_eq!(vector[0], posting_idx as f32);
@@ -316,16 +328,22 @@ fn test_parallel_storage_basic_performance() -> Result<(), ShardexError> {
     for i in 0..capacity {
         let vector: Vec<f32> = vec![i as f32; vector_dimension];
         let doc_id = DocumentId::new();
-        
+
         let vector_idx = vector_storage.add_vector(&vector)?;
         let posting_idx = posting_storage.add_posting(doc_id, i as u32 * 10, 50)?;
-        
+
         assert_eq!(vector_idx, posting_idx);
     }
 
     // Verify both storages have the same counts
-    assert_eq!(vector_storage.current_count(), posting_storage.current_count());
-    assert_eq!(vector_storage.active_count(), posting_storage.active_count());
+    assert_eq!(
+        vector_storage.current_count(),
+        posting_storage.current_count()
+    );
+    assert_eq!(
+        vector_storage.active_count(),
+        posting_storage.active_count()
+    );
     assert_eq!(vector_storage.current_count(), capacity);
 
     Ok(())
