@@ -17,7 +17,6 @@ use tempfile::TempDir;
 /// ```rust
 /// use shardex::test_utils::TestEnvironment;
 ///
-/// #[test]
 /// fn my_test() {
 ///     let _test_env = TestEnvironment::new("my_test");
 ///     // Use _test_env.temp_dir.path() for file operations
@@ -78,9 +77,8 @@ impl TestEnvironment {
 
 impl Drop for TestEnvironment {
     fn drop(&mut self) {
-        // TempDir handles cleanup automatically, but we can add logging if needed
-        #[cfg(feature = "test-logging")]
-        println!("Cleaning up test environment: {}", self.test_name);
+        // TempDir handles cleanup automatically
+        // Debug logging can be added here if needed during development
     }
 }
 
