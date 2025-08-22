@@ -17,7 +17,7 @@ pub mod vector_storage;
 pub use config::ShardexConfig;
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
-pub use integrity::{IntegrityConfig, IntegrityManager, CorruptionReport, ValidationResult};
+pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};

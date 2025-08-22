@@ -97,7 +97,7 @@ impl Default for IntegrityConfig {
     fn default() -> Self {
         Self {
             periodic_validation_interval: Some(Duration::from_secs(600)), // 10 minutes
-            corruption_tolerance: 0.0, // No tolerance by default
+            corruption_tolerance: 0.0,                                    // No tolerance by default
             enable_recovery: true,
             max_recovery_attempts: 3,
             detailed_analysis: false,
@@ -275,10 +275,13 @@ impl IntegrityManager {
     }
 
     /// Validate the integrity of a memory-mapped file
-    pub fn validate_file(&mut self, mmf: &MemoryMappedFile) -> Result<ValidationResult, ShardexError> {
+    pub fn validate_file(
+        &mut self,
+        mmf: &MemoryMappedFile,
+    ) -> Result<ValidationResult, ShardexError> {
         let start_time = Instant::now();
         let file_data = mmf.as_slice();
-        
+
         // Basic validation: check if we have at least a header
         if file_data.len() < FileHeader::SIZE {
             let corruption_report = CorruptionReport {
@@ -286,14 +289,19 @@ impl IntegrityManager {
                 file_path: PathBuf::from("unknown"), // We don't have path info from MemoryMappedFile
                 corruption_offset: None,
                 corruption_size: Some(file_data.len() as u64),
-                description: format!("File too small: {} bytes, expected at least {} bytes for header", 
-                                   file_data.len(), FileHeader::SIZE),
-                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
+                description: format!(
+                    "File too small: {} bytes, expected at least {} bytes for header",
+                    file_data.len(),
+                    FileHeader::SIZE
+                ),
+                recovery_recommendations: vec![
+                    "File may be truncated. Restore from backup.".to_string()
+                ],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
             };
-            
+
             return Ok(ValidationResult::failure(
                 corruption_report,
                 start_time.elapsed(),
@@ -305,7 +313,7 @@ impl IntegrityManager {
         // Try to detect the file type from magic bytes in the FileHeader and validate accordingly
         if file_data.len() >= 4 {
             let magic = &file_data[0..4];
-            
+
             match magic {
                 b"PSTR" => {
                     // PostingStorage file - magic is at beginning of FileHeader
@@ -316,18 +324,15 @@ impl IntegrityManager {
                     self.validate_vector_storage_file(mmf, start_time)
                 }
                 _ => {
-
                     // Try to read as basic FileHeader (for simple test files or other storage types)
                     let header: FileHeader = mmf.read_at(0).map_err(|e| {
                         ShardexError::Corruption(format!("Failed to read file header: {}", e))
                     })?;
 
-
                     // Validate header checksum against data
                     let data_start = FileHeader::SIZE;
                     let data_portion = &file_data[data_start..];
 
-                    
                     // Use the FileHeader's own validation method
                     if let Err(e) = header.validate_checksum(data_portion) {
                         let corruption_report = CorruptionReport {
@@ -339,7 +344,8 @@ impl IntegrityManager {
                             recovery_recommendations: vec![
                                 "Data may be corrupted. Check for partial writes.".to_string(),
                                 "Restore from known good backup if available.".to_string(),
-                                "Run detailed corruption analysis if recovery is needed.".to_string(),
+                                "Run detailed corruption analysis if recovery is needed."
+                                    .to_string(),
                             ],
                             severity: 0.8,
                             is_recoverable: self.config.enable_recovery,
@@ -353,7 +359,7 @@ impl IntegrityManager {
                             header.checksum,
                         ));
                     }
-                    
+
                     let calculated_checksum = header.checksum;
 
                     // Update statistics
@@ -376,12 +382,14 @@ impl IntegrityManager {
                 corruption_offset: None,
                 corruption_size: Some(file_data.len() as u64),
                 description: "File too small to contain magic bytes".to_string(),
-                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
+                recovery_recommendations: vec![
+                    "File may be truncated. Restore from backup.".to_string()
+                ],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
             };
-            
+
             Ok(ValidationResult::failure(
                 corruption_report,
                 start_time.elapsed(),
@@ -392,11 +400,15 @@ impl IntegrityManager {
     }
 
     /// Validate a PostingStorage file
-    fn validate_posting_storage_file(&mut self, mmf: &MemoryMappedFile, start_time: Instant) -> Result<ValidationResult, ShardexError> {
+    fn validate_posting_storage_file(
+        &mut self,
+        mmf: &MemoryMappedFile,
+        start_time: Instant,
+    ) -> Result<ValidationResult, ShardexError> {
         use crate::posting_storage::PostingStorageHeader;
-        
+
         let file_data = mmf.as_slice();
-        
+
         if file_data.len() < PostingStorageHeader::SIZE {
             let corruption_report = CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
@@ -410,7 +422,7 @@ impl IntegrityManager {
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
             };
-            
+
             return Ok(ValidationResult::failure(
                 corruption_report,
                 start_time.elapsed(),
@@ -451,7 +463,7 @@ impl IntegrityManager {
         // Validate data checksum
         let data_start = PostingStorageHeader::SIZE;
         let data_size = header.calculate_file_size() - PostingStorageHeader::SIZE;
-        
+
         if data_start + data_size > file_data.len() {
             let corruption_report = CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
@@ -459,7 +471,9 @@ impl IntegrityManager {
                 corruption_offset: Some(data_start as u64),
                 corruption_size: Some(data_size as u64),
                 description: "PostingStorage file truncated before end of data section".to_string(),
-                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
+                recovery_recommendations: vec![
+                    "File may be truncated. Restore from backup.".to_string()
+                ],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -512,25 +526,34 @@ impl IntegrityManager {
     }
 
     /// Validate a VectorStorage file
-    fn validate_vector_storage_file(&mut self, mmf: &MemoryMappedFile, start_time: Instant) -> Result<ValidationResult, ShardexError> {
+    fn validate_vector_storage_file(
+        &mut self,
+        mmf: &MemoryMappedFile,
+        start_time: Instant,
+    ) -> Result<ValidationResult, ShardexError> {
         use crate::vector_storage::VectorStorageHeader;
-        
+
         let file_data = mmf.as_slice();
-        
+
         if file_data.len() < VectorStorageHeader::SIZE {
             let corruption_report = CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
                 file_path: PathBuf::from("unknown"),
                 corruption_offset: None,
                 corruption_size: Some(file_data.len() as u64),
-                description: format!("File too small: {} bytes, expected at least {} bytes for VectorStorage header", 
-                                   file_data.len(), VectorStorageHeader::SIZE),
-                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
+                description: format!(
+                    "File too small: {} bytes, expected at least {} bytes for VectorStorage header",
+                    file_data.len(),
+                    VectorStorageHeader::SIZE
+                ),
+                recovery_recommendations: vec![
+                    "File may be truncated. Restore from backup.".to_string()
+                ],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
             };
-            
+
             return Ok(ValidationResult::failure(
                 corruption_report,
                 start_time.elapsed(),
@@ -568,13 +591,13 @@ impl IntegrityManager {
             ));
         }
 
-        // Validate data checksum  
+        // Validate data checksum
         let vector_data_start = header.vector_data_offset as usize;
         let vector_data_size = (header.capacity as usize)
             * (header.vector_dimension as usize)
             * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, header.simd_alignment as usize);
-        
+
         if vector_data_start + aligned_size > file_data.len() {
             let corruption_report = CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
@@ -582,7 +605,9 @@ impl IntegrityManager {
                 corruption_offset: Some(vector_data_start as u64),
                 corruption_size: Some(aligned_size as u64),
                 description: "VectorStorage file truncated before end of vector data".to_string(),
-                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
+                recovery_recommendations: vec![
+                    "File may be truncated. Restore from backup.".to_string()
+                ],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -633,43 +658,47 @@ impl IntegrityManager {
             header.file_header.checksum,
         ))
     }
-    
+
     /// Align size to the specified alignment boundary (helper for VectorStorage)
     fn align_size(size: usize, alignment: usize) -> usize {
         (size + alignment - 1) & !(alignment - 1)
     }
 
     /// Validate a file by path, opening it temporarily
-    pub fn validate_file_path<P: AsRef<Path>>(&mut self, path: P) -> Result<ValidationResult, ShardexError> {
+    pub fn validate_file_path<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<ValidationResult, ShardexError> {
         let path = path.as_ref();
         let mmf = MemoryMappedFile::open_read_only(path)?;
         let mut result = self.validate_file(&mmf)?;
-        
+
         // Update the corruption report with the actual file path
         if let Some(ref mut report) = result.corruption_report {
             report.file_path = path.to_path_buf();
         }
-        
+
         // Update validation history
-        self.validation_history.insert(path.to_path_buf(), SystemTime::now());
-        
+        self.validation_history
+            .insert(path.to_path_buf(), SystemTime::now());
+
         Ok(result)
     }
 
     /// Add a file to periodic monitoring
     pub fn add_to_monitoring<P: AsRef<Path>>(&mut self, path: P) -> Result<(), ShardexError> {
         let path = path.as_ref().to_path_buf();
-        
+
         // Perform initial validation
         let result = self.validate_file_path(&path)?;
-        
+
         let monitoring_state = FileMonitoringState {
             last_known_checksum: result.data_checksum(),
             last_validation: SystemTime::now(),
             consecutive_failures: if result.is_valid() { 0 } else { 1 },
             is_healthy: result.is_valid(),
         };
-        
+
         self.monitored_files.insert(path, monitoring_state);
         Ok(())
     }
@@ -684,31 +713,33 @@ impl IntegrityManager {
     /// Perform periodic validation on all monitored files
     pub fn perform_periodic_validation(&mut self) -> Result<Vec<ValidationResult>, ShardexError> {
         let mut results = Vec::new();
-        
+
         if self.config.periodic_validation_interval.is_none() {
             return Ok(results); // Periodic validation disabled
         }
-        
+
         let now = SystemTime::now();
         let interval = self.config.periodic_validation_interval.unwrap();
-        
+
         // Check which files need validation
-        let files_to_validate: Vec<PathBuf> = self.monitored_files
+        let files_to_validate: Vec<PathBuf> = self
+            .monitored_files
             .iter()
             .filter(|(_, state)| {
                 now.duration_since(state.last_validation)
-                    .unwrap_or(Duration::MAX) >= interval
+                    .unwrap_or(Duration::MAX)
+                    >= interval
             })
             .map(|(path, _)| path.clone())
             .collect();
-        
+
         for file_path in files_to_validate {
             let result = self.validate_file_path(&file_path)?;
-            
+
             // Update monitoring state
             if let Some(state) = self.monitored_files.get_mut(&file_path) {
                 state.last_validation = now;
-                
+
                 if result.is_valid() {
                     state.consecutive_failures = 0;
                     state.is_healthy = true;
@@ -716,33 +747,34 @@ impl IntegrityManager {
                 } else {
                     state.consecutive_failures += 1;
                     state.is_healthy = false;
-                    
+
                     // Update corruption statistics
                     self.stats.corruptions_detected += 1;
                 }
             }
-            
+
             results.push(result);
         }
-        
+
         Ok(results)
     }
 
     /// Check if a file needs periodic validation
     pub fn needs_validation<P: AsRef<Path>>(&self, path: P) -> bool {
         let path = path.as_ref();
-        
+
         let Some(interval) = self.config.periodic_validation_interval else {
             return false; // Periodic validation disabled
         };
-        
+
         let Some(state) = self.monitored_files.get(path) else {
             return true; // Not monitored, should validate
         };
-        
+
         SystemTime::now()
             .duration_since(state.last_validation)
-            .unwrap_or(Duration::MAX) >= interval
+            .unwrap_or(Duration::MAX)
+            >= interval
     }
 
     /// Get integrity statistics
@@ -752,7 +784,9 @@ impl IntegrityManager {
 
     /// Get the health status of a monitored file
     pub fn file_health_status<P: AsRef<Path>>(&self, path: P) -> Option<bool> {
-        self.monitored_files.get(path.as_ref()).map(|state| state.is_healthy)
+        self.monitored_files
+            .get(path.as_ref())
+            .map(|state| state.is_healthy)
     }
 
     /// Get the list of monitored files
@@ -761,7 +795,10 @@ impl IntegrityManager {
     }
 
     /// Attempt to recover from corruption if recovery is enabled
-    pub fn attempt_recovery(&mut self, corruption_report: &CorruptionReport) -> Result<bool, ShardexError> {
+    pub fn attempt_recovery(
+        &mut self,
+        corruption_report: &CorruptionReport,
+    ) -> Result<bool, ShardexError> {
         if !self.config.enable_recovery || !corruption_report.is_recoverable {
             return Ok(false);
         }
@@ -795,7 +832,6 @@ impl IntegrityManager {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -815,12 +851,8 @@ mod tests {
 
     #[test]
     fn test_validation_result_success() {
-        let result = ValidationResult::success(
-            Duration::from_millis(100),
-            1024,
-            0x12345678,
-        );
-        
+        let result = ValidationResult::success(Duration::from_millis(100), 1024, 0x12345678);
+
         if !result.is_valid() {
             panic!("Validation failed but continuing to see debug output");
         }
@@ -849,10 +881,10 @@ mod tests {
             1024,
             0x87654321,
         );
-        
+
         assert!(!result.is_valid());
         assert!(result.corruption_report().is_some());
-        
+
         let report = result.corruption_report().unwrap();
         assert_eq!(report.corruption_type, CorruptionType::DataCorruption);
         assert_eq!(report.severity, 0.5);
@@ -863,7 +895,7 @@ mod tests {
     fn test_integrity_manager_creation() {
         let config = IntegrityConfig::default();
         let manager = IntegrityManager::new(config);
-        
+
         assert_eq!(manager.stats().total_validations, 0);
         assert_eq!(manager.monitored_files().len(), 0);
     }
@@ -871,9 +903,9 @@ mod tests {
     #[test]
     fn test_file_validation_success() {
         // Test with a real storage to make sure it works
-        use crate::posting_storage::PostingStorage;
         use crate::identifiers::DocumentId;
-        
+        use crate::posting_storage::PostingStorage;
+
         let temp_dir = TempDir::new().unwrap();
         let storage_path = temp_dir.path().join("postings.dat");
 
@@ -887,18 +919,21 @@ mod tests {
         let file_data = storage.memory_mapped_file().as_slice();
         let magic = &file_data[0..4];
         println!("Debug: Magic bytes in file: {:?}", magic);
-        println!("Debug: Magic bytes as string: {:?}", std::str::from_utf8(magic).unwrap_or("invalid"));
+        println!(
+            "Debug: Magic bytes as string: {:?}",
+            std::str::from_utf8(magic).unwrap_or("invalid")
+        );
 
         // Validate with integrity manager
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file(storage.memory_mapped_file()).unwrap();
-        
+
         if !result.is_valid() {
             if let Some(report) = result.corruption_report() {
                 println!("Debug: Corruption report: {:?}", report);
             }
         }
-        
+
         assert!(result.is_valid());
         assert_eq!(manager.stats().total_validations, 1);
         assert!(manager.stats().total_bytes_validated > 0);
@@ -911,10 +946,10 @@ mod tests {
 
         // Create a truncated file (smaller than header size)
         let mmf = MemoryMappedFile::create(&file_path, 8).unwrap(); // Too small for header
-        
+
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file(&mmf).unwrap();
-        
+
         assert!(!result.is_valid());
         let report = result.corruption_report().unwrap();
         assert_eq!(report.corruption_type, CorruptionType::FileTruncation);
@@ -931,19 +966,20 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         let original_data = vec![42u8; 100];
         let corrupted_data = vec![99u8; 100]; // Different data
-        
+
         // Create header with checksum for original data
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
-        
+
         // But write corrupted data instead
         mmf.write_at(0, &header).unwrap();
-        mmf.write_slice_at(FileHeader::SIZE, &corrupted_data).unwrap();
+        mmf.write_slice_at(FileHeader::SIZE, &corrupted_data)
+            .unwrap();
         mmf.sync().unwrap();
 
         // Validation should detect corruption
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file(&mmf).unwrap();
-        
+
         assert!(!result.is_valid());
         let report = result.corruption_report().unwrap();
         assert_eq!(report.corruption_type, CorruptionType::DataCorruption);
@@ -955,12 +991,12 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let file_path = temp_file.path();
 
-        // Create a valid file  
+        // Create a valid file
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
-        
+
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
         mmf.sync().unwrap();
@@ -969,11 +1005,13 @@ mod tests {
         // Validate by path
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file_path(file_path).unwrap();
-        
+
         assert!(result.is_valid());
-        
+
         // Check that validation history was updated
-        assert!(manager.validation_history.contains_key(&file_path.to_path_buf()));
+        assert!(manager
+            .validation_history
+            .contains_key(&file_path.to_path_buf()));
     }
 
     #[test]
@@ -986,19 +1024,19 @@ mod tests {
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
-        
+
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
         mmf.sync().unwrap();
         drop(mmf);
 
         let mut manager = IntegrityManager::with_default_config();
-        
+
         // Add to monitoring
         manager.add_to_monitoring(file_path).unwrap();
         assert_eq!(manager.monitored_files().len(), 1);
         assert!(manager.file_health_status(file_path).unwrap());
-        
+
         // Remove from monitoring
         manager.remove_from_monitoring(file_path);
         assert_eq!(manager.monitored_files().len(), 0);
@@ -1014,7 +1052,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let test_data = vec![42u8; 100];
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
-        
+
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
         mmf.sync().unwrap();
@@ -1025,26 +1063,24 @@ mod tests {
             periodic_validation_interval: Some(Duration::from_millis(1)),
             ..Default::default()
         };
-        
+
         let mut manager = IntegrityManager::new(config);
-        
+
         // File not monitored should need validation
         assert!(manager.needs_validation(file_path));
-        
+
         // Add to monitoring
         manager.add_to_monitoring(file_path).unwrap();
-        
+
         // Should not need validation immediately after adding
         assert!(!manager.needs_validation(file_path));
-        
+
         // Wait for interval to pass
         std::thread::sleep(Duration::from_millis(10));
-        
+
         // Should now need validation
         assert!(manager.needs_validation(file_path));
     }
-
-
 
     #[test]
     fn test_corruption_report_serialization() {
@@ -1076,9 +1112,9 @@ mod tests {
 
     #[test]
     fn test_storage_integrity_validation() {
-        use crate::posting_storage::PostingStorage;
         use crate::identifiers::DocumentId;
-        
+        use crate::posting_storage::PostingStorage;
+
         let temp_dir = TempDir::new().unwrap();
         let storage_path = temp_dir.path().join("postings.dat");
 
@@ -1091,9 +1127,9 @@ mod tests {
         // Validate integrity through IntegrityManager
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file(storage.memory_mapped_file()).unwrap();
-        
+
         assert!(result.is_valid());
-        
+
         // Test direct storage validation
         assert!(storage.validate_integrity().is_ok());
     }
@@ -1101,7 +1137,7 @@ mod tests {
     #[test]
     fn test_vector_storage_integrity_validation() {
         use crate::vector_storage::VectorStorage;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let storage_path = temp_dir.path().join("vectors.dat");
 
@@ -1114,9 +1150,9 @@ mod tests {
         // Validate integrity through IntegrityManager
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file(storage.memory_mapped_file()).unwrap();
-        
+
         assert!(result.is_valid());
-        
+
         // Test direct storage validation
         assert!(storage.validate_integrity().is_ok());
     }
@@ -1131,7 +1167,7 @@ mod tests {
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
-        
+
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
         mmf.sync().unwrap();
@@ -1142,25 +1178,25 @@ mod tests {
             periodic_validation_interval: Some(Duration::from_millis(10)),
             ..Default::default()
         };
-        
+
         let mut manager = IntegrityManager::new(config);
-        
+
         // Add to monitoring
         manager.add_to_monitoring(&file_path).unwrap();
         assert!(manager.file_health_status(&file_path).unwrap());
-        
+
         // Initially should not need validation
         assert!(!manager.needs_validation(&file_path));
-        
+
         // Wait for interval
         std::thread::sleep(Duration::from_millis(20));
         assert!(manager.needs_validation(&file_path));
-        
+
         // Perform periodic validation
         let results = manager.perform_periodic_validation().unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].is_valid());
-        
+
         // Should not need validation immediately after
         assert!(!manager.needs_validation(&file_path));
     }
@@ -1174,22 +1210,23 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         let original_data = vec![42u8; 100];
         let corrupted_data = vec![99u8; 100];
-        
+
         // Create header with checksum for original data but write corrupted data
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
-        
+
         mmf.write_at(0, &header).unwrap();
-        mmf.write_slice_at(FileHeader::SIZE, &corrupted_data).unwrap();
+        mmf.write_slice_at(FileHeader::SIZE, &corrupted_data)
+            .unwrap();
         mmf.sync().unwrap();
         drop(mmf);
 
         let mut manager = IntegrityManager::with_default_config();
         let result = manager.validate_file_path(&file_path).unwrap();
-        
+
         assert!(!result.is_valid());
         let report = result.corruption_report().unwrap();
         assert_eq!(report.corruption_type, CorruptionType::DataCorruption);
-        
+
         // Test recovery attempt (should fail as not implemented)
         let recovery_result = manager.attempt_recovery(report).unwrap();
         assert!(!recovery_result); // Recovery not yet implemented
@@ -1207,18 +1244,18 @@ mod tests {
             let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
             let test_data = vec![42u8; data_size];
             let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
-            
+
             mmf.write_at(0, &header).unwrap();
             mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
             mmf.sync().unwrap();
         }
 
         let mut manager = IntegrityManager::with_default_config();
-        
+
         // Validate both files
         manager.validate_file_path(&file1).unwrap();
         manager.validate_file_path(&file2).unwrap();
-        
+
         let stats = manager.stats();
         assert_eq!(stats.total_validations, 2);
         assert_eq!(stats.corruptions_detected, 0);
@@ -1234,26 +1271,32 @@ mod tests {
         let vector_path = temp_dir.path().join("vectors.dat");
 
         // Create posting storage
-        let mut posting_storage = crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
+        let mut posting_storage =
+            crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
         let doc_id = crate::identifiers::DocumentId::new();
         posting_storage.add_posting(doc_id, 0, 3).unwrap(); // References first vector
         posting_storage.sync().unwrap();
 
         // Create vector storage
-        let mut vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 3, 10).unwrap();
+        let mut vector_storage =
+            crate::vector_storage::VectorStorage::create(&vector_path, 3, 10).unwrap();
         let vector = vec![1.0, 2.0, 3.0];
         vector_storage.add_vector(&vector).unwrap();
         vector_storage.sync().unwrap();
 
         // Validate both storages independently
         let mut manager = IntegrityManager::with_default_config();
-        
-        let posting_result = manager.validate_file(posting_storage.memory_mapped_file()).unwrap();
-        let vector_result = manager.validate_file(vector_storage.memory_mapped_file()).unwrap();
-        
+
+        let posting_result = manager
+            .validate_file(posting_storage.memory_mapped_file())
+            .unwrap();
+        let vector_result = manager
+            .validate_file(vector_storage.memory_mapped_file())
+            .unwrap();
+
         assert!(posting_result.is_valid());
         assert!(vector_result.is_valid());
-        
+
         // In a full implementation, we could add cross-validation logic here
         // to ensure that postings reference valid vector indices
     }
@@ -1267,13 +1310,13 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let mut test_data = vec![42u8; data_size];
-        
+
         // Corrupt specific bytes in the middle
         test_data[50] = 0xFF;
         test_data[51] = 0xFF;
-        
+
         let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &vec![42u8; data_size]); // Original checksum
-        
+
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap(); // Corrupted data
         mmf.sync().unwrap();
@@ -1283,15 +1326,13 @@ mod tests {
             detailed_analysis: true,
             ..Default::default()
         };
-        
+
         let mut manager = IntegrityManager::new(config);
         let result = manager.validate_file_path(&file_path).unwrap();
-        
 
-        
         assert!(!result.is_valid());
         let report = result.corruption_report().unwrap();
-        
+
         // Verify detailed corruption report
         assert!(report.description.contains("Checksum mismatch")); // Note: Capital C
         assert!(!report.recovery_recommendations.is_empty());
