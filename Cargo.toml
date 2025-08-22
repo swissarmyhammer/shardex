@@ -26,17 +26,13 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.8"
 rand = "0.8"
 
-[[bench]]
-name = "vector_operations"
-harness = false
+
 
 [lib]
 name = "shardex"
 path = "src/lib.rs"
 
-[[example]]
-name = "basic_usage"
-path = "examples/basic_usage.rs"
+
 
 [profile.release]
 lto = true
