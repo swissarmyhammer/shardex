@@ -151,10 +151,10 @@ mod tests {
     fn test_shard_id_generation() {
         let id1 = ShardId::new();
         let id2 = ShardId::new();
-        
+
         // IDs should be unique
         assert_ne!(id1, id2);
-        
+
         // IDs should be ordered (ULID property)
         assert!(id1 < id2 || id2 < id1);
     }
@@ -163,10 +163,10 @@ mod tests {
     fn test_document_id_generation() {
         let id1 = DocumentId::new();
         let id2 = DocumentId::new();
-        
+
         // IDs should be unique
         assert_ne!(id1, id2);
-        
+
         // IDs should be ordered (ULID property)
         assert!(id1 < id2 || id2 < id1);
     }
@@ -176,7 +176,7 @@ mod tests {
         let ulid = Ulid::new();
         let shard_id = ShardId::from_ulid(ulid);
         let document_id = DocumentId::from_ulid(ulid);
-        
+
         assert_eq!(shard_id.as_ulid(), ulid);
         assert_eq!(document_id.as_ulid(), ulid);
     }
@@ -185,13 +185,13 @@ mod tests {
     fn test_bytes_serialization() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_bytes = shard_id.to_bytes();
         let document_bytes = document_id.to_bytes();
-        
+
         let shard_id_restored = ShardId::from_bytes(shard_bytes);
         let document_id_restored = DocumentId::from_bytes(document_bytes);
-        
+
         assert_eq!(shard_id, shard_id_restored);
         assert_eq!(document_id, document_id_restored);
     }
@@ -200,13 +200,13 @@ mod tests {
     fn test_string_serialization() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_str = shard_id.to_string();
         let document_str = document_id.to_string();
-        
+
         let shard_id_restored: ShardId = shard_str.parse().unwrap();
         let document_id_restored: DocumentId = document_str.parse().unwrap();
-        
+
         assert_eq!(shard_id, shard_id_restored);
         assert_eq!(document_id, document_id_restored);
     }
@@ -215,13 +215,13 @@ mod tests {
     fn test_json_serialization() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_json = serde_json::to_string(&shard_id).unwrap();
         let document_json = serde_json::to_string(&document_id).unwrap();
-        
+
         let shard_id_restored: ShardId = serde_json::from_str(&shard_json).unwrap();
         let document_id_restored: DocumentId = serde_json::from_str(&document_json).unwrap();
-        
+
         assert_eq!(shard_id, shard_id_restored);
         assert_eq!(document_id, document_id_restored);
     }
@@ -230,18 +230,18 @@ mod tests {
     fn test_bytemuck_compatibility() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         // Test Pod trait - should be able to cast to bytes
         let shard_bytes: &[u8] = bytemuck::bytes_of(&shard_id);
         let document_bytes: &[u8] = bytemuck::bytes_of(&document_id);
-        
+
         assert_eq!(shard_bytes.len(), 16);
         assert_eq!(document_bytes.len(), 16);
-        
+
         // Test round-trip
         let shard_id_restored: ShardId = bytemuck::pod_read_unaligned(shard_bytes);
         let document_id_restored: DocumentId = bytemuck::pod_read_unaligned(document_bytes);
-        
+
         assert_eq!(shard_id, shard_id_restored);
         assert_eq!(document_id, document_id_restored);
     }
@@ -250,7 +250,7 @@ mod tests {
     fn test_zeroable_trait() {
         let zero_shard: ShardId = bytemuck::Zeroable::zeroed();
         let zero_document: DocumentId = bytemuck::Zeroable::zeroed();
-        
+
         assert_eq!(zero_shard.raw(), 0);
         assert_eq!(zero_document.raw(), 0);
     }
@@ -259,46 +259,61 @@ mod tests {
     fn test_ordering_properties() {
         let mut shard_ids = Vec::new();
         let mut document_ids = Vec::new();
-        
+
         // Generate IDs with small delays to ensure ordering
         for _ in 0..10 {
             shard_ids.push(ShardId::new());
             document_ids.push(DocumentId::new());
             thread::sleep(Duration::from_millis(1));
         }
-        
+
         // Check that IDs are generally increasing (ULID timestamp ordering)
         let mut sorted_shard_ids = shard_ids.clone();
         let mut sorted_document_ids = document_ids.clone();
         sorted_shard_ids.sort();
         sorted_document_ids.sort();
-        
+
         // Due to the millisecond precision of ULID timestamps and the small delay,
         // we expect some ordering but allow for some out-of-order elements
-        let shard_matches = shard_ids.iter().zip(sorted_shard_ids.iter())
-            .filter(|(a, b)| a == b).count();
-        let document_matches = document_ids.iter().zip(sorted_document_ids.iter())
-            .filter(|(a, b)| a == b).count();
-        
+        let shard_matches = shard_ids
+            .iter()
+            .zip(sorted_shard_ids.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let document_matches = document_ids
+            .iter()
+            .zip(sorted_document_ids.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+
         // At least 80% should be in order due to timestamp component
-        assert!(shard_matches >= 8, "Shard IDs should be mostly ordered by timestamp");
-        assert!(document_matches >= 8, "Document IDs should be mostly ordered by timestamp");
+        assert!(
+            shard_matches >= 8,
+            "Shard IDs should be mostly ordered by timestamp"
+        );
+        assert!(
+            document_matches >= 8,
+            "Document IDs should be mostly ordered by timestamp"
+        );
     }
 
     #[test]
     fn test_uniqueness() {
         let mut shard_set = HashSet::new();
         let mut document_set = HashSet::new();
-        
+
         // Generate many IDs and ensure uniqueness
         for _ in 0..10000 {
             let shard_id = ShardId::new();
             let document_id = DocumentId::new();
-            
+
             assert!(shard_set.insert(shard_id), "Shard ID should be unique");
-            assert!(document_set.insert(document_id), "Document ID should be unique");
+            assert!(
+                document_set.insert(document_id),
+                "Document ID should be unique"
+            );
         }
-        
+
         assert_eq!(shard_set.len(), 10000);
         assert_eq!(document_set.len(), 10000);
     }
@@ -307,10 +322,10 @@ mod tests {
     fn test_debug_format() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_debug = format!("{:?}", shard_id);
         let document_debug = format!("{:?}", document_id);
-        
+
         assert!(shard_debug.starts_with("ShardId("));
         assert!(document_debug.starts_with("DocumentId("));
     }
@@ -319,16 +334,16 @@ mod tests {
     fn test_clone_and_copy() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_copy = shard_id;
         let document_copy = document_id;
-        
+
         assert_eq!(shard_id, shard_copy);
         assert_eq!(document_id, document_copy);
-        
-        let shard_clone = shard_id.clone();
-        let document_clone = document_id.clone();
-        
+
+        let shard_clone = shard_id;
+        let document_clone = document_id;
+
         assert_eq!(shard_id, shard_clone);
         assert_eq!(document_id, document_clone);
     }
@@ -336,16 +351,16 @@ mod tests {
     #[test]
     fn test_hash_consistency() {
         use std::collections::HashMap;
-        
+
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let mut shard_map = HashMap::new();
         let mut document_map = HashMap::new();
-        
+
         shard_map.insert(shard_id, "value1");
         document_map.insert(document_id, "value2");
-        
+
         assert_eq!(shard_map.get(&shard_id), Some(&"value1"));
         assert_eq!(document_map.get(&document_id), Some(&"value2"));
     }
@@ -354,7 +369,7 @@ mod tests {
     fn test_default() {
         let shard_id = ShardId::default();
         let document_id = DocumentId::default();
-        
+
         // Default should generate new IDs, so they should be different
         assert_ne!(shard_id, ShardId::default());
         assert_ne!(document_id, DocumentId::default());
@@ -364,10 +379,10 @@ mod tests {
     fn test_raw_access() {
         let shard_id = ShardId::new();
         let document_id = DocumentId::new();
-        
+
         let shard_raw = shard_id.raw();
         let document_raw = document_id.raw();
-        
+
         assert_ne!(shard_raw, 0); // Should not be zero
         assert_ne!(document_raw, 0); // Should not be zero
         assert_ne!(shard_raw, document_raw); // Should be different
@@ -379,33 +394,41 @@ mod tests {
             "",
             "invalid",
             "0123456789012345678901234567890", // too long
-            "01ARYZ3NDEKTSV4RRFFQ69G5FAV", // invalid length
-            "01ARZ3NDEKTSV4RRFFQ69G5FA!", // invalid character !
-            "01ARZ3NDEKTSV4RRFFQ69G5FA$", // invalid character $
-            "01ARZ3NDEKTSV4RRFFQ69G5FA@", // invalid character @
+            "01ARYZ3NDEKTSV4RRFFQ69G5FAV",     // invalid length
+            "01ARZ3NDEKTSV4RRFFQ69G5FA!",      // invalid character !
+            "01ARZ3NDEKTSV4RRFFQ69G5FA$",      // invalid character $
+            "01ARZ3NDEKTSV4RRFFQ69G5FA@",      // invalid character @
         ];
-        
+
         for invalid in &invalid_strings {
             let shard_result = ShardId::from_str(invalid);
             let document_result = DocumentId::from_str(invalid);
-            
-            assert!(shard_result.is_err(), 
-                "String '{}' should be invalid but parsed successfully for ShardId: {:?}", invalid, shard_result);
-            assert!(document_result.is_err(),
-                "String '{}' should be invalid but parsed successfully for DocumentId: {:?}", invalid, document_result);
+
+            assert!(
+                shard_result.is_err(),
+                "String '{}' should be invalid but parsed successfully for ShardId: {:?}",
+                invalid,
+                shard_result
+            );
+            assert!(
+                document_result.is_err(),
+                "String '{}' should be invalid but parsed successfully for DocumentId: {:?}",
+                invalid,
+                document_result
+            );
         }
     }
 
     #[test]
     fn test_memory_layout() {
         use std::mem;
-        
+
         // Verify size and alignment
         assert_eq!(mem::size_of::<ShardId>(), 16);
         assert_eq!(mem::size_of::<DocumentId>(), 16);
         assert_eq!(mem::align_of::<ShardId>(), 16); // u128 alignment
         assert_eq!(mem::align_of::<DocumentId>(), 16); // u128 alignment
-        
+
         // Verify transparent representation
         assert_eq!(mem::size_of::<ShardId>(), mem::size_of::<u128>());
         assert_eq!(mem::size_of::<DocumentId>(), mem::size_of::<u128>());
