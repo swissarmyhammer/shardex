@@ -1,4 +1,5 @@
 semantic.db
 mcp.log
 .swissarmyhammer/tmp
+.swissarmyhammer/workflow-runs/
 target/
