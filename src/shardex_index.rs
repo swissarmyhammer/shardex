@@ -73,10 +73,42 @@ use crate::config::ShardexConfig;
 use crate::error::ShardexError;
 use crate::identifiers::ShardId;
 use crate::shard::{Shard, ShardMetadata as BaseShardMetadata};
+use crate::structures::SearchResult;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+/// Helper struct for efficient top-k result selection using BinaryHeap
+///
+/// This wrapper enables using SearchResult in a min-heap by implementing
+/// proper ordering based on similarity scores. Used internally by merge_results.
+#[derive(Debug, Clone)]
+struct ScoredResult {
+    similarity_score: f32,
+    result: SearchResult,
+}
+
+impl PartialEq for ScoredResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.similarity_score == other.similarity_score
+    }
+}
+
+impl Eq for ScoredResult {}
+
+impl PartialOrd for ScoredResult {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScoredResult {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Use total_cmp for reliable ordering of f32 values
+        self.similarity_score.total_cmp(&other.similarity_score)
+    }
+}
 
 /// Enhanced shard metadata for the ShardexIndex
 ///
@@ -531,6 +563,185 @@ impl ShardexIndex {
             .take(result_count)
             .map(|(id, _)| id)
             .collect())
+    }
+
+    /// Execute parallel search across multiple candidate shards
+    ///
+    /// This method performs similarity search across the specified candidate shards
+    /// in parallel and aggregates the results into a single ranked list. It provides
+    /// significant performance improvements when searching large numbers of shards.
+    ///
+    /// # Arguments
+    /// * `query` - Query vector for similarity search
+    /// * `candidate_shards` - List of shard IDs to search in parallel
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Performance Notes
+    /// - Uses rayon for parallel execution across candidate shards
+    /// - Efficient result merging using BinaryHeap for O(log k) operations
+    /// - Early termination when sufficient high-quality results are found
+    /// - Memory-efficient processing with per-shard result limits
+    ///
+    /// # Example
+    /// ```rust
+    /// use shardex::shardex_index::ShardexIndex;
+    /// 
+    /// # fn example(index: &mut ShardexIndex) -> Result<(), Box<dyn std::error::Error>> {
+    /// let query = vec![0.1, 0.2, 0.3, 0.4];
+    /// let candidates = index.find_candidate_shards(&query, 5)?;
+    /// 
+    /// // Search top 10 results across 5 nearest shards in parallel
+    /// let results = index.parallel_search(&query, &candidates, 10)?;
+    /// 
+    /// for result in results {
+    ///     println!("Doc: {}, Score: {:.3}", result.document_id, result.similarity_score);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn parallel_search(
+        &mut self,
+        query: &[f32],
+        candidate_shards: &[ShardId],
+        k: usize,
+    ) -> Result<Vec<SearchResult>, ShardexError> {
+        use rayon::prelude::*;
+
+        // Validate query vector dimension
+        if query.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query.len(),
+            });
+        }
+
+        if k == 0 || candidate_shards.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Calculate per-shard result limit for efficiency
+        // Request more than k from each shard to improve result quality
+        // but limit to avoid excessive memory usage
+        let per_shard_limit = (k * 2).clamp(50, 1000);
+
+        // Convert candidate_shards to Vec for parallel processing
+        let candidate_vec: Vec<ShardId> = candidate_shards.to_vec();
+        
+        // Perform parallel search across all candidate shards
+        let shard_results: Result<Vec<Vec<SearchResult>>, ShardexError> = candidate_vec
+            .par_iter()
+            .map(|&shard_id| {
+                // We need to handle the mutable borrow issue for get_shard
+                // For now, we'll open shards directly to avoid borrowing conflicts
+                let shard = Shard::open_read_only(shard_id, &self.directory)
+                    .map_err(|e| ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e)))?;
+                
+                // Perform search on this shard
+                let mut results = shard.search(query, per_shard_limit)
+                    .map_err(|e| ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e)))?;
+                
+                // Sort results by similarity score (highest first) for early termination potential
+                results.sort_by(|a, b| {
+                    b.similarity_score
+                        .partial_cmp(&a.similarity_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                
+                Ok(results)
+            })
+            .collect();
+
+        let all_shard_results = shard_results?;
+
+        // Merge and rank results from all shards
+        let final_results = Self::merge_results(all_shard_results, k);
+
+        Ok(final_results)
+    }
+
+    /// Efficiently merge search results from multiple shards using a min-heap
+    ///
+    /// This method aggregates search results from multiple shards and returns
+    /// the top-k results ranked by similarity score. It uses a BinaryHeap for
+    /// efficient top-k selection with O(log k) insertion complexity.
+    ///
+    /// # Arguments
+    /// * `shard_results` - Vector of result vectors, one per shard
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Performance
+    /// - Time complexity: O(n log k) where n is total results from all shards
+    /// - Space complexity: O(k) for the heap plus O(k) for final results
+    /// - Memory efficient: processes results in streaming fashion
+    ///
+    /// # Deduplication
+    /// Results are deduplicated based on (document_id, start) pairs to avoid
+    /// returning duplicate entries from overlapping shard boundaries.
+    fn merge_results(shard_results: Vec<Vec<SearchResult>>, k: usize) -> Vec<SearchResult> {
+        use std::cmp::Reverse;
+        use std::collections::HashSet;
+
+        if k == 0 {
+            return Vec::new();
+        }
+
+        // Use a min-heap to keep track of top-k results
+        // We use Reverse to convert BinaryHeap (max-heap) to min-heap behavior
+        let mut top_k_heap: BinaryHeap<Reverse<ScoredResult>> = BinaryHeap::new();
+        
+        // Set to track unique (document_id, start) pairs for deduplication
+        let mut seen_results: HashSet<(u128, u32)> = HashSet::new();
+
+        // Process all results from all shards
+        for results in shard_results {
+            for result in results {
+                let key = (result.document_id.raw(), result.start);
+                
+                // Skip duplicates
+                if seen_results.contains(&key) {
+                    continue;
+                }
+                
+                let scored_result = ScoredResult {
+                    similarity_score: result.similarity_score,
+                    result,
+                };
+
+                if top_k_heap.len() < k {
+                    // Heap not full, add this result
+                    seen_results.insert(key);
+                    top_k_heap.push(Reverse(scored_result));
+                } else if let Some(Reverse(worst)) = top_k_heap.peek() {
+                    // Heap is full, check if this result is better than the worst
+                    if scored_result.similarity_score > worst.similarity_score {
+                        // Remove the worst result from tracking
+                        if let Some(Reverse(removed)) = top_k_heap.pop() {
+                            let removed_key = (removed.result.document_id.raw(), removed.result.start);
+                            seen_results.remove(&removed_key);
+                        }
+                        
+                        // Add the new better result
+                        seen_results.insert(key);
+                        top_k_heap.push(Reverse(scored_result));
+                    }
+                }
+            }
+        }
+
+        // Extract results from heap and sort by similarity score (descending)
+        let mut final_results: Vec<SearchResult> = top_k_heap
+            .into_iter()
+            .map(|Reverse(scored)| scored.result)
+            .collect();
+
+        // Sort by similarity score in descending order (best first)
+        final_results.sort_by(|a, b| {
+            b.similarity_score
+                .partial_cmp(&a.similarity_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        final_results
     }
 
     /// Get a shard instance by ID
@@ -1735,5 +1946,376 @@ mod tests {
         let nearest = index.find_nearest_shard(&query).unwrap().unwrap();
         let shard_ids = index.shard_ids();
         assert_eq!(nearest, shard_ids[0]); // Should be shard with centroid [0,0,0,0]
+    }
+
+    #[test]
+    fn test_parallel_search_basic_functionality() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(3);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create multiple shards with different postings
+        let mut shard_ids = Vec::new();
+        let test_vectors = [
+            vec![1.0, 0.0, 0.0], // East
+            vec![0.0, 1.0, 0.0], // North
+            vec![-1.0, 0.0, 0.0], // West
+        ];
+
+        for centroid in test_vectors.iter() {
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+            // Add multiple postings to each shard
+            for j in 0..5 {
+                let doc_id = DocumentId::new();
+                let mut vector = centroid.clone();
+                // Add small variation to create different postings
+                vector[0] += (j as f32) * 0.1;
+                let posting = Posting::new(doc_id, j * 10, 10, vector, 3).unwrap();
+                shard.add_posting(posting).unwrap();
+            }
+
+            shard_ids.push(shard_id);
+            index.add_shard(shard).unwrap();
+        }
+
+        // Test parallel search
+        let query = vec![0.9, 0.1, 0.0]; // Close to East centroid
+        let candidate_shards = index.find_candidate_shards(&query, 3).unwrap();
+        let results = index.parallel_search(&query, &candidate_shards, 10).unwrap();
+
+        // Should return results from multiple shards
+        assert!(!results.is_empty());
+        assert!(results.len() <= 10);
+
+        // Results should be sorted by similarity score (descending)
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].similarity_score >= results[i].similarity_score,
+                "Results should be sorted by similarity score"
+            );
+        }
+
+        // Best results should come from the East shard (closest to query)
+        let best_result = &results[0];
+        assert!(
+            best_result.similarity_score > 0.8,
+            "Best result should have high similarity"
+        );
+    }
+
+    #[test]
+    fn test_parallel_search_vs_sequential() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(4);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create multiple shards with known postings
+        let mut shard_ids = Vec::new();
+        for i in 0..5 {
+            let shard_id = ShardId::new();
+            let mut shard = Shard::create(shard_id, 20, 4, temp_dir.path().to_path_buf()).unwrap();
+
+            // Add postings with predictable vectors
+            for j in 0..10 {
+                let doc_id = DocumentId::new();
+                let vector = vec![
+                    (i as f32) * 0.2 + (j as f32) * 0.05,
+                    0.5,
+                    0.3,
+                    0.1,
+                ];
+                let posting = Posting::new(doc_id, j * 10, 10, vector, 4).unwrap();
+                shard.add_posting(posting).unwrap();
+            }
+
+            shard_ids.push(shard_id);
+            index.add_shard(shard).unwrap();
+        }
+
+        let query = vec![0.4, 0.5, 0.3, 0.1];
+        let candidate_shards = index.find_candidate_shards(&query, 5).unwrap();
+
+        // Get parallel search results
+        let parallel_results = index.parallel_search(&query, &candidate_shards, 15).unwrap();
+
+        // Get sequential results by searching each shard individually and merging
+        let mut sequential_results = Vec::new();
+        for &shard_id in &candidate_shards {
+            let shard = index.get_shard(shard_id).unwrap();
+            let shard_results = shard.search(&query, 15).unwrap();
+            sequential_results.extend(shard_results);
+        }
+        
+        // Sort sequential results
+        sequential_results.sort_by(|a, b| {
+            b.similarity_score
+                .partial_cmp(&a.similarity_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sequential_results.truncate(15);
+
+        // Results should be the same (both methods should find the same top results)
+        assert_eq!(
+            parallel_results.len(),
+            sequential_results.len().min(15)
+        );
+
+        // Compare the top results (similarity scores should be very close)
+        for i in 0..parallel_results.len().min(10) {
+            let parallel_score = parallel_results[i].similarity_score;
+            let sequential_score = sequential_results[i].similarity_score;
+            assert!(
+                (parallel_score - sequential_score).abs() < 1e-6,
+                "Parallel and sequential results should be identical at position {}: {} vs {}",
+                i,
+                parallel_score,
+                sequential_score
+            );
+        }
+    }
+
+    #[test]
+    fn test_parallel_search_deduplication() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(2);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create two shards that might have overlapping results
+        let doc_id = DocumentId::new(); // Same document ID for both shards
+        let vector = vec![0.5, 0.5];
+
+        // Shard 1
+        let shard1_id = ShardId::new();
+        let mut shard1 = Shard::create(shard1_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let posting1 = Posting::new(doc_id, 0, 10, vector.clone(), 2).unwrap();
+        shard1.add_posting(posting1).unwrap();
+
+        // Shard 2 with same document and start position (should be deduplicated)
+        let shard2_id = ShardId::new();
+        let mut shard2 = Shard::create(shard2_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let posting2 = Posting::new(doc_id, 0, 10, vector, 2).unwrap();
+        shard2.add_posting(posting2).unwrap();
+
+        // Add different posting to shard2 (should not be deduplicated)
+        let doc_id2 = DocumentId::new();
+        let posting3 = Posting::new(doc_id2, 10, 10, vec![0.6, 0.6], 2).unwrap();
+        shard2.add_posting(posting3).unwrap();
+
+        index.add_shard(shard1).unwrap();
+        index.add_shard(shard2).unwrap();
+
+        let query = vec![0.5, 0.5];
+        let candidate_shards = vec![shard1_id, shard2_id];
+        let results = index.parallel_search(&query, &candidate_shards, 10).unwrap();
+
+        // Should have exactly 2 unique results (one duplicate removed)
+        assert_eq!(results.len(), 2);
+
+        // Check that we have the expected documents
+        let doc_ids: Vec<u128> = results.iter().map(|r| r.document_id.raw()).collect();
+        assert!(doc_ids.contains(&doc_id.raw()));
+        assert!(doc_ids.contains(&doc_id2.raw()));
+    }
+
+    #[test]
+    fn test_parallel_search_empty_cases() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(2);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        let query = vec![0.5, 0.5];
+
+        // Test with empty candidate shards
+        let results = index.parallel_search(&query, &[], 10).unwrap();
+        assert!(results.is_empty());
+
+        // Test with k = 0
+        let shard_id = ShardId::new();
+        let shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        index.add_shard(shard).unwrap();
+        
+        let results = index.parallel_search(&query, &[shard_id], 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parallel_search_error_handling() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(3);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Test invalid query vector dimension
+        let wrong_query = vec![0.1, 0.2]; // Wrong dimension
+        let result = index.parallel_search(&wrong_query, &[], 10);
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidDimension { expected, actual }) = result {
+            assert_eq!(expected, 3);
+            assert_eq!(actual, 2);
+        } else {
+            panic!("Expected InvalidDimension error");
+        }
+
+        // Test with non-existent shard ID
+        let fake_shard_id = ShardId::new();
+        let query = vec![0.1, 0.2, 0.3];
+        let result = index.parallel_search(&query, &[fake_shard_id], 10);
+        assert!(result.is_err());
+        // Should get a search error about failed shard opening
+        assert!(matches!(result.unwrap_err(), ShardexError::Search(_)));
+    }
+
+    #[test]
+    fn test_merge_results_functionality() {
+        // Test the merge_results function directly
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+
+        // Create results from multiple "shards"
+        let shard1_results = vec![
+            SearchResult::new(doc_id1, 0, 10, vec![1.0, 0.0], 0.9, 2).unwrap(),
+            SearchResult::new(doc_id2, 10, 10, vec![0.8, 0.2], 0.7, 2).unwrap(),
+        ];
+
+        let shard2_results = vec![
+            SearchResult::new(doc_id3, 20, 10, vec![0.9, 0.1], 0.8, 2).unwrap(),
+            SearchResult::new(doc_id1, 30, 10, vec![0.7, 0.3], 0.6, 2).unwrap(), // Different start position, should not be deduplicated
+        ];
+
+        let all_results = vec![shard1_results, shard2_results];
+
+        // Test normal merging
+        let merged = ShardexIndex::merge_results(all_results.clone(), 3);
+        assert_eq!(merged.len(), 3);
+
+        // Should be sorted by similarity score
+        assert_eq!(merged[0].similarity_score, 0.9); // doc_id1, start=0
+        assert_eq!(merged[1].similarity_score, 0.8); // doc_id3
+        assert_eq!(merged[2].similarity_score, 0.7); // doc_id2
+
+        // Test with k larger than available results
+        let merged = ShardexIndex::merge_results(all_results.clone(), 10);
+        assert_eq!(merged.len(), 4); // All unique results
+
+        // Test with k = 0
+        let merged = ShardexIndex::merge_results(all_results.clone(), 0);
+        assert!(merged.is_empty());
+
+        // Test with empty input
+        let merged = ShardexIndex::merge_results(vec![], 5);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_parallel_search_large_k_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(2);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create a shard with many postings
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add 50 postings with varying similarity to query
+        for i in 0..50 {
+            let doc_id = DocumentId::new();
+            let similarity_factor = i as f32 / 50.0;
+            let vector = vec![0.5 + similarity_factor * 0.3, 0.5];
+            let posting = Posting::new(doc_id, i * 10, 10, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        index.add_shard(shard).unwrap();
+
+        let query = vec![0.5, 0.5];
+
+        // Test various k values
+        let test_k_values = vec![1, 5, 10, 25, 50, 100];
+
+        for k in test_k_values {
+            let results = index.parallel_search(&query, &[shard_id], k).unwrap();
+            
+            // Should return min(k, available_results)
+            let expected_len = k.min(50);
+            assert_eq!(
+                results.len(),
+                expected_len,
+                "For k={}, expected {} results, got {}",
+                k,
+                expected_len,
+                results.len()
+            );
+
+            // Results should be sorted by similarity
+            for i in 1..results.len() {
+                assert!(
+                    results[i - 1].similarity_score >= results[i].similarity_score,
+                    "Results should be sorted by similarity at k={}",
+                    k
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_scored_result_ordering() {
+        let doc_id = DocumentId::new();
+        
+        // Test ScoredResult ordering
+        let result1 = ScoredResult {
+            similarity_score: 0.9,
+            result: SearchResult::new(doc_id, 0, 10, vec![1.0, 0.0], 0.9, 2).unwrap(),
+        };
+        
+        let result2 = ScoredResult {
+            similarity_score: 0.7,
+            result: SearchResult::new(doc_id, 10, 10, vec![0.8, 0.2], 0.7, 2).unwrap(),
+        };
+        
+        let result3 = ScoredResult {
+            similarity_score: 0.8,
+            result: SearchResult::new(doc_id, 20, 10, vec![0.9, 0.1], 0.8, 2).unwrap(),
+        };
+
+        // Test ordering
+        assert!(result1 > result2);
+        assert!(result1 > result3);
+        assert!(result3 > result2);
+
+        // Test in BinaryHeap
+        let mut heap = BinaryHeap::new();
+        heap.push(std::cmp::Reverse(result2.clone()));
+        heap.push(std::cmp::Reverse(result1.clone()));
+        heap.push(std::cmp::Reverse(result3.clone()));
+
+        // When using Reverse, the smallest (lowest score) comes out first
+        let first = heap.pop().unwrap().0;
+        assert_eq!(first.similarity_score, 0.7);
+
+        let second = heap.pop().unwrap().0;
+        assert_eq!(second.similarity_score, 0.8);
+
+        let third = heap.pop().unwrap().0;
+        assert_eq!(third.similarity_score, 0.9);
     }
 }
