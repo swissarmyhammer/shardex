@@ -29,8 +29,8 @@
 //!     .shardex_segment_size(1000);
 //!
 //! let mut index = ShardexIndex::create(config)?;
-//! 
-//! println!("Created index with capacity for {} shards per segment", 
+//!
+//! println!("Created index with capacity for {} shards per segment",
 //!          index.segment_capacity());
 //! # Ok(())
 //! # }
@@ -44,7 +44,7 @@
 //!
 //! # fn open_example(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
 //! let index = ShardexIndex::open(directory)?;
-//! 
+//!
 //! println!("Opened index with {} shards", index.shard_count());
 //! # Ok(())
 //! # }
@@ -54,7 +54,7 @@
 //!
 //! ```rust
 //! use shardex::shardex_index::ShardexIndex;
-//! 
+//!
 //! # fn search_example(index: &ShardexIndex) -> Result<(), Box<dyn std::error::Error>> {
 //! let query_vector = vec![0.5; 384];
 //! let slop_factor = 3;
@@ -259,8 +259,7 @@ impl ShardexIndex {
             )));
         }
 
-        let metadata_content =
-            std::fs::read_to_string(&metadata_path).map_err(ShardexError::Io)?;
+        let metadata_content = std::fs::read_to_string(&metadata_path).map_err(ShardexError::Io)?;
         let metadata: IndexMetadata = serde_json::from_str(&metadata_content)
             .map_err(|e| ShardexError::Config(format!("Failed to parse metadata: {}", e)))?;
 
@@ -455,23 +454,23 @@ impl ShardexIndex {
         // First ensure shard is loaded in cache
         if !self.shard_cache.contains_key(&shard_id) {
             let shard = Shard::open_read_only(shard_id, &self.directory)?;
-            
+
             // Make room in cache if needed
             if self.shard_cache.len() >= self.cache_limit {
                 if let Some(old_id) = self.shard_cache.keys().next().copied() {
                     self.shard_cache.remove(&old_id);
                 }
             }
-            
+
             self.shard_cache.insert(shard_id, shard);
         }
-        
+
         // Now we can safely borrow the cached shard and update metadata
         if let Some(shard) = self.shard_cache.get(&shard_id) {
             if let Some(metadata) = self.shards.iter_mut().find(|s| s.id == shard_id) {
                 metadata.update_from_shard(shard);
             }
-            
+
             // Persist changes
             self.save_metadata()?;
         }
@@ -745,7 +744,8 @@ impl ShardexIndex {
                             // Parse the filename as a ULID
                             if let Ok(shard_id) = filename_str.parse::<ShardId>() {
                                 // Check if corresponding .postings file exists
-                                let posting_path = self.directory.join(format!("{}.postings", shard_id));
+                                let posting_path =
+                                    self.directory.join(format!("{}.postings", shard_id));
                                 if posting_path.exists() {
                                     // Load shard metadata
                                     self.load_shard_metadata(shard_id)?;
@@ -994,7 +994,8 @@ mod tests {
         let base_metadata = BaseShardMetadata::new(false);
 
         let centroid = vec![0.1, 0.2, 0.3];
-        let metadata = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid.clone(), 100);
+        let metadata =
+            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid.clone(), 100);
 
         assert_eq!(metadata.id, shard_id);
         assert_eq!(metadata.centroid, centroid);
@@ -1116,7 +1117,8 @@ mod tests {
         assert_eq!(index.shard_count(), 3);
 
         // Try bulk add with wrong vector dimension
-        let wrong_shard = Shard::create(ShardId::new(), 10, 8, temp_dir.path().to_path_buf()).unwrap();
+        let wrong_shard =
+            Shard::create(ShardId::new(), 10, 8, temp_dir.path().to_path_buf()).unwrap();
         let result = index.bulk_add_shards(vec![wrong_shard]);
         assert!(result.is_err());
     }
@@ -1132,7 +1134,8 @@ mod tests {
 
         // Create shards with different utilization levels
         let high_util_id = ShardId::new();
-        let mut high_util_shard = Shard::create(high_util_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut high_util_shard =
+            Shard::create(high_util_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Fill shard to high utilization (> 90%)
         for i in 0..10 {
@@ -1142,7 +1145,8 @@ mod tests {
         }
 
         let low_util_id = ShardId::new();
-        let mut low_util_shard = Shard::create(low_util_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut low_util_shard =
+            Shard::create(low_util_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Add just a few postings for low utilization
         let doc_id = DocumentId::new();
@@ -1192,7 +1196,11 @@ mod tests {
         index.refresh_shard_metadata(shard_id).unwrap();
 
         // Check that metadata reflects changes
-        let metadata = index.all_shard_metadata().iter().find(|m| m.id == shard_id).unwrap();
+        let metadata = index
+            .all_shard_metadata()
+            .iter()
+            .find(|m| m.id == shard_id)
+            .unwrap();
         assert_eq!(metadata.posting_count, 2);
 
         // Test refresh all metadata
@@ -1223,42 +1231,60 @@ mod tests {
         let shard_id = ShardId::new();
         let base_metadata = BaseShardMetadata::new(false);
         let centroid = vec![1.0, 0.0, 0.0];
-        let metadata = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid, 100);
+        let metadata =
+            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid, 100);
 
         // Test distance to same point (should be 0)
         let same_point = vec![1.0, 0.0, 0.0];
         let distance = metadata.distance_to_query(&same_point).unwrap();
-        assert!((distance - 0.0).abs() < 1e-6, "Distance to same point should be 0, got {}", distance);
+        assert!(
+            (distance - 0.0).abs() < 1e-6,
+            "Distance to same point should be 0, got {}",
+            distance
+        );
 
         // Test distance to orthogonal point - from (1,0,0) to (0,1,0) should be sqrt(2)
         let orthogonal_y = vec![0.0, 1.0, 0.0];
         let distance = metadata.distance_to_query(&orthogonal_y).unwrap();
         let expected = f32::sqrt(2.0);
-        assert!((distance - expected).abs() < 1e-6, "Distance should be sqrt(2)={}, got {}", expected, distance);
+        assert!(
+            (distance - expected).abs() < 1e-6,
+            "Distance should be sqrt(2)={}, got {}",
+            expected,
+            distance
+        );
 
         // Test distance to orthogonal point - from (1,0,0) to (0,0,1) should be sqrt(2)
         let orthogonal_z = vec![0.0, 0.0, 1.0];
         let distance = metadata.distance_to_query(&orthogonal_z).unwrap();
         let expected = f32::sqrt(2.0);
-        assert!((distance - expected).abs() < 1e-6, "Distance should be sqrt(2)={}, got {}", expected, distance);
+        assert!(
+            (distance - expected).abs() < 1e-6,
+            "Distance should be sqrt(2)={}, got {}",
+            expected,
+            distance
+        );
     }
 
     #[test]
     fn test_shardex_metadata_splitting_logic() {
         let shard_id = ShardId::new();
         let mut base_metadata = BaseShardMetadata::new(false);
-        
+
         // Test different utilization levels
         base_metadata.active_count = 50; // 50% utilization
-        let metadata1 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        let metadata1 =
+            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(!metadata1.should_split());
 
-        base_metadata.active_count = 95; // 95% utilization  
-        let metadata2 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        base_metadata.active_count = 95; // 95% utilization
+        let metadata2 =
+            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(metadata2.should_split());
 
         base_metadata.active_count = 90; // Exactly 90% utilization
-        let metadata3 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        let metadata3 =
+            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(metadata3.should_split());
     }
 
@@ -1273,21 +1299,21 @@ mod tests {
 
         // Create shards with known centroids
         let centroids = vec![
-            vec![1.0, 0.0],   // East
-            vec![0.0, 1.0],   // North  
-            vec![-1.0, 0.0],  // West
-            vec![0.0, -1.0],  // South
+            vec![1.0, 0.0],  // East
+            vec![0.0, 1.0],  // North
+            vec![-1.0, 0.0], // West
+            vec![0.0, -1.0], // South
         ];
 
         for centroid in &centroids {
             let shard_id = ShardId::new();
             let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
-            
+
             // Add posting with the desired centroid vector
             let doc_id = DocumentId::new();
             let posting = Posting::new(doc_id, 0, 10, centroid.clone(), 2).unwrap();
             shard.add_posting(posting).unwrap();
-            
+
             index.add_shard(shard).unwrap();
         }
 
@@ -1297,7 +1323,7 @@ mod tests {
         assert_eq!(nearest.len(), 2);
 
         // Query from origin - should get all shards at equal distance, but limited by slop factor
-        let query = vec![0.0, 0.0]; 
+        let query = vec![0.0, 0.0];
         let nearest = index.find_nearest_shards(&query, 3).unwrap();
         assert_eq!(nearest.len(), 3);
 

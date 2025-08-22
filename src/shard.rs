@@ -326,7 +326,7 @@ impl Shard {
         // Initialize centroid and calculate from existing data
         let centroid = vec![0.0; vector_size];
         let active_vector_count = vector_storage.active_count();
-        
+
         let mut shard = Self {
             id,
             vector_storage,
@@ -338,12 +338,12 @@ impl Shard {
             centroid,
             active_vector_count,
         };
-        
+
         // Calculate centroid from existing vectors only if there are vectors
         if active_vector_count > 0 {
             shard.recalculate_centroid();
         }
-        
+
         Ok(shard)
     }
 
@@ -392,7 +392,7 @@ impl Shard {
         // Initialize centroid and calculate from existing data
         let centroid = vec![0.0; vector_size];
         let active_vector_count = vector_storage.active_count();
-        
+
         let mut shard = Self {
             id,
             vector_storage,
@@ -404,12 +404,12 @@ impl Shard {
             centroid,
             active_vector_count,
         };
-        
+
         // Calculate centroid from existing vectors only if there are vectors
         if active_vector_count > 0 {
             shard.recalculate_centroid();
         }
-        
+
         Ok(shard)
     }
 
@@ -610,10 +610,9 @@ impl Shard {
         }
 
         // Get the vector before removing it for centroid update
-        let vector = self
-            .vector_storage
-            .get_vector(index)
-            .map_err(|e| ShardexError::Shard(format!("Failed to get vector for centroid update: {}", e)))?;
+        let vector = self.vector_storage.get_vector(index).map_err(|e| {
+            ShardexError::Shard(format!("Failed to get vector for centroid update: {}", e))
+        })?;
         let vector_copy = vector.to_vec(); // Copy to owned vector
 
         // Remove from both storages
@@ -747,7 +746,7 @@ impl Shard {
                 .get_vector(index)
                 .map_err(|e| ShardexError::Shard(format!("Failed to get vector: {}", e)))?;
 
-            // Calculate cosine similarity 
+            // Calculate cosine similarity
             let similarity_score = Self::calculate_cosine_similarity(query, vector);
 
             // Get posting metadata
@@ -758,7 +757,13 @@ impl Shard {
 
             // Create search result
             let search_result = SearchResult::from_posting(
-                Posting::new(document_id, start, length, vector.to_vec(), self.vector_size)?,
+                Posting::new(
+                    document_id,
+                    start,
+                    length,
+                    vector.to_vec(),
+                    self.vector_size,
+                )?,
                 similarity_score,
             )?;
 
@@ -788,21 +793,21 @@ impl Shard {
     /// applying the formula: (cosine + 1.0) / 2.0
     fn calculate_cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
-        
+
         let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        
+
         // Handle zero vectors to avoid division by zero
         if norm_a == 0.0 || norm_b == 0.0 {
             return 0.5; // Neutral similarity for zero vectors (maps to 0.0 cosine)
         }
-        
+
         let cosine = dot_product / (norm_a * norm_b);
-        
+
         // Clamp cosine to valid range to handle floating point precision issues
         let cosine = cosine.clamp(-1.0, 1.0);
-        
+
         // Normalize to 0.0-1.0 range: (cosine + 1.0) / 2.0
         // This maps -1.0 -> 0.0, 0.0 -> 0.5, 1.0 -> 1.0
         (cosine + 1.0) / 2.0
@@ -897,7 +902,7 @@ impl Shard {
 
         // Validate centroid consistency
         let expected_centroid = self.calculate_centroid();
-        
+
         // Check centroid dimension
         if self.centroid.len() != self.vector_size {
             return Err(ShardexError::Corruption(format!(
@@ -912,14 +917,18 @@ impl Shard {
         if self.active_vector_count != actual_active_count {
             return Err(ShardexError::Corruption(format!(
                 "Active vector count mismatch: stored {}, actual {}",
-                self.active_vector_count,
-                actual_active_count
+                self.active_vector_count, actual_active_count
             )));
         }
 
         // Check centroid accuracy (with floating-point tolerance)
         const CENTROID_TOLERANCE: f32 = 1e-5;
-        for (i, (&stored, &expected)) in self.centroid.iter().zip(expected_centroid.iter()).enumerate() {
+        for (i, (&stored, &expected)) in self
+            .centroid
+            .iter()
+            .zip(expected_centroid.iter())
+            .enumerate()
+        {
             let diff = (stored - expected).abs();
             if diff > CENTROID_TOLERANCE {
                 return Err(ShardexError::Corruption(format!(
@@ -987,13 +996,13 @@ impl Shard {
         debug_assert_eq!(vector.len(), self.vector_size, "Vector dimension mismatch");
 
         self.active_vector_count += 1;
-        
+
         if self.active_vector_count == 1 {
             // First vector becomes the centroid
             self.centroid.copy_from_slice(vector);
         } else {
             let count_f32 = self.active_vector_count as f32;
-            
+
             // Incremental mean update: new_centroid = old_centroid + (new_vector - old_centroid) / count
             for (i, &vector_val) in vector.iter().enumerate() {
                 self.centroid[i] += (vector_val - self.centroid[i]) / count_f32;
@@ -1040,7 +1049,7 @@ impl Shard {
     /// floating-point precision errors.
     pub fn recalculate_centroid(&mut self) {
         self.centroid = self.calculate_centroid();
-        
+
         // Update active vector count to match actual count
         let mut count = 0;
         for i in 0..self.current_count() {
@@ -1052,14 +1061,14 @@ impl Shard {
     }
 
     /// Check if the shard should be split based on capacity utilization
-    /// 
+    ///
     /// Returns true when the shard is at 90% capacity or greater.
     /// This threshold ensures splits happen before the shard becomes completely full.
     pub fn should_split(&self) -> bool {
         if self.capacity == 0 {
             return false;
         }
-        
+
         // Split when at 90% capacity
         let split_threshold = (self.capacity as f64 * 0.9) as usize;
         self.current_count() >= split_threshold
@@ -1095,7 +1104,7 @@ impl Shard {
         // Use k-means clustering to determine how to split the vectors
         let (cluster_a_indices, cluster_b_indices) = self.cluster_vectors()?;
 
-        // Create two new shards with half capacity each (minimum 5)  
+        // Create two new shards with half capacity each (minimum 5)
         let new_capacity = std::cmp::max(self.capacity / 2, 5);
 
         let shard_a_id = ShardId::new();
@@ -1162,21 +1171,24 @@ impl Shard {
 
         // Initialize centroids using the two most distant vectors (furthest pair)
         let (centroid_a_idx, centroid_b_idx) = self.find_furthest_pair(&active_indices)?;
-        
+
         // Check if all vectors are identical (pathological case for k-means)
-        let first_vector = self.vector_storage.get_vector(active_indices[0])
+        let first_vector = self
+            .vector_storage
+            .get_vector(active_indices[0])
             .map_err(|e| ShardexError::Shard(format!("Failed to get first vector: {}", e)))?;
         let mut all_identical = true;
-        
+
         for &idx in &active_indices[1..] {
-            let vector = self.vector_storage.get_vector(idx)
-                .map_err(|e| ShardexError::Shard(format!("Failed to get vector for identity check: {}", e)))?;
+            let vector = self.vector_storage.get_vector(idx).map_err(|e| {
+                ShardexError::Shard(format!("Failed to get vector for identity check: {}", e))
+            })?;
             if Self::euclidean_distance(first_vector, vector) > 1e-6 {
                 all_identical = false;
                 break;
             }
         }
-        
+
         // If all vectors are identical, split evenly rather than using k-means
         if all_identical {
             let mid = active_indices.len() / 2;
@@ -1184,10 +1196,14 @@ impl Shard {
             let cluster_b = active_indices[mid..].to_vec();
             return Ok((cluster_a, cluster_b));
         }
-        
-        let centroid_a_vector = self.vector_storage.get_vector(centroid_a_idx)
+
+        let centroid_a_vector = self
+            .vector_storage
+            .get_vector(centroid_a_idx)
             .map_err(|e| ShardexError::Shard(format!("Failed to get centroid A vector: {}", e)))?;
-        let centroid_b_vector = self.vector_storage.get_vector(centroid_b_idx)
+        let centroid_b_vector = self
+            .vector_storage
+            .get_vector(centroid_b_idx)
             .map_err(|e| ShardexError::Shard(format!("Failed to get centroid B vector: {}", e)))?;
 
         let mut centroid_a = centroid_a_vector.to_vec();
@@ -1204,8 +1220,9 @@ impl Shard {
 
             // Assign each vector to the nearest centroid
             for &index in &active_indices {
-                let vector = self.vector_storage.get_vector(index)
-                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for clustering: {}", e)))?;
+                let vector = self.vector_storage.get_vector(index).map_err(|e| {
+                    ShardexError::Shard(format!("Failed to get vector for clustering: {}", e))
+                })?;
 
                 let dist_a = Self::euclidean_distance(vector, &centroid_a);
                 let dist_b = Self::euclidean_distance(vector, &centroid_b);
@@ -1250,7 +1267,7 @@ impl Shard {
     }
 
     /// Find the pair of vectors with maximum distance (furthest pair)
-    /// 
+    ///
     /// This is used to initialize k-means centroids with a good starting point.
     fn find_furthest_pair(&self, indices: &[usize]) -> Result<(usize, usize), ShardexError> {
         if indices.len() < 2 {
@@ -1264,10 +1281,12 @@ impl Shard {
 
         for i in 0..indices.len() {
             for j in i + 1..indices.len() {
-                let vector_i = self.vector_storage.get_vector(indices[i])
-                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
-                let vector_j = self.vector_storage.get_vector(indices[j])
-                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
+                let vector_i = self.vector_storage.get_vector(indices[i]).map_err(|e| {
+                    ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e))
+                })?;
+                let vector_j = self.vector_storage.get_vector(indices[j]).map_err(|e| {
+                    ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e))
+                })?;
 
                 let distance = Self::euclidean_distance(vector_i, vector_j);
                 if distance > max_distance {
@@ -1287,10 +1306,14 @@ impl Shard {
         }
 
         let mut centroid = vec![0.0; self.vector_size];
-        
+
         for &index in indices {
-            let vector = self.vector_storage.get_vector(index)
-                .map_err(|e| ShardexError::Shard(format!("Failed to get vector for centroid calculation: {}", e)))?;
+            let vector = self.vector_storage.get_vector(index).map_err(|e| {
+                ShardexError::Shard(format!(
+                    "Failed to get vector for centroid calculation: {}",
+                    e
+                ))
+            })?;
 
             for (i, &value) in vector.iter().enumerate() {
                 centroid[i] += value;
@@ -1309,7 +1332,7 @@ impl Shard {
     /// Calculate Euclidean distance between two vectors
     fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
-        
+
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| (x - y).powi(2))
@@ -1842,8 +1865,11 @@ mod tests {
         assert!(results[0].similarity_score >= results[1].similarity_score);
         // All scores should be between 0.0 and 1.0
         for result in &results {
-            assert!(result.similarity_score >= 0.0 && result.similarity_score <= 1.0,
-                    "Similarity score {} is out of valid range [0.0, 1.0]", result.similarity_score);
+            assert!(
+                result.similarity_score >= 0.0 && result.similarity_score <= 1.0,
+                "Similarity score {} is out of valid range [0.0, 1.0]",
+                result.similarity_score
+            );
         }
     }
 
@@ -2006,11 +2032,7 @@ mod tests {
 
         // Add three vectors: [1, 2], [3, 4], [5, 6]
         // Expected centroid: [(1+3+5)/3, (2+4+6)/3] = [3.0, 4.0]
-        let vectors = [
-            vec![1.0, 2.0],
-            vec![3.0, 4.0],
-            vec![5.0, 6.0],
-        ];
+        let vectors = [vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
 
         let posting1 = Posting::new(doc_id1, 100, 50, vectors[0].clone(), 2).unwrap();
         let posting2 = Posting::new(doc_id2, 200, 50, vectors[1].clone(), 2).unwrap();
@@ -2025,7 +2047,7 @@ mod tests {
 
         assert_eq!(centroid.len(), 2);
         assert_eq!(shard.active_vector_count, 3);
-        
+
         // Use approximate comparison for floating-point
         assert!((centroid[0] - expected_centroid[0]).abs() < 1e-6);
         assert!((centroid[1] - expected_centroid[1]).abs() < 1e-6);
@@ -2235,7 +2257,10 @@ mod tests {
         // Should fail validation
         let result = shard.validate_integrity();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Centroid dimension mismatch"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Centroid dimension mismatch"));
 
         // Fix dimension but corrupt the values
         shard.centroid = vec![999.0, 999.0, 999.0];
@@ -2243,7 +2268,10 @@ mod tests {
         // Should fail validation due to centroid accuracy
         let result = shard.validate_integrity();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Centroid component"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Centroid component"));
 
         // Fix centroid but corrupt active vector count
         shard.centroid = vec![1.0, 2.0, 3.0]; // Correct centroid
@@ -2252,10 +2280,11 @@ mod tests {
         // Should fail validation due to count mismatch
         let result = shard.validate_integrity();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Active vector count mismatch"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Active vector count mismatch"));
     }
-
-
 
     #[test]
     fn test_shard_search_sorting() {
@@ -2266,10 +2295,10 @@ mod tests {
 
         // Add postings with different similarity scores using unit vectors for predictable results
         let vectors = [
-            [1.0],   // Same direction as query [1.0] -> cosine = 1.0 -> normalized = 1.0
-            [-1.0],  // Opposite direction -> cosine = -1.0 -> normalized = 0.0
-            [0.5],   // Same direction, smaller magnitude -> cosine = 1.0 -> normalized = 1.0
-            [2.0],   // Same direction, larger magnitude -> cosine = 1.0 -> normalized = 1.0
+            [1.0],  // Same direction as query [1.0] -> cosine = 1.0 -> normalized = 1.0
+            [-1.0], // Opposite direction -> cosine = -1.0 -> normalized = 0.0
+            [0.5],  // Same direction, smaller magnitude -> cosine = 1.0 -> normalized = 1.0
+            [2.0],  // Same direction, larger magnitude -> cosine = 1.0 -> normalized = 1.0
         ];
 
         for (i, vector) in vectors.iter().enumerate() {
@@ -2343,8 +2372,6 @@ mod tests {
             let posting = Posting::new(doc_id, i * 100, 50, vector, 3).unwrap();
             shard.add_posting(posting).unwrap();
         }
-
-
 
         assert!(shard.should_split());
     }
@@ -2427,13 +2454,13 @@ mod tests {
         eprintln!("Before split:");
         eprintln!("  Original capacity: {}", shard.capacity());
         eprintln!("  Should split: {}", shard.should_split());
-        
+
         let (shard_a, shard_b) = shard.split().await.unwrap();
-        
+
         eprintln!("After split:");
         eprintln!("  Shard A capacity: {}", shard_a.capacity());
         eprintln!("  Shard B capacity: {}", shard_b.capacity());
-        
+
         // For now, let's just see what the actual capacities are
         assert!(shard_a.capacity() > 0);
         assert!(shard_b.capacity() > 0);
@@ -2447,19 +2474,9 @@ mod tests {
         let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Add vectors with clear clustering - two groups
-        let group_a_vectors = [
-            [1.0, 1.0],
-            [1.1, 1.1],
-            [1.2, 1.2],
-            [0.9, 0.9],
-        ];
+        let group_a_vectors = [[1.0, 1.0], [1.1, 1.1], [1.2, 1.2], [0.9, 0.9]];
 
-        let group_b_vectors = [
-            [5.0, 5.0],
-            [5.1, 5.1],
-            [4.9, 4.9],
-            [5.2, 5.0],
-        ];
+        let group_b_vectors = [[5.0, 5.0], [5.1, 5.1], [4.9, 4.9], [5.2, 5.0]];
 
         // Add group A vectors
         for vector in group_a_vectors {
@@ -2529,8 +2546,12 @@ mod tests {
 
         // Should be reasonably balanced (within 1 posting difference is fine)
         let count_diff = (shard_a.active_count() as i32 - shard_b.active_count() as i32).abs();
-        assert!(count_diff <= 1, "Split should be balanced: {} vs {}", 
-                shard_a.active_count(), shard_b.active_count());
+        assert!(
+            count_diff <= 1,
+            "Split should be balanced: {} vs {}",
+            shard_a.active_count(),
+            shard_b.active_count()
+        );
 
         // Total count should be preserved
         assert_eq!(shard_a.active_count() + shard_b.active_count(), 18);
@@ -2689,9 +2710,12 @@ mod tests {
         let centroid_b = shard_b.get_centroid();
 
         let distance_between_centroids = Shard::euclidean_distance(centroid_a, centroid_b);
-        assert!(distance_between_centroids > 1.0, 
-                "Centroids should be well separated: A={:?}, B={:?}", 
-                centroid_a, centroid_b);
+        assert!(
+            distance_between_centroids > 1.0,
+            "Centroids should be well separated: A={:?}, B={:?}",
+            centroid_a,
+            centroid_b
+        );
     }
 
     #[tokio::test]
@@ -2716,7 +2740,7 @@ mod tests {
         assert_eq!(shard_b.capacity(), 5);
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_split_identical_vectors() {
         let temp_dir = TempDir::new().unwrap();
         let shard_id = ShardId::new();
