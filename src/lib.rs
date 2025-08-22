@@ -7,6 +7,7 @@
 pub mod config;
 pub mod error;
 pub mod identifiers;
+pub mod integrity;
 pub mod layout;
 pub mod memory;
 pub mod posting_storage;
@@ -16,6 +17,7 @@ pub mod vector_storage;
 pub use config::ShardexConfig;
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId};
+pub use integrity::{IntegrityConfig, IntegrityManager, CorruptionReport, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
