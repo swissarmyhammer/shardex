@@ -110,7 +110,7 @@ enum MmapVariant {
 /// FileHeader provides a standardized way to identify file formats and
 /// validate data integrity. It includes version information for compatibility
 /// checking and CRC32 checksums for corruption detection.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct FileHeader {
     /// Magic bytes for file format identification (4 bytes)
