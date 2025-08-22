@@ -99,7 +99,7 @@ impl Eq for ScoredResult {}
 
 impl PartialOrd for ScoredResult {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.similarity_score.partial_cmp(&other.similarity_score)
+        Some(self.cmp(other))
     }
 }
 
@@ -622,7 +622,7 @@ impl ShardexIndex {
         // Calculate per-shard result limit for efficiency
         // Request more than k from each shard to improve result quality
         // but limit to avoid excessive memory usage
-        let per_shard_limit = (k * 2).max(50).min(1000);
+        let per_shard_limit = (k * 2).clamp(50, 1000);
 
         // Convert candidate_shards to Vec for parallel processing
         let candidate_vec: Vec<ShardId> = candidate_shards.to_vec();
@@ -1959,7 +1959,7 @@ mod tests {
 
         // Create multiple shards with different postings
         let mut shard_ids = Vec::new();
-        let test_vectors = vec![
+        let test_vectors = [
             vec![1.0, 0.0, 0.0], // East
             vec![0.0, 1.0, 0.0], // North
             vec![-1.0, 0.0, 0.0], // West
