@@ -1,11 +1,111 @@
 //! Core data structures for Shardex
 //!
 //! This module provides the fundamental data structures used throughout Shardex:
-//! - Posting: Represents a document posting with its vector embedding
-//! - SearchResult: Search result with similarity scoring
-//! - IndexStats: Index statistics for monitoring and observability
+//! - [`Posting`]: Represents a document posting with its vector embedding
+//! - [`SearchResult`]: Search result with similarity scoring  
+//! - [`IndexStats`]: Index statistics for monitoring and observability
 //!
 //! All structures are designed for memory mapping compatibility using bytemuck traits.
+//!
+//! # Usage Examples
+//!
+//! ## Creating and Using Postings
+//!
+//! ```rust
+//! use shardex::structures::Posting;
+//! use shardex::identifiers::DocumentId;
+//! use ulid::Ulid;
+//!
+//! // Create a new posting with a 128-dimensional vector
+//! let doc_id = DocumentId::new(Ulid::new());
+//! let vector = vec![0.1, 0.2, 0.3]; // Usually 128 or more dimensions
+//!
+//! let posting = Posting::new(doc_id, 100, 50, vector, 3)?;
+//!
+//! println!("Document: {}, Position: {}-{}",
+//!          posting.document_id,
+//!          posting.start,
+//!          posting.start + posting.length);
+//! # Ok::<(), shardex::error::ShardexError>(())
+//! ```
+//!
+//! ## Working with Search Results
+//!
+//! ```rust
+//! use shardex::structures::SearchResult;
+//! use shardex::identifiers::DocumentId;
+//! use ulid::Ulid;
+//!
+//! // Create search results with similarity scores
+//! let doc_id = DocumentId::new(Ulid::new());
+//! let vector = vec![0.5, 0.6, 0.7]; // Query embedding
+//!
+//! let result = SearchResult::new(doc_id, 200, 100, vector, 0.85, 3)?;
+//!
+//! // Results can be sorted by similarity score
+//! let mut results = vec![result];
+//! results.sort_by(|a, b| b.similarity_score.partial_cmp(&a.similarity_score).unwrap());
+//! # Ok::<(), shardex::error::ShardexError>(())
+//! ```
+//!
+//! ## Memory Mapping with Headers
+//!
+//! For high-performance memory-mapped access, use the header structures:
+//!
+//! ```rust
+//! use shardex::structures::{PostingHeader, SearchResultHeader};
+//! use shardex::identifiers::DocumentId;
+//! use ulid::Ulid;
+//!
+//! // Headers are memory-mappable and reference vector data externally
+//! let header = PostingHeader {
+//!     document_id: DocumentId::new(Ulid::new()),
+//!     start: 100,
+//!     length: 50,
+//!     vector_offset: 1024,  // Offset in the mapped file
+//!     vector_length: 128,   // Number of f32 elements
+//! };
+//!
+//! // Headers can be safely cast from raw memory using bytemuck
+//! let bytes = bytemuck::bytes_of(&header);
+//! let restored = bytemuck::from_bytes::<PostingHeader>(bytes);
+//! ```
+//!
+//! ## Index Statistics and Monitoring
+//!
+//! ```rust
+//! use shardex::structures::IndexStats;
+//!
+//! let stats = IndexStats {
+//!     total_documents: 10_000,
+//!     total_postings: 50_000,
+//!     total_vectors: 50_000,
+//!     vector_dimensions: 128,
+//!     memory_usage_bytes: 26_214_400, // ~25MB
+//!     index_size_bytes: 52_428_800,   // ~50MB on disk
+//! };
+//!
+//! // Display provides human-readable formatting
+//! println!("{}", stats);
+//! // Output: "IndexStats { docs: 10000, postings: 50000, vectors: 50000 (128-dim), memory: 25.0 MB, disk: 50.0 MB }"
+//! ```
+//!
+//! ## Performance Characteristics
+//!
+//! ### Runtime Structures (Posting, SearchResult)
+//! - **Memory overhead**: `Vec<f32>` has dynamic allocation overhead (~24 bytes + vector data)
+//! - **Access pattern**: Fast random access to vector elements
+//! - **Use case**: Building indices, query processing, dynamic operations
+//! - **Serialization**: JSON via serde, binary via bytemuck for headers
+//!
+//! ### Memory-Mapped Headers (PostingHeader, SearchResultHeader)  
+//! - **Memory overhead**: Fixed 32 bytes per header (no heap allocations)
+//! - **Access pattern**: Requires separate vector data lookup by offset
+//! - **Use case**: Large-scale batch processing, persistent storage access
+//! - **Performance**: Zero-copy deserialization, page cache friendly
+//!
+//! Choose runtime structures for dynamic operations and headers for bulk processing
+//! of persistent data where memory efficiency is critical.
 
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
@@ -16,7 +116,7 @@ use std::fmt::{self, Display, Formatter};
 /// A posting represents a document segment with its vector embedding
 ///
 /// Postings are stored in shards and support memory-mapped access for high performance.
-/// The vector field requires special handling for memory mapping since Vec<f32> is not
+/// The vector field requires special handling for memory mapping since `Vec<f32>` is not
 /// Pod-compatible. For memory mapping, vectors are stored separately and referenced by
 /// pointer and length.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,7 +276,7 @@ impl Posting {
 }
 
 impl SearchResult {
-    /// Create a new search result with vector dimension validation
+    /// Create a new search result with vector dimension and similarity score validation
     pub fn new(
         document_id: DocumentId,
         start: u32,
@@ -192,6 +292,12 @@ impl SearchResult {
             });
         }
 
+        if !(0.0..=1.0).contains(&similarity_score) || similarity_score.is_nan() {
+            return Err(ShardexError::InvalidSimilarityScore {
+                score: similarity_score,
+            });
+        }
+
         Ok(Self {
             document_id,
             start,
@@ -202,14 +308,20 @@ impl SearchResult {
     }
 
     /// Create search result from posting and similarity score
-    pub fn from_posting(posting: Posting, similarity_score: f32) -> Self {
-        Self {
+    pub fn from_posting(posting: Posting, similarity_score: f32) -> Result<Self, ShardexError> {
+        if !(0.0..=1.0).contains(&similarity_score) || similarity_score.is_nan() {
+            return Err(ShardexError::InvalidSimilarityScore {
+                score: similarity_score,
+            });
+        }
+
+        Ok(Self {
             document_id: posting.document_id,
             start: posting.start,
             length: posting.length,
             vector: posting.vector,
             similarity_score,
-        }
+        })
     }
 
     /// Get vector dimension
@@ -238,6 +350,45 @@ impl SearchResult {
             });
         }
         Ok(())
+    }
+
+    /// Check if this result is highly similar (similarity >= 0.8)
+    pub fn is_highly_similar(&self) -> bool {
+        self.similarity_score >= 0.8
+    }
+
+    /// Check if this result is moderately similar (similarity >= 0.5)
+    pub fn is_moderately_similar(&self) -> bool {
+        self.similarity_score >= 0.5
+    }
+
+    /// Check if this result is weakly similar (similarity >= 0.3)
+    pub fn is_weakly_similar(&self) -> bool {
+        self.similarity_score >= 0.3
+    }
+
+    /// Check if this result has higher similarity than another result
+    pub fn is_more_similar_than(&self, other: &SearchResult) -> bool {
+        self.similarity_score > other.similarity_score
+    }
+
+    /// Check if this result has similarity within a given threshold of another result
+    pub fn is_similar_to(&self, other: &SearchResult, threshold: f32) -> bool {
+        (self.similarity_score - other.similarity_score).abs() <= threshold
+    }
+
+    /// Get the similarity tier for this result
+    /// Returns "high" (>=0.8), "moderate" (>=0.5), "weak" (>=0.3), or "low" (<0.3)
+    pub fn similarity_tier(&self) -> &'static str {
+        if self.similarity_score >= 0.8 {
+            "high"
+        } else if self.similarity_score >= 0.5 {
+            "moderate"
+        } else if self.similarity_score >= 0.3 {
+            "weak"
+        } else {
+            "low"
+        }
     }
 }
 
@@ -308,6 +459,74 @@ impl IndexStats {
     /// Get disk usage in human-readable format
     pub fn disk_usage_mb(&self) -> f32 {
         self.disk_usage as f32 / (1024.0 * 1024.0)
+    }
+
+    /// Builder method to set total shards
+    pub fn with_total_shards(mut self, total_shards: usize) -> Self {
+        self.total_shards = total_shards;
+        self
+    }
+
+    /// Builder method to set total postings
+    pub fn with_total_postings(mut self, total_postings: usize) -> Self {
+        self.total_postings = total_postings;
+        self
+    }
+
+    /// Builder method to set pending operations
+    pub fn with_pending_operations(mut self, pending_operations: usize) -> Self {
+        self.pending_operations = pending_operations;
+        self
+    }
+
+    /// Builder method to set memory usage
+    pub fn with_memory_usage(mut self, memory_usage: usize) -> Self {
+        self.memory_usage = memory_usage;
+        self
+    }
+
+    /// Builder method to set active postings
+    pub fn with_active_postings(mut self, active_postings: usize) -> Self {
+        self.active_postings = active_postings;
+        self
+    }
+
+    /// Builder method to set deleted postings
+    pub fn with_deleted_postings(mut self, deleted_postings: usize) -> Self {
+        self.deleted_postings = deleted_postings;
+        self
+    }
+
+    /// Builder method to set average shard utilization
+    pub fn with_average_shard_utilization(mut self, average_shard_utilization: f32) -> Self {
+        self.average_shard_utilization = average_shard_utilization;
+        self
+    }
+
+    /// Builder method to set vector dimension
+    pub fn with_vector_dimension(mut self, vector_dimension: usize) -> Self {
+        self.vector_dimension = vector_dimension;
+        self
+    }
+
+    /// Builder method to set disk usage
+    pub fn with_disk_usage(mut self, disk_usage: usize) -> Self {
+        self.disk_usage = disk_usage;
+        self
+    }
+
+    /// Convenience builder for creating test stats with common values
+    pub fn for_test() -> Self {
+        Self::new()
+            .with_total_shards(5)
+            .with_total_postings(1000)
+            .with_active_postings(900)
+            .with_deleted_postings(100)
+            .with_vector_dimension(128)
+            .with_memory_usage(1024 * 1024) // 1MB
+            .with_disk_usage(2 * 1024 * 1024) // 2MB
+            .with_average_shard_utilization(0.75)
+            .with_pending_operations(10)
     }
 }
 
@@ -388,13 +607,55 @@ mod tests {
         let doc_id = DocumentId::new();
         let vector = vec![1.0, 2.0, 3.0];
         let posting = Posting::new(doc_id, 10, 50, vector.clone(), 3).unwrap();
-        let search_result = SearchResult::from_posting(posting.clone(), 0.75);
+        let search_result = SearchResult::from_posting(posting.clone(), 0.75).unwrap();
 
         assert_eq!(search_result.document_id, posting.document_id);
         assert_eq!(search_result.start, posting.start);
         assert_eq!(search_result.length, posting.length);
         assert_eq!(search_result.vector, posting.vector);
         assert_eq!(search_result.similarity_score, 0.75);
+    }
+
+    #[test]
+    fn test_search_result_similarity_score_validation() {
+        let doc_id = DocumentId::new();
+        let vector = vec![1.0, 2.0, 3.0];
+
+        // Valid similarity scores should work
+        assert!(SearchResult::new(doc_id, 0, 10, vector.clone(), 0.0, 3).is_ok());
+        assert!(SearchResult::new(doc_id, 0, 10, vector.clone(), 0.5, 3).is_ok());
+        assert!(SearchResult::new(doc_id, 0, 10, vector.clone(), 1.0, 3).is_ok());
+
+        // Invalid similarity scores should fail
+        let result = SearchResult::new(doc_id, 0, 10, vector.clone(), -0.1, 3);
+        assert!(
+            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == -0.1)
+        );
+
+        let result = SearchResult::new(doc_id, 0, 10, vector.clone(), 1.5, 3);
+        assert!(
+            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == 1.5)
+        );
+
+        let result = SearchResult::new(doc_id, 0, 10, vector.clone(), f32::NAN, 3);
+        assert!(matches!(
+            result.unwrap_err(),
+            ShardexError::InvalidSimilarityScore { .. }
+        ));
+
+        // Test from_posting validation
+        let posting = Posting::new(doc_id, 0, 10, vector.clone(), 3).unwrap();
+        assert!(SearchResult::from_posting(posting.clone(), 0.8).is_ok());
+
+        let result = SearchResult::from_posting(posting.clone(), 2.0);
+        assert!(
+            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == 2.0)
+        );
+
+        let result = SearchResult::from_posting(posting, -1.0);
+        assert!(
+            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == -1.0)
+        );
     }
 
     #[test]
@@ -468,6 +729,47 @@ mod tests {
     }
 
     #[test]
+    fn test_search_result_similarity_convenience_methods() {
+        let doc_id = DocumentId::new();
+        let vector = vec![0.1, 0.2, 0.3];
+
+        // Test similarity tier methods
+        let high_result = SearchResult::new(doc_id, 0, 10, vector.clone(), 0.85, 3).unwrap();
+        assert!(high_result.is_highly_similar());
+        assert!(high_result.is_moderately_similar());
+        assert!(high_result.is_weakly_similar());
+        assert_eq!(high_result.similarity_tier(), "high");
+
+        let moderate_result = SearchResult::new(doc_id, 10, 10, vector.clone(), 0.65, 3).unwrap();
+        assert!(!moderate_result.is_highly_similar());
+        assert!(moderate_result.is_moderately_similar());
+        assert!(moderate_result.is_weakly_similar());
+        assert_eq!(moderate_result.similarity_tier(), "moderate");
+
+        let weak_result = SearchResult::new(doc_id, 20, 10, vector.clone(), 0.45, 3).unwrap();
+        assert!(!weak_result.is_highly_similar());
+        assert!(!weak_result.is_moderately_similar());
+        assert!(weak_result.is_weakly_similar());
+        assert_eq!(weak_result.similarity_tier(), "weak");
+
+        let low_result = SearchResult::new(doc_id, 30, 10, vector, 0.15, 3).unwrap();
+        assert!(!low_result.is_highly_similar());
+        assert!(!low_result.is_moderately_similar());
+        assert!(!low_result.is_weakly_similar());
+        assert_eq!(low_result.similarity_tier(), "low");
+
+        // Test comparison methods
+        assert!(high_result.is_more_similar_than(&moderate_result));
+        assert!(moderate_result.is_more_similar_than(&weak_result));
+        assert!(weak_result.is_more_similar_than(&low_result));
+
+        // Test similarity threshold
+        assert!(high_result.is_similar_to(&high_result, 0.0)); // Same result
+        assert!(!high_result.is_similar_to(&low_result, 0.1)); // Too different
+        assert!(high_result.is_similar_to(&moderate_result, 0.25)); // Within threshold
+    }
+
+    #[test]
     fn test_index_stats_creation() {
         let stats = IndexStats::new();
         assert_eq!(stats.total_shards, 0);
@@ -519,6 +821,52 @@ mod tests {
         assert!(display_str.contains("memory: 1.00MB"));
         assert!(display_str.contains("disk: 2.00MB"));
         assert!(display_str.contains("utilization: 80.0%"));
+    }
+
+    #[test]
+    fn test_index_stats_builder_methods() {
+        let stats = IndexStats::new()
+            .with_total_shards(10)
+            .with_total_postings(5000)
+            .with_active_postings(4500)
+            .with_deleted_postings(500)
+            .with_vector_dimension(256)
+            .with_memory_usage(5 * 1024 * 1024) // 5MB
+            .with_disk_usage(10 * 1024 * 1024) // 10MB
+            .with_average_shard_utilization(0.9)
+            .with_pending_operations(25);
+
+        assert_eq!(stats.total_shards, 10);
+        assert_eq!(stats.total_postings, 5000);
+        assert_eq!(stats.active_postings, 4500);
+        assert_eq!(stats.deleted_postings, 500);
+        assert_eq!(stats.vector_dimension, 256);
+        assert_eq!(stats.memory_usage, 5 * 1024 * 1024);
+        assert_eq!(stats.disk_usage, 10 * 1024 * 1024);
+        assert_eq!(stats.average_shard_utilization, 0.9);
+        assert_eq!(stats.pending_operations, 25);
+    }
+
+    #[test]
+    fn test_index_stats_for_test_builder() {
+        let stats = IndexStats::for_test();
+
+        assert_eq!(stats.total_shards, 5);
+        assert_eq!(stats.total_postings, 1000);
+        assert_eq!(stats.active_postings, 900);
+        assert_eq!(stats.deleted_postings, 100);
+        assert_eq!(stats.vector_dimension, 128);
+        assert_eq!(stats.memory_usage, 1024 * 1024);
+        assert_eq!(stats.disk_usage, 2 * 1024 * 1024);
+        assert_eq!(stats.average_shard_utilization, 0.75);
+        assert_eq!(stats.pending_operations, 10);
+
+        // Test that calculations work with the test data
+        assert_eq!(stats.shard_utilization_percent(), 75.0);
+        assert_eq!(stats.deletion_ratio(), 0.1);
+        assert!(stats.has_pending_operations());
+        assert_eq!(stats.memory_usage_mb(), 1.0);
+        assert_eq!(stats.disk_usage_mb(), 2.0);
     }
 
     #[test]
