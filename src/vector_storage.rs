@@ -507,6 +507,96 @@ impl VectorStorage {
         header_size + (index * vector_size_bytes)
     }
 
+    /// Validate the integrity of the vector storage
+    ///
+    /// Performs comprehensive validation including header consistency,
+    /// vector data integrity, and cross-validation of metadata.
+    pub fn validate_integrity(&self) -> Result<(), ShardexError> {
+        // Validate header
+        self.header.validate()?;
+        
+        // Validate file header checksum against data
+        let vector_data_start = self.header.vector_data_offset as usize;
+        let vector_data_size = (self.header.capacity as usize)
+            * (self.header.vector_dimension as usize)
+            * std::mem::size_of::<f32>();
+        let aligned_size = Self::align_size(vector_data_size, self.header.simd_alignment as usize);
+        
+        if vector_data_start + aligned_size > self.mmap_file.len() {
+            return Err(ShardexError::Corruption(
+                "File size is inconsistent with header metadata".to_string(),
+            ));
+        }
+        
+        let vector_data = &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
+        self.header.file_header.validate_checksum(vector_data)?;
+        
+        // Validate vector data consistency
+        self.validate_vector_consistency()?;
+        
+        Ok(())
+    }
+
+    /// Validate internal vector data consistency
+    ///
+    /// Checks that active/deleted counts match actual data,
+    /// and that vector data is valid (no invalid float values unless deleted).
+    fn validate_vector_consistency(&self) -> Result<(), ShardexError> {
+        let mut actual_active_count = 0u32;
+        let mut actual_deleted_count = 0u32;
+        
+        // Count actual active and deleted vectors
+        for i in 0..self.current_count() {
+            if self.is_deleted(i)? {
+                actual_deleted_count += 1;
+            } else {
+                actual_active_count += 1;
+                
+                // Validate that active vectors have valid data
+                let vector = self.get_vector(i)?;
+                for (j, &value) in vector.iter().enumerate() {
+                    if value.is_infinite() {
+                        return Err(ShardexError::Corruption(format!(
+                            "Vector {} contains infinite value at dimension {}",
+                            i, j
+                        )));
+                    }
+                    // Note: We allow NaN values only for deleted vectors
+                    if value.is_nan() {
+                        return Err(ShardexError::Corruption(format!(
+                            "Active vector {} contains NaN value at dimension {} (should be deleted)",
+                            i, j
+                        )));
+                    }
+                }
+            }
+        }
+        
+        // Check active count consistency
+        if actual_active_count != self.header.active_count {
+            return Err(ShardexError::Corruption(format!(
+                "Active count mismatch: header claims {}, actual count is {}",
+                self.header.active_count, actual_active_count
+            )));
+        }
+        
+        // Check that total counts are consistent
+        let total_accounted = actual_active_count + actual_deleted_count;
+        if total_accounted != self.header.current_count {
+            return Err(ShardexError::Corruption(format!(
+                "Count mismatch: header claims {} total, but found {} active + {} deleted = {}",
+                self.header.current_count, actual_active_count, actual_deleted_count, total_accounted
+            )));
+        }
+        
+        Ok(())
+    }
+
+    /// Get the underlying memory-mapped file for external integrity validation
+    pub fn memory_mapped_file(&self) -> &MemoryMappedFile {
+        &self.mmap_file
+    }
+
     /// Update the header in the memory-mapped file
     fn update_header(&mut self) -> Result<(), ShardexError> {
         // Update checksum

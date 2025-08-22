@@ -577,6 +577,99 @@ impl PostingStorage {
         Ok((current_byte & (1 << bit_index)) != 0)
     }
 
+    /// Validate the integrity of the posting storage
+    ///
+    /// Performs comprehensive validation including header consistency,
+    /// data structure integrity, and cross-validation of metadata.
+    pub fn validate_integrity(&self) -> Result<(), ShardexError> {
+        // Validate header
+        self.header.validate()?;
+        
+        // Validate file header checksum against data
+        let data_start = PostingStorageHeader::SIZE;
+        let data_size = self.header.calculate_file_size() - PostingStorageHeader::SIZE;
+        
+        if data_start + data_size > self.mmap_file.len() {
+            return Err(ShardexError::Corruption(
+                "File size is inconsistent with header metadata".to_string(),
+            ));
+        }
+        
+        let data = &self.mmap_file.as_slice()[data_start..data_start + data_size];
+        self.header.file_header.validate_checksum(data)?;
+        
+        // Validate data structure consistency
+        self.validate_data_consistency()?;
+        
+        Ok(())
+    }
+
+    /// Validate internal data consistency
+    ///
+    /// Checks that active/deleted counts match actual data,
+    /// and that all data structures are consistent.
+    fn validate_data_consistency(&self) -> Result<(), ShardexError> {
+        let mut actual_active_count = 0u32;
+        
+        // Count actual active postings
+        for i in 0..self.current_count() {
+            if !self.is_deleted(i)? {
+                actual_active_count += 1;
+            }
+        }
+        
+        // Check active count consistency
+        if actual_active_count != self.header.active_count {
+            return Err(ShardexError::Corruption(format!(
+                "Active count mismatch: header claims {}, actual count is {}",
+                self.header.active_count, actual_active_count
+            )));
+        }
+        
+        // Validate that all data within bounds makes sense
+        for i in 0..self.current_count() {
+            let (doc_id, start, length) = self.read_posting_at_index(i)?;
+            
+            // Basic sanity checks on the data
+            if length > u32::MAX / 2 {
+                return Err(ShardexError::Corruption(format!(
+                    "Posting {} has unreasonable length: {}",
+                    i, length
+                )));
+            }
+            
+            // Check for overflow in position + length
+            if let Some(end_pos) = start.checked_add(length) {
+                if end_pos < start {
+                    return Err(ShardexError::Corruption(format!(
+                        "Posting {} has invalid range: start={}, length={}",
+                        i, start, length
+                    )));
+                }
+            } else {
+                return Err(ShardexError::Corruption(format!(
+                    "Posting {} position overflow: start={}, length={}",
+                    i, start, length
+                )));
+            }
+            
+            // Validate document ID is not all zeros (which would be invalid)
+            if doc_id.raw() == 0 && !self.is_deleted(i)? {
+                return Err(ShardexError::Corruption(format!(
+                    "Active posting {} has invalid zero document ID",
+                    i
+                )));
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Get the underlying memory-mapped file for external integrity validation
+    pub fn memory_mapped_file(&self) -> &MemoryMappedFile {
+        &self.mmap_file
+    }
+
     /// Update the header in the memory-mapped file
     fn update_header(&mut self) -> Result<(), ShardexError> {
         // Update checksum
