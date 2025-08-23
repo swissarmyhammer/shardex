@@ -70,6 +70,7 @@
 //! ```
 
 use crate::config::ShardexConfig;
+use crate::deduplication::{DeduplicationPolicy, ResultDeduplicator};
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, ShardId};
 use crate::shard::{Shard, ShardMetadata as BaseShardMetadata};
@@ -152,6 +153,8 @@ pub struct ShardexIndex {
     shard_cache: HashMap<ShardId, Shard>,
     /// Maximum number of shards to keep in cache
     cache_limit: usize,
+    /// Deduplication policy for search results
+    deduplication_policy: DeduplicationPolicy,
 }
 
 impl ShardexMetadata {
@@ -291,6 +294,7 @@ impl ShardexIndex {
             segment_capacity: config.shardex_segment_size,
             shard_cache: HashMap::new(),
             cache_limit: 100, // Default cache limit
+            deduplication_policy: config.deduplication_policy,
         })
     }
 
@@ -324,6 +328,7 @@ impl ShardexIndex {
             segment_capacity: metadata.segment_capacity,
             shard_cache: HashMap::new(),
             cache_limit: 100,
+            deduplication_policy: DeduplicationPolicy::default(),
         };
 
         // Discover and load existing shards
@@ -655,8 +660,8 @@ impl ShardexIndex {
 
         let all_shard_results = shard_results?;
 
-        // Merge and rank results from all shards
-        let final_results = Self::merge_results(all_shard_results, k);
+        // Merge and rank results from all shards using configured deduplication policy
+        let final_results = Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
 
         Ok(final_results)
     }
@@ -677,74 +682,43 @@ impl ShardexIndex {
     /// - Memory efficient: processes results in streaming fashion
     ///
     /// # Deduplication
-    /// Results are deduplicated based on (document_id, start) pairs to avoid
+    /// Results are deduplicated based on configured policy to avoid
     /// returning duplicate entries from overlapping shard boundaries.
     fn merge_results(shard_results: Vec<Vec<SearchResult>>, k: usize) -> Vec<SearchResult> {
-        use std::cmp::Reverse;
-        use std::collections::HashSet;
+        Self::merge_results_with_policy(shard_results, k, DeduplicationPolicy::default())
+    }
 
+    /// Merge results from multiple shards with configurable deduplication policy
+    ///
+    /// # Arguments
+    /// * `shard_results` - Vector of result vectors, one per shard
+    /// * `k` - Maximum number of results to return
+    /// * `policy` - Deduplication policy to apply
+    ///
+    /// # Returns
+    /// Vector of deduplicated results, sorted by similarity score (descending)
+    fn merge_results_with_policy(
+        shard_results: Vec<Vec<SearchResult>>,
+        k: usize,
+        policy: DeduplicationPolicy,
+    ) -> Vec<SearchResult> {
         if k == 0 {
             return Vec::new();
         }
 
-        // Use a min-heap to keep track of top-k results
-        // We use Reverse to convert BinaryHeap (max-heap) to min-heap behavior
-        let mut top_k_heap: BinaryHeap<Reverse<ScoredResult>> = BinaryHeap::new();
+        // Flatten all results into a single vector
+        let all_results: Vec<SearchResult> = shard_results.into_iter().flatten().collect();
 
-        // Set to track unique (document_id, start) pairs for deduplication
-        let mut seen_results: HashSet<(u128, u32)> = HashSet::new();
+        // Apply deduplication using the new system
+        let mut deduplicator = ResultDeduplicator::new(policy);
+        let mut deduplicated_results = deduplicator.deduplicate(all_results);
 
-        // Process all results from all shards
-        for results in shard_results {
-            for result in results {
-                let key = (result.document_id.raw(), result.start);
-
-                // Skip duplicates
-                if seen_results.contains(&key) {
-                    continue;
-                }
-
-                let scored_result = ScoredResult {
-                    similarity_score: result.similarity_score,
-                    result,
-                };
-
-                if top_k_heap.len() < k {
-                    // Heap not full, add this result
-                    seen_results.insert(key);
-                    top_k_heap.push(Reverse(scored_result));
-                } else if let Some(Reverse(worst)) = top_k_heap.peek() {
-                    // Heap is full, check if this result is better than the worst
-                    if scored_result.similarity_score > worst.similarity_score {
-                        // Remove the worst result from tracking
-                        if let Some(Reverse(removed)) = top_k_heap.pop() {
-                            let removed_key =
-                                (removed.result.document_id.raw(), removed.result.start);
-                            seen_results.remove(&removed_key);
-                        }
-
-                        // Add the new better result
-                        seen_results.insert(key);
-                        top_k_heap.push(Reverse(scored_result));
-                    }
-                }
-            }
+        // Limit to k results (already sorted by deduplicator)
+        if deduplicated_results.len() > k {
+            deduplicated_results.truncate(k);
         }
 
-        // Extract results from heap and sort by similarity score (descending)
-        let mut final_results: Vec<SearchResult> = top_k_heap
-            .into_iter()
-            .map(|Reverse(scored)| scored.result)
-            .collect();
-
-        // Sort by similarity score in descending order (best first)
-        final_results.sort_by(|a, b| {
-            b.similarity_score
-                .partial_cmp(&a.similarity_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        final_results
+        deduplicated_results
     }
 
     /// Get a shard instance by ID
@@ -1187,6 +1161,7 @@ impl ShardexIndex {
             segment_capacity: self.segment_capacity,
             shard_cache: HashMap::new(), // Start with empty cache
             cache_limit: self.cache_limit,
+            deduplication_policy: self.deduplication_policy,
         })
     }
 
