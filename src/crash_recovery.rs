@@ -11,7 +11,7 @@ use crate::shardex_index::ShardexIndex;
 use crate::wal_replay::{RecoveryStats, WalReplayer};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Crash recovery statistics with performance metrics
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -88,7 +88,10 @@ impl CrashRecovery {
     /// Detect if a crash occurred by checking for incomplete operations
     pub async fn detect_crash(&mut self) -> Result<bool, ShardexError> {
         let start_time = Instant::now();
-        info!("Starting crash detection for index at {}", self.index_directory.display());
+        info!(
+            "Starting crash detection for index at {}",
+            self.index_directory.display()
+        );
 
         let mut crash_detected = false;
 
@@ -121,7 +124,7 @@ impl CrashRecovery {
             let wal_files = std::fs::read_dir(self.layout.wal_dir())
                 .map(|entries| entries.count())
                 .unwrap_or(0);
-            
+
             if wal_files > 0 {
                 info!("WAL files exist but no metadata - crash detected");
                 crash_detected = true;
@@ -132,20 +135,22 @@ impl CrashRecovery {
         if let Ok(entries) = std::fs::read_dir(self.layout.wal_dir()) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "log") {
+                if path.extension().is_some_and(|ext| ext == "log") {
                     // Try to open the WAL segment to check for corruption
                     match crate::wal::WalSegment::open(path.clone()) {
                         Ok(segment) => {
                             // Validate segment integrity
                             if let Err(e) = segment.validate_integrity() {
                                 warn!("Corrupted WAL segment {}: {}", path.display(), e);
-                                self.recovery_stats.add_corrupted_segment(path.display().to_string());
+                                self.recovery_stats
+                                    .add_corrupted_segment(path.display().to_string());
                                 crash_detected = true;
                             }
                         }
                         Err(e) => {
                             warn!("Failed to open WAL segment {}: {}", path.display(), e);
-                            self.recovery_stats.add_corrupted_segment(path.display().to_string());
+                            self.recovery_stats
+                                .add_corrupted_segment(path.display().to_string());
                             crash_detected = true;
                         }
                     }
@@ -239,10 +244,11 @@ impl CrashRecovery {
             Ok(()) => {
                 // Copy recovery statistics from the replayer
                 self.recovery_stats.recovery_stats = replayer.recovery_stats().clone();
-                
+
                 info!(
                     segments_processed = self.recovery_stats.recovery_stats.segments_processed,
-                    transactions_replayed = self.recovery_stats.recovery_stats.transactions_replayed,
+                    transactions_replayed =
+                        self.recovery_stats.recovery_stats.transactions_replayed,
                     operations_applied = self.recovery_stats.recovery_stats.operations_applied,
                     "WAL replay completed successfully"
                 );
@@ -252,7 +258,7 @@ impl CrashRecovery {
             Err(e) => {
                 // Copy partial recovery statistics even on error
                 self.recovery_stats.recovery_stats = replayer.recovery_stats().clone();
-                
+
                 // Check if we can continue with partial recovery
                 if self.recovery_stats.recovery_stats.transactions_replayed > 0 {
                     warn!(
@@ -260,10 +266,12 @@ impl CrashRecovery {
                         transactions_replayed = self.recovery_stats.recovery_stats.transactions_replayed,
                         "Partial WAL replay completed with errors - continuing with recovered data"
                     );
-                    
+
                     // Add the error to our statistics
-                    self.recovery_stats.recovery_stats.add_error(format!("Partial recovery error: {}", e));
-                    
+                    self.recovery_stats
+                        .recovery_stats
+                        .add_error(format!("Partial recovery error: {}", e));
+
                     Ok(replayer.into_index())
                 } else {
                     error!(error = %e, "WAL replay failed completely");
@@ -274,7 +282,10 @@ impl CrashRecovery {
     }
 
     /// Validate index consistency after recovery
-    pub async fn validate_consistency(&mut self, index: &mut ShardexIndex) -> Result<(), ShardexError> {
+    pub async fn validate_consistency(
+        &mut self,
+        index: &mut ShardexIndex,
+    ) -> Result<(), ShardexError> {
         info!("Starting consistency validation");
 
         // Validate shard structure integrity
@@ -284,15 +295,20 @@ impl CrashRecovery {
                 Ok(shard) => {
                     // Validate shard integrity
                     if let Err(e) = shard.validate_integrity() {
-                        let error_msg = format!("Shard {} failed integrity validation: {}", shard_id, e);
+                        let error_msg =
+                            format!("Shard {} failed integrity validation: {}", shard_id, e);
                         error!("{}", error_msg);
                         self.recovery_stats.recovery_stats.add_error(error_msg);
                         self.recovery_stats.consistency_valid = false;
-                        return Err(ShardexError::Corruption(format!("Shard integrity validation failed: {}", e)));
+                        return Err(ShardexError::Corruption(format!(
+                            "Shard integrity validation failed: {}",
+                            e
+                        )));
                     }
                 }
                 Err(e) => {
-                    let error_msg = format!("Failed to access shard {} for validation: {}", shard_id, e);
+                    let error_msg =
+                        format!("Failed to access shard {} for validation: {}", shard_id, e);
                     error!("{}", error_msg);
                     self.recovery_stats.recovery_stats.add_error(error_msg);
                     self.recovery_stats.consistency_valid = false;
@@ -373,8 +389,12 @@ mod tests {
         stats.add_corrupted_segment("segment_001.log");
         stats.add_corrupted_segment("segment_002.log");
         assert_eq!(stats.corrupted_segments.len(), 2);
-        assert!(stats.corrupted_segments.contains(&"segment_001.log".to_string()));
-        assert!(stats.corrupted_segments.contains(&"segment_002.log".to_string()));
+        assert!(stats
+            .corrupted_segments
+            .contains(&"segment_001.log".to_string()));
+        assert!(stats
+            .corrupted_segments
+            .contains(&"segment_002.log".to_string()));
     }
 
     #[test]
@@ -398,10 +418,10 @@ mod tests {
             .vector_size(128);
 
         let mut recovery = CrashRecovery::new(config);
-        
+
         // Create directories but no problematic files
         recovery.layout.create_directories().unwrap();
-        
+
         let crash_detected = recovery.detect_crash().await.unwrap();
         assert!(!crash_detected);
         assert!(!recovery.recovery_stats.crash_detected);
@@ -417,11 +437,11 @@ mod tests {
 
         let mut recovery = CrashRecovery::new(config);
         recovery.layout.create_directories().unwrap();
-        
+
         // Create a recovery lock file
         let lock_path = recovery.layout.root_path().join(".recovery_lock");
         std::fs::write(&lock_path, "test").unwrap();
-        
+
         let crash_detected = recovery.detect_crash().await.unwrap();
         assert!(crash_detected);
         assert!(recovery.recovery_stats.crash_detected);
@@ -436,11 +456,11 @@ mod tests {
 
         let mut recovery = CrashRecovery::new(config);
         recovery.layout.create_directories().unwrap();
-        
+
         // Create an empty metadata file
         let metadata_path = recovery.layout.root_path().join("shardex.meta");
         std::fs::write(&metadata_path, "").unwrap();
-        
+
         let crash_detected = recovery.detect_crash().await.unwrap();
         assert!(crash_detected);
         assert!(recovery.recovery_stats.crash_detected);
@@ -455,11 +475,11 @@ mod tests {
 
         let mut recovery = CrashRecovery::new(config);
         recovery.layout.create_directories().unwrap();
-        
+
         // Create a WAL file but no metadata
         let wal_path = recovery.layout.wal_dir().join("wal_000001.log");
         std::fs::write(&wal_path, "fake_wal_data").unwrap();
-        
+
         let crash_detected = recovery.detect_crash().await.unwrap();
         assert!(crash_detected);
         assert!(recovery.recovery_stats.crash_detected);
