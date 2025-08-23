@@ -18,7 +18,7 @@ const WAL_VERSION: u32 = 1;
 const RESERVED_SPACE_SIZE: usize = 9;
 
 /// Calculate the initial write position (after header and reserved space)
-const fn initial_write_position() -> usize {
+pub const fn initial_write_position() -> usize {
     StandardHeader::SIZE + RESERVED_SPACE_SIZE
 }
 
@@ -297,6 +297,18 @@ impl WalSegment {
 
         // Return the data offset (where the actual data starts, after header)
         Ok(current_pointer + WalRecordHeader::SIZE)
+    }
+
+    /// Append a WAL transaction to the segment
+    pub fn append_transaction(
+        &self,
+        transaction: &crate::transactions::WalTransaction,
+    ) -> Result<usize, ShardexError> {
+        // Serialize the transaction
+        let serialized = transaction.serialize()?;
+
+        // Append the serialized transaction data
+        self.append(&serialized)
     }
 
     /// Sync segment to disk

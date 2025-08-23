@@ -26,6 +26,14 @@ pub struct ShardId(u128);
 #[repr(transparent)]
 pub struct DocumentId(u128);
 
+/// Type-safe wrapper for transaction identifiers
+///
+/// TransactionId prevents mixing transaction identifiers with other identifiers
+/// at compile time and supports direct memory mapping via bytemuck traits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct TransactionId(u128);
+
 // SAFETY: ShardId is a transparent wrapper around u128, which is Pod
 unsafe impl Pod for ShardId {}
 // SAFETY: ShardId can be zero-initialized safely
@@ -35,6 +43,11 @@ unsafe impl Zeroable for ShardId {}
 unsafe impl Pod for DocumentId {}
 // SAFETY: DocumentId can be zero-initialized safely
 unsafe impl Zeroable for DocumentId {}
+
+// SAFETY: TransactionId is a transparent wrapper around u128, which is Pod
+unsafe impl Pod for TransactionId {}
+// SAFETY: TransactionId can be zero-initialized safely
+unsafe impl Zeroable for TransactionId {}
 
 impl ShardId {
     /// Generate a new ULID-based shard identifier
@@ -143,6 +156,63 @@ impl FromStr for ShardId {
 }
 
 impl FromStr for DocumentId {
+    type Err = ulid::DecodeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::from_ulid(Ulid::from_str(s)?))
+    }
+}
+
+impl TransactionId {
+    /// Generate a new ULID-based transaction identifier
+    pub fn new() -> Self {
+        Self(Ulid::new().0)
+    }
+
+    /// Create a TransactionId from a ULID
+    pub fn from_ulid(ulid: Ulid) -> Self {
+        Self(ulid.0)
+    }
+
+    /// Convert to ULID
+    pub fn as_ulid(self) -> Ulid {
+        Ulid(self.0)
+    }
+
+    /// Parse from string (alias for FromStr implementation)
+    pub fn parse_str(s: &str) -> Result<Self, ulid::DecodeError> {
+        Self::from_str(s)
+    }
+
+    /// Create from raw bytes (little-endian)
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(u128::from_le_bytes(bytes))
+    }
+
+    /// Convert to raw bytes (little-endian)
+    pub fn to_bytes(self) -> [u8; 16] {
+        self.0.to_le_bytes()
+    }
+
+    /// Get the raw u128 value (mainly for testing)
+    pub fn raw(self) -> u128 {
+        self.0
+    }
+}
+
+impl Default for TransactionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Display for TransactionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ulid())
+    }
+}
+
+impl FromStr for TransactionId {
     type Err = ulid::DecodeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
