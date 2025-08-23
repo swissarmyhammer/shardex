@@ -92,6 +92,7 @@ pub struct ShardexImpl {
 impl ShardexImpl {
     /// Create a new Shardex instance
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
+
         let index = ShardexIndex::create(config.clone())?;
         let layout = DirectoryLayout::new(&config.directory_path);
         let config_manager = ConfigurationManager::new(&config.directory_path);
@@ -201,6 +202,38 @@ impl ShardexImpl {
         Ok(())
     }
 
+    /// Calculate optimal batch configuration based on vector size and WAL segment size
+    fn calculate_batch_config(&self) -> BatchConfig {
+        let vector_size = self.config.vector_size;
+        let wal_segment_size = self.config.wal_segment_size;
+        
+        // Estimate serialized size per AddPosting operation:
+        // - WalTransactionHeader: ~32 bytes
+        // - WalRecordHeader: 8 bytes  
+        // - Operation overhead: ~29 bytes (tag + doc_id + start + length + vec_len)
+        // - Vector data: vector_size * 4 bytes
+        let estimated_operation_size = 29 + (vector_size * 4);
+        
+        // Target using ~50% of WAL segment size for safety margin
+        let target_batch_size = wal_segment_size / 2;
+        
+        // Calculate max operations that fit in target batch size
+        let max_ops_by_size = target_batch_size / (estimated_operation_size + 50); // +50 for transaction overhead
+        
+        // Use conservative limits: smaller of calculated limit or reasonable defaults
+        let max_operations_per_batch = std::cmp::min(max_ops_by_size, 1000).max(10); // At least 10, at most 1000
+        let max_batch_size_bytes = std::cmp::min(target_batch_size, 1024 * 1024); // At most 1MB
+        
+        info!("Calculated batch config: vector_size={}, wal_segment_size={}, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
+              vector_size, wal_segment_size, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
+        
+        BatchConfig {
+            batch_write_interval_ms: self.config.batch_write_interval_ms,
+            max_operations_per_batch,
+            max_batch_size_bytes,
+        }
+    }
+
     /// Initialize the WAL batch processor for transaction handling
     pub async fn initialize_batch_processor(&mut self) -> Result<(), ShardexError> {
         if self.batch_processor.is_some() {
@@ -209,12 +242,8 @@ impl ShardexImpl {
 
         info!("Initializing WAL batch processor for transaction handling");
 
-        // Create batch configuration
-        let batch_config = BatchConfig {
-            batch_write_interval_ms: self.config.batch_write_interval_ms,
-            max_operations_per_batch: 1000,
-            max_batch_size_bytes: 1024 * 1024, // 1MB
-        };
+        // Create batch configuration optimized for vector size and WAL segment size
+        let batch_config = self.calculate_batch_config();
 
         // Create batch processor
         let mut processor = BatchProcessor::new(
@@ -222,6 +251,7 @@ impl ShardexImpl {
             batch_config,
             Some(self.config.vector_size),
             self.layout.clone(),
+            self.config.wal_segment_size,
         );
 
         // Start the processor
@@ -1420,6 +1450,7 @@ impl Shardex for ShardexImpl {
         if postings.is_empty() {
             return Ok(());
         }
+
 
         debug!(
             "Adding {} postings to index with WAL transaction support",

@@ -39,6 +39,8 @@ pub struct BatchProcessor {
     command_sender: Option<mpsc::Sender<BatchProcessorCommand>>,
     /// Directory layout for WAL operations
     layout: DirectoryLayout,
+    /// WAL segment size in bytes
+    wal_segment_size: usize,
 }
 
 /// Commands for communicating with the batch processor background task
@@ -59,6 +61,7 @@ impl BatchProcessor {
         batch_config: BatchConfig,
         expected_vector_dimension: Option<usize>,
         layout: DirectoryLayout,
+        wal_segment_size: usize,
     ) -> Self {
         let shutdown_signal = Arc::new(AtomicBool::new(true)); // Start in shutdown state
 
@@ -71,6 +74,7 @@ impl BatchProcessor {
             expected_vector_dimension,
             command_sender: None,
             layout,
+            wal_segment_size,
         }
     }
 
@@ -90,7 +94,7 @@ impl BatchProcessor {
         // Create batch manager and WAL manager
         let mut batch_manager =
             WalBatchManager::new(self.batch_config.clone(), self.expected_vector_dimension);
-        let mut wal_manager = WalManager::new(self.layout.clone(), 8192); // 8KB segments
+        let mut wal_manager = WalManager::new(self.layout.clone(), self.wal_segment_size);
         wal_manager.initialize()?;
 
         // Transfer pending operations to the background task
@@ -330,7 +334,7 @@ mod tests {
 
         let batch_interval = Duration::from_millis(100);
         let batch_config = BatchConfig::default();
-        let processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
+        let processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         assert_eq!(processor.batch_interval(), batch_interval);
         assert!(!processor.is_running());
@@ -345,7 +349,7 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Should start successfully
         let result = processor.start().await;
@@ -377,7 +381,7 @@ mod tests {
         };
         let batch_interval = Duration::from_millis(50);
         let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone());
+            BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone(), 8192);
 
         // Start the processor
         processor.start().await.unwrap();
@@ -426,7 +430,7 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(20);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -460,7 +464,7 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(1000);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -489,7 +493,7 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Start processor
         processor.start().await.unwrap();
