@@ -71,6 +71,7 @@
 //! ## Index Statistics and Monitoring
 //!
 //! ```rust
+//! use std::time::Duration;
 //! use shardex::structures::IndexStats;
 //!
 //! let stats = IndexStats {
@@ -83,6 +84,11 @@
 //!     average_shard_utilization: 0.8,
 //!     vector_dimension: 128,
 //!     disk_usage: 52_428_800,       // ~50MB on disk
+//!     search_latency_p50: Duration::from_millis(10),
+//!     search_latency_p95: Duration::from_millis(25),
+//!     search_latency_p99: Duration::from_millis(50),
+//!     write_throughput: 1000.0,     // 1000 ops/sec
+//!     bloom_filter_hit_rate: 0.85,  // 85% hit rate
 //! };
 //!
 //! // Display provides human-readable formatting

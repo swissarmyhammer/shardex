@@ -331,6 +331,12 @@ impl PerformanceMonitor {
     }
 }
 
+impl Default for PerformanceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WriteMetrics {
     /// Get operations per second over last minute
     pub fn ops_per_second(&self) -> f64 {
@@ -428,6 +434,12 @@ impl HistoricalData {
     }
 }
 
+impl Default for HistoricalData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Trend analysis results
 #[derive(Debug, Clone, Default)]
 pub struct TrendAnalysis {
@@ -476,6 +488,12 @@ impl PercentileCalculator {
     /// Get sample count
     pub fn sample_count(&self) -> usize {
         self.samples.len()
+    }
+}
+
+impl Default for PercentileCalculator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
