@@ -300,10 +300,13 @@ impl WalSegment {
     }
 
     /// Append a WAL transaction to the segment
-    pub fn append_transaction(&self, transaction: &crate::transactions::WalTransaction) -> Result<usize, ShardexError> {
+    pub fn append_transaction(
+        &self,
+        transaction: &crate::transactions::WalTransaction,
+    ) -> Result<usize, ShardexError> {
         // Serialize the transaction
         let serialized = transaction.serialize()?;
-        
+
         // Append the serialized transaction data
         self.append(&serialized)
     }

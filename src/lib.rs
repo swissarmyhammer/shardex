@@ -33,8 +33,11 @@ pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use shard::{Shard, ShardMetadata};
 pub use shardex_index::{IndexStatistics, ShardexIndex, ShardexMetadata};
 pub use structures::{IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
+pub use transactions::{
+    BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction,
+    WalTransactionHeader,
+};
 pub use vector_storage::VectorStorage;
-pub use transactions::{BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction, WalTransactionHeader};
 pub use wal::{WalManager, WalSegment};
 
 /// Type alias for Results using ShardexError
