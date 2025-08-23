@@ -725,7 +725,7 @@ impl IntegrityChecker {
         if result.is_valid() {
             if let Err(enhanced_issue) = self.verify_vector_storage_checksums(&mmf).await {
                 result = ValidationResult::failure(
-                    enhanced_issue,
+                    *enhanced_issue,
                     start_time.elapsed(),
                     result.bytes_validated,
                     result.data_checksum,
@@ -756,7 +756,7 @@ impl IntegrityChecker {
         if result.is_valid() {
             if let Err(enhanced_issue) = self.verify_posting_storage_checksums(&mmf).await {
                 result = ValidationResult::failure(
-                    enhanced_issue,
+                    *enhanced_issue,
                     start_time.elapsed(),
                     result.bytes_validated,
                     result.data_checksum,
@@ -806,7 +806,7 @@ impl IntegrityChecker {
     async fn verify_vector_storage_checksums(
         &self,
         mmf: &MemoryMappedFile,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         use crate::vector_storage::VectorStorageHeader;
 
         let header: VectorStorageHeader = mmf.read_at(0).map_err(|e| CorruptionReport {
@@ -833,7 +833,7 @@ impl IntegrityChecker {
 
         let file_data = mmf.as_slice();
         if vector_data_start + aligned_size > file_data.len() {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
                 file_path: PathBuf::from("vector_storage"),
                 corruption_offset: Some(vector_data_start as u64),
@@ -843,7 +843,7 @@ impl IntegrityChecker {
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         // Verify that active vectors have reasonable values (not all NaN or infinity)
@@ -859,7 +859,7 @@ impl IntegrityChecker {
     async fn verify_posting_storage_checksums(
         &self,
         mmf: &MemoryMappedFile,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         use crate::posting_storage::PostingStorageHeader;
 
         let header: PostingStorageHeader = mmf.read_at(0).map_err(|e| CorruptionReport {
@@ -883,7 +883,7 @@ impl IntegrityChecker {
         let posting_data_end = header.calculate_file_size();
 
         if posting_data_end > file_data.len() {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::FileTruncation,
                 file_path: PathBuf::from("posting_storage"),
                 corruption_offset: Some(posting_data_start as u64),
@@ -893,7 +893,7 @@ impl IntegrityChecker {
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         // Verify individual posting structure validity
@@ -910,7 +910,7 @@ impl IntegrityChecker {
         &self,
         vector_data: &[u8],
         header: &crate::vector_storage::VectorStorageHeader,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         let vector_count = header.current_count as usize;
         let vector_dimension = header.vector_dimension as usize;
         let vector_size_bytes = vector_dimension * std::mem::size_of::<f32>();
@@ -965,7 +965,7 @@ impl IntegrityChecker {
             let zero_ratio = zero_vectors as f64 / total_vectors as f64;
 
             if nan_ratio > 0.1 {
-                return Err(CorruptionReport {
+                return Err(Box::new(CorruptionReport {
                     corruption_type: CorruptionType::DataCorruption,
                     file_path: PathBuf::from("vector_storage"),
                     corruption_offset: None,
@@ -984,11 +984,11 @@ impl IntegrityChecker {
                     severity: 0.8,
                     is_recoverable: true,
                     detected_at: SystemTime::now(),
-                });
+                }));
             }
 
             if infinite_ratio > 0.05 {
-                return Err(CorruptionReport {
+                return Err(Box::new(CorruptionReport {
                     corruption_type: CorruptionType::DataCorruption,
                     file_path: PathBuf::from("vector_storage"),
                     corruption_offset: None,
@@ -1006,11 +1006,11 @@ impl IntegrityChecker {
                     severity: 0.7,
                     is_recoverable: true,
                     detected_at: SystemTime::now(),
-                });
+                }));
             }
 
             if zero_ratio > 0.5 {
-                return Err(CorruptionReport {
+                return Err(Box::new(CorruptionReport {
                     corruption_type: CorruptionType::DataCorruption,
                     file_path: PathBuf::from("vector_storage"),
                     corruption_offset: None,
@@ -1028,7 +1028,7 @@ impl IntegrityChecker {
                     severity: 0.6,
                     is_recoverable: true,
                     detected_at: SystemTime::now(),
-                });
+                }));
             }
         }
 
@@ -1040,7 +1040,7 @@ impl IntegrityChecker {
         &self,
         _posting_data: &[u8],
         _header: &crate::posting_storage::PostingStorageHeader,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         // Placeholder for posting data quality verification
         // In a full implementation, this would:
         // 1. Verify posting headers are valid
@@ -1197,7 +1197,7 @@ impl IntegrityChecker {
             .verify_header_compatibility(&posting_mmf, &vector_mmf)
             .await
         {
-            return Ok(Some(issue));
+            return Ok(Some(*issue));
         }
 
         // Check capacity and count consistency
@@ -1205,7 +1205,7 @@ impl IntegrityChecker {
             .verify_capacity_consistency(&posting_mmf, &vector_mmf)
             .await
         {
-            return Ok(Some(issue));
+            return Ok(Some(*issue));
         }
 
         Ok(None)
@@ -1216,7 +1216,7 @@ impl IntegrityChecker {
         &self,
         posting_mmf: &MemoryMappedFile,
         vector_mmf: &MemoryMappedFile,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         use crate::posting_storage::PostingStorageHeader;
         use crate::vector_storage::VectorStorageHeader;
 
@@ -1249,7 +1249,7 @@ impl IntegrityChecker {
 
         // Verify capacity consistency
         if posting_header.capacity != vector_header.capacity {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::CrossValidationFailure,
                 file_path: PathBuf::from("cross_reference"),
                 corruption_offset: None,
@@ -1265,13 +1265,13 @@ impl IntegrityChecker {
                 severity: 0.8,
                 is_recoverable: true,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         // Verify vector dimension consistency (if we expect them to match the global config)
         let expected_vector_size = self.config.vector_size;
         if vector_header.vector_dimension as usize != expected_vector_size {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::CrossValidationFailure,
                 file_path: PathBuf::from("vector_file"),
                 corruption_offset: None,
@@ -1287,7 +1287,7 @@ impl IntegrityChecker {
                 severity: 0.9,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         Ok(())
@@ -1298,7 +1298,7 @@ impl IntegrityChecker {
         &self,
         posting_mmf: &MemoryMappedFile,
         vector_mmf: &MemoryMappedFile,
-    ) -> Result<(), CorruptionReport> {
+    ) -> Result<(), Box<CorruptionReport>> {
         use crate::posting_storage::PostingStorageHeader;
         use crate::vector_storage::VectorStorageHeader;
 
@@ -1330,7 +1330,7 @@ impl IntegrityChecker {
 
         // Check that the current counts are reasonable
         if posting_header.current_count > posting_header.capacity {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::StructuralInconsistency,
                 file_path: PathBuf::from("posting_file"),
                 corruption_offset: None,
@@ -1346,11 +1346,11 @@ impl IntegrityChecker {
                 severity: 0.9,
                 is_recoverable: true,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         if vector_header.current_count > vector_header.capacity {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::StructuralInconsistency,
                 file_path: PathBuf::from("vector_file"),
                 corruption_offset: None,
@@ -1366,12 +1366,12 @@ impl IntegrityChecker {
                 severity: 0.9,
                 is_recoverable: true,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         // Check count consistency between posting and vector storage
         if posting_header.current_count != vector_header.current_count {
-            return Err(CorruptionReport {
+            return Err(Box::new(CorruptionReport {
                 corruption_type: CorruptionType::CrossValidationFailure,
                 file_path: PathBuf::from("cross_reference"),
                 corruption_offset: None,
@@ -1388,7 +1388,7 @@ impl IntegrityChecker {
                 severity: 0.7,
                 is_recoverable: true,
                 detected_at: SystemTime::now(),
-            });
+            }));
         }
 
         Ok(())
