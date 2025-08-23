@@ -227,13 +227,13 @@ impl ShardexImpl {
     pub async fn update_config(&mut self, new_config: ShardexConfig) -> Result<(), ShardexError> {
         // Validate new configuration
         new_config.validate()?;
-        
+
         // Update persisted configuration with compatibility checking
         self.config_manager.update_config(&new_config).await?;
-        
+
         // Update in-memory configuration
         self.config = new_config;
-        
+
         debug!("Successfully updated configuration");
         Ok(())
     }
@@ -247,7 +247,7 @@ impl ShardexImpl {
     pub async fn restore_config_from_backup(&mut self) -> Result<(), ShardexError> {
         let restored_config = self.config_manager.restore_from_backup().await?;
         self.config = restored_config.config;
-        
+
         debug!("Successfully restored configuration from backup");
         Ok(())
     }
@@ -649,15 +649,15 @@ impl Shardex for ShardexImpl {
 
         // 5. Save persisted configuration
         let config_manager = ConfigurationManager::new(&config.directory_path);
-        
+
         // Use futures::executor::block_on for synchronous context
-        futures::executor::block_on(async {
-            config_manager.save_config(&config).await
-        }).map_err(|e| {
-            // Clean up on config save failure
-            let _ = std::fs::remove_dir_all(&config.directory_path);
-            ShardexError::Config(format!("Failed to save persisted configuration: {}", e))
-        })?;
+        futures::executor::block_on(async { config_manager.save_config(&config).await }).map_err(
+            |e| {
+                // Clean up on config save failure
+                let _ = std::fs::remove_dir_all(&config.directory_path);
+                ShardexError::Config(format!("Failed to save persisted configuration: {}", e))
+            },
+        )?;
 
         // 6. Create instance using new() which handles ShardexIndex creation
         let instance = Self::new(config.clone()).map_err(|e| {
@@ -728,7 +728,7 @@ impl Shardex for ShardexImpl {
                     e
                 ))
             })?;
-            
+
             persisted_config.config
         } else {
             // Fall back to metadata config for backward compatibility
