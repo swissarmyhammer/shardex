@@ -23,6 +23,7 @@ bytemuck = "1.14"
 ulid = "1.1"
 toml = "0.8"
 tracing = "0.1"
+crc32fast = "1.4"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

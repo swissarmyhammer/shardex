@@ -147,10 +147,10 @@ impl CowShardexIndex {
     /// - Consider batch modifications to minimize copy overhead
     pub fn clone_for_write(&self) -> Result<IndexWriter, ShardexError> {
         let current_index = self.read();
-        
+
         // Create a deep copy of the index for modification
         let modified_index = current_index.deep_clone()?;
-        
+
         Ok(IndexWriter {
             modified_index,
             cow_index_ref: Arc::clone(&self.inner),
@@ -213,15 +213,16 @@ impl IndexWriter {
     pub async fn commit_changes(self) -> Result<(), ShardexError> {
         // Create new Arc with the modified index
         let new_index = Arc::new(self.modified_index);
-        
+
         // Atomically swap the index - this is the only blocking operation
         {
-            let mut guard = self.cow_index_ref.write().map_err(|_| {
-                ShardexError::Config("RwLock poisoned during commit".to_string())
-            })?;
+            let mut guard = self
+                .cow_index_ref
+                .write()
+                .map_err(|_| ShardexError::Config("RwLock poisoned during commit".to_string()))?;
             *guard = new_index;
         }
-        
+
         Ok(())
     }
 
@@ -315,8 +316,10 @@ mod tests {
         let cow_index = CowShardexIndex::new(index);
 
         // Should be able to create a writer
-        let writer = cow_index.clone_for_write().expect("Failed to create writer");
-        
+        let writer = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer");
+
         // Writer should have access to the index
         assert_eq!(writer.index().shard_count(), 0);
     }
@@ -335,10 +338,15 @@ mod tests {
         let initial_count = cow_index.shard_count();
 
         // Create a writer and modify (we'll simulate a change)
-        let writer = cow_index.clone_for_write().expect("Failed to create writer");
-        
+        let writer = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer");
+
         // Commit the changes
-        writer.commit_changes().await.expect("Failed to commit changes");
+        writer
+            .commit_changes()
+            .await
+            .expect("Failed to commit changes");
 
         // The count should still be the same since we didn't actually add shards
         assert_eq!(cow_index.shard_count(), initial_count);
@@ -362,7 +370,7 @@ mod tests {
         for _ in 0..4 {
             let cow_index_clone = Arc::clone(&cow_index);
             let read_count_clone = Arc::clone(&read_count);
-            
+
             let handle = thread::spawn(move || {
                 for _ in 0..10 {
                     let _reader = cow_index_clone.read();
@@ -370,7 +378,7 @@ mod tests {
                     thread::sleep(Duration::from_millis(1));
                 }
             });
-            
+
             handles.push(handle);
         }
 
@@ -399,7 +407,7 @@ mod tests {
         // Start readers
         let cow_index_clone = Arc::clone(&cow_index);
         let concurrent_reads_clone = Arc::clone(&concurrent_reads);
-        
+
         let reader_handle = thread::spawn(move || {
             for _ in 0..100 {
                 let _reader = cow_index_clone.read();
@@ -409,11 +417,13 @@ mod tests {
         });
 
         // Perform write operations
-        let writer = cow_index.clone_for_write().expect("Failed to create writer");
-        
+        let writer = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer");
+
         // Simulate some processing time
         thread::sleep(Duration::from_millis(50));
-        
+
         writer.commit_changes().await.expect("Failed to commit");
 
         // Wait for reader to finish
@@ -421,7 +431,11 @@ mod tests {
 
         // Readers should have been able to read concurrently
         let read_count = concurrent_reads.load(Ordering::SeqCst);
-        assert!(read_count > 0, "Expected concurrent reads, got {}", read_count);
+        assert!(
+            read_count > 0,
+            "Expected concurrent reads, got {}",
+            read_count
+        );
     }
 
     #[test]
@@ -435,12 +449,16 @@ mod tests {
         let cow_index = CowShardexIndex::new(index);
 
         // Create multiple writers (but use them sequentially)
-        let writer1 = cow_index.clone_for_write().expect("Failed to create writer1");
-        let writer2 = cow_index.clone_for_write().expect("Failed to create writer2");
+        let writer1 = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer1");
+        let writer2 = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer2");
 
         // Both writers should have independent copies
         assert_eq!(writer1.index().shard_count(), writer2.index().shard_count());
-        
+
         // Discard both writers
         writer1.discard();
         writer2.discard();
@@ -459,10 +477,14 @@ mod tests {
 
         // Both handles should see the same data
         assert_eq!(cow_index1.shard_count(), cow_index2.shard_count());
-        
+
         // Both should be able to create writers
-        let _writer1 = cow_index1.clone_for_write().expect("Failed to create writer from clone1");
-        let _writer2 = cow_index2.clone_for_write().expect("Failed to create writer from clone2");
+        let _writer1 = cow_index1
+            .clone_for_write()
+            .expect("Failed to create writer from clone1");
+        let _writer2 = cow_index2
+            .clone_for_write()
+            .expect("Failed to create writer from clone2");
     }
 
     #[test]
@@ -491,8 +513,10 @@ mod tests {
         let index = ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
 
-        let writer = cow_index.clone_for_write().expect("Failed to create writer");
-        
+        let writer = cow_index
+            .clone_for_write()
+            .expect("Failed to create writer");
+
         // Writer should be able to get stats for its local copy
         let stats = writer.stats().expect("Failed to get writer stats");
         assert_eq!(stats.vector_dimension, 128);
@@ -514,10 +538,10 @@ mod tests {
 
         assert_send::<CowShardexIndex>();
         assert_sync::<CowShardexIndex>();
-        
+
         // Writers should be Send but not Sync (mutable access)
         assert_send::<IndexWriter>();
-        
+
         // This should compile, proving thread safety
         let _: Arc<CowShardexIndex> = Arc::new(cow_index);
     }

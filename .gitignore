@@ -2,10 +2,10 @@ semantic.db
 mcp.log
 .swissarmyhammer/tmp
 .swissarmyhammer/workflow-runs/
+.swissarmyhammer/todo/
 target/
 
 # Rust
-Cargo.lock
 *.pdb
 
 # Editor files
