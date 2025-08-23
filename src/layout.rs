@@ -46,7 +46,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const LAYOUT_VERSION: u32 = 1;
 
 /// Metadata file name
-pub const METADATA_FILE: &str = "shardex.meta";
+pub const METADATA_FILE: &str = "layout.meta";
 
 /// Directory names
 pub const CENTROIDS_DIR: &str = "centroids";
