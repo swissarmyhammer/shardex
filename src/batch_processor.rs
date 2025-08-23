@@ -109,7 +109,9 @@ impl BatchProcessor {
                 match batch_manager.add_operation(operation) {
                     Ok(should_flush) => {
                         if should_flush {
-                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                            if let Err(e) =
+                                Self::flush_batch(&mut batch_manager, &mut wal_manager).await
+                            {
                                 error!("Failed to flush batch from pending operations: {}", e);
                             }
                         }
@@ -309,8 +311,6 @@ impl BatchProcessor {
             }
         }
     }
-
-
 }
 
 #[cfg(test)]

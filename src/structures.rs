@@ -554,6 +554,137 @@ impl Display for IndexStats {
     }
 }
 
+/// Statistics and performance metrics for flush operations
+///
+/// FlushStats provides detailed timing information and metrics for flush operations,
+/// enabling performance monitoring and optimization of the durability guarantees.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlushStats {
+    /// Time spent flushing WAL operations
+    pub wal_flush_duration: std::time::Duration,
+    /// Time spent applying operations to shards
+    pub shard_apply_duration: std::time::Duration,
+    /// Time spent synchronizing shard data to disk
+    pub shard_sync_duration: std::time::Duration,
+    /// Time spent on consistency validation
+    pub validation_duration: std::time::Duration,
+    /// Total flush operation duration
+    pub total_duration: std::time::Duration,
+    /// Number of shards synchronized to disk
+    pub shards_synced: usize,
+    /// Number of operations applied during flush
+    pub operations_applied: usize,
+    /// Number of bytes synchronized to disk
+    pub bytes_synced: u64,
+}
+
+impl FlushStats {
+    /// Create new flush stats with zero values
+    pub fn new() -> Self {
+        Self {
+            wal_flush_duration: std::time::Duration::ZERO,
+            shard_apply_duration: std::time::Duration::ZERO,
+            shard_sync_duration: std::time::Duration::ZERO,
+            validation_duration: std::time::Duration::ZERO,
+            total_duration: std::time::Duration::ZERO,
+            shards_synced: 0,
+            operations_applied: 0,
+            bytes_synced: 0,
+        }
+    }
+
+    /// Get total flush duration in milliseconds
+    pub fn total_duration_ms(&self) -> u64 {
+        self.total_duration.as_millis() as u64
+    }
+
+    /// Get WAL flush duration in milliseconds
+    pub fn wal_flush_duration_ms(&self) -> u64 {
+        self.wal_flush_duration.as_millis() as u64
+    }
+
+    /// Get shard synchronization duration in milliseconds
+    pub fn shard_sync_duration_ms(&self) -> u64 {
+        self.shard_sync_duration.as_millis() as u64
+    }
+
+    /// Get validation duration in milliseconds
+    pub fn validation_duration_ms(&self) -> u64 {
+        self.validation_duration.as_millis() as u64
+    }
+
+    /// Calculate sync throughput in MB/s
+    pub fn sync_throughput_mbps(&self) -> f64 {
+        if self.shard_sync_duration.is_zero() {
+            0.0
+        } else {
+            let mb_synced = self.bytes_synced as f64 / (1024.0 * 1024.0);
+            let seconds = self.shard_sync_duration.as_secs_f64();
+            mb_synced / seconds
+        }
+    }
+
+    /// Calculate operations per second applied during flush
+    pub fn operations_per_second(&self) -> f64 {
+        if self.shard_apply_duration.is_zero() {
+            0.0
+        } else {
+            let seconds = self.shard_apply_duration.as_secs_f64();
+            self.operations_applied as f64 / seconds
+        }
+    }
+
+    /// Check if this was a fast flush (< 100ms total)
+    pub fn is_fast_flush(&self) -> bool {
+        self.total_duration < std::time::Duration::from_millis(100)
+    }
+
+    /// Check if this was a slow flush (> 1000ms total)
+    pub fn is_slow_flush(&self) -> bool {
+        self.total_duration > std::time::Duration::from_millis(1000)
+    }
+
+    /// Get the most time-consuming phase of the flush
+    pub fn slowest_phase(&self) -> &'static str {
+        let durations = [
+            ("wal_flush", self.wal_flush_duration),
+            ("shard_apply", self.shard_apply_duration),
+            ("shard_sync", self.shard_sync_duration),
+            ("validation", self.validation_duration),
+        ];
+
+        durations
+            .iter()
+            .max_by_key(|(_, duration)| *duration)
+            .map(|(name, _)| *name)
+            .unwrap_or("unknown")
+    }
+}
+
+impl Default for FlushStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Display for FlushStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FlushStats {{ total: {}ms, wal: {}ms, apply: {}ms, sync: {}ms, validation: {}ms, \
+             shards: {}, ops: {}, throughput: {:.2}MB/s }}",
+            self.total_duration_ms(),
+            self.wal_flush_duration_ms(),
+            self.shard_apply_duration.as_millis(),
+            self.shard_sync_duration_ms(),
+            self.validation_duration_ms(),
+            self.shards_synced,
+            self.operations_applied,
+            self.sync_throughput_mbps()
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -84,8 +84,6 @@ impl ShardId {
     pub fn raw(self) -> u128 {
         self.0
     }
-
-
 }
 
 impl DocumentId {
