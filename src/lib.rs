@@ -15,6 +15,7 @@ pub mod integrity;
 pub mod layout;
 pub mod memory;
 pub mod posting_storage;
+pub mod search_coordinator;
 pub mod shard;
 pub mod shardex;
 pub mod shardex_index;
@@ -38,6 +39,9 @@ pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, Validat
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
+pub use search_coordinator::{
+    PerformanceMonitor, SearchCoordinator, SearchCoordinatorConfig, SearchMetrics,
+};
 pub use shard::{Shard, ShardMetadata};
 pub use shardex::{Shardex, ShardexImpl};
 pub use shardex_index::{IndexStatistics, ShardexIndex, ShardexMetadata};
