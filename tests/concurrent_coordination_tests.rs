@@ -453,7 +453,10 @@ async fn test_reader_writer_isolation() {
         let snapshot = reader_snapshot.lock().unwrap();
         *snapshot
     };
-    assert!(snapshot_value.is_some(), "Reader should have captured a snapshot");
+    assert!(
+        snapshot_value.is_some(),
+        "Reader should have captured a snapshot"
+    );
 
     // Verify that a new reader sees the current state
     let current_state = concurrent
