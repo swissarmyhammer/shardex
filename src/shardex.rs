@@ -92,7 +92,6 @@ pub struct ShardexImpl {
 impl ShardexImpl {
     /// Create a new Shardex instance
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
-
         let index = ShardexIndex::create(config.clone())?;
         let layout = DirectoryLayout::new(&config.directory_path);
         let config_manager = ConfigurationManager::new(&config.directory_path);
@@ -206,39 +205,39 @@ impl ShardexImpl {
     fn calculate_batch_config(&self) -> BatchConfig {
         let vector_size = self.config.vector_size;
         let wal_segment_size = self.config.wal_segment_size;
-        
+
         // Estimate serialized size per AddPosting operation based on WAL format:
         // - WalTransactionHeader: ~32 bytes (transaction ID, timestamp, record count, checksum)
-        // - WalRecordHeader: 8 bytes (record type, payload length)  
+        // - WalRecordHeader: 8 bytes (record type, payload length)
         // - Operation overhead: 29 bytes broken down as:
         //   * Operation type enum: 1 byte
-        //   * DocumentId (u128): 16 bytes  
+        //   * DocumentId (u128): 16 bytes
         //   * start field (u64): 8 bytes
         //   * length field (u32): 4 bytes
         // - Vector data: vector_size * sizeof(f32) = vector_size * 4 bytes
         let estimated_operation_size = 29 + (vector_size * 4);
-        
+
         // Target using configurable percentage of WAL segment size as safety margin to account for:
         // - WAL segment headers and metadata
-        // - Potential fragmentation within segments  
+        // - Potential fragmentation within segments
         // - Space needed for other concurrent transactions
         let safety_margin = self.config.wal_safety_margin;
         let target_batch_size = (wal_segment_size as f32 * (1.0 - safety_margin)) as usize;
-        
+
         // Calculate max operations that fit in target batch size
         // Additional 50 bytes accounts for transaction-level overhead:
         // - Batch metadata and headers
         // - Serialization padding and alignment
         // - Transaction commit markers
         let max_ops_by_size = target_batch_size / (estimated_operation_size + 50);
-        
+
         // Use conservative limits: smaller of calculated limit or reasonable defaults
         let max_operations_per_batch = std::cmp::min(max_ops_by_size, 1000).max(10); // At least 10, at most 1000
         let max_batch_size_bytes = target_batch_size; // Use calculated target size based on WAL segment
-        
+
         info!("Calculated batch config: vector_size={}, wal_segment_size={}, safety_margin={:.1}%, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
               vector_size, wal_segment_size, safety_margin * 100.0, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
-        
+
         BatchConfig {
             batch_write_interval_ms: self.config.batch_write_interval_ms,
             max_operations_per_batch,
@@ -1323,13 +1322,11 @@ impl Shardex for ShardexImpl {
         let config_manager = ConfigurationManager::new(&config.directory_path);
 
         // Call save_config directly as we're already in an async context
-        config_manager.save_config(&config).await.map_err(
-            |e| {
-                // Clean up on config save failure
-                let _ = std::fs::remove_dir_all(&config.directory_path);
-                ShardexError::Config(format!("Failed to save persisted configuration: {}", e))
-            },
-        )?;
+        config_manager.save_config(&config).await.map_err(|e| {
+            // Clean up on config save failure
+            let _ = std::fs::remove_dir_all(&config.directory_path);
+            ShardexError::Config(format!("Failed to save persisted configuration: {}", e))
+        })?;
 
         // 6. Create instance using new() which handles ShardexIndex creation
         let instance = Self::new(config.clone()).map_err(|e| {
@@ -1462,7 +1459,6 @@ impl Shardex for ShardexImpl {
         if postings.is_empty() {
             return Ok(());
         }
-
 
         debug!(
             "Adding {} postings to index with WAL transaction support",

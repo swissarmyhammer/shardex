@@ -349,7 +349,8 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
+        let mut processor =
+            BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Should start successfully
         let result = processor.start().await;
@@ -430,7 +431,8 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(20);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
+        let mut processor =
+            BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -464,7 +466,8 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(1000);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
+        let mut processor =
+            BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -493,7 +496,8 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
+        let mut processor =
+            BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Start processor
         processor.start().await.unwrap();
