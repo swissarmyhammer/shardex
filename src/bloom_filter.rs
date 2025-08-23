@@ -538,14 +538,14 @@ mod tests {
 
         // For 1000 elements with 1% false positive rate, should need roughly 9600 bits
         assert!(
-            bits >= 9000 && bits <= 10000,
+            (9000..=10000).contains(&bits),
             "Expected ~9600 bits, got {}",
             bits
         );
 
         // Should use multiple hash functions for good distribution
         assert!(
-            hash_funcs >= 3 && hash_funcs <= 10,
+            (3..=10).contains(&hash_funcs),
             "Expected 3-10 hash functions, got {}",
             hash_funcs
         );
@@ -755,7 +755,7 @@ mod tests {
 
         // Test Pod trait - should be able to cast to bytes
         let bytes: &[u8] = bytemuck::bytes_of(&header);
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
 
         // Test round-trip
         let header_restored: BloomFilterHeader = bytemuck::pod_read_unaligned(bytes);
