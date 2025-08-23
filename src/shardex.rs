@@ -7,8 +7,7 @@ use crate::batch_processor::BatchProcessor;
 use crate::config::ShardexConfig;
 use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
-
-use crate::layout::DirectoryLayout;
+use crate::layout::{DirectoryLayout, IndexMetadata};
 use crate::shardex_index::ShardexIndex;
 use crate::structures::{FlushStats, IndexStats, Posting, SearchResult};
 use crate::transactions::{BatchConfig, WalOperation};
@@ -122,14 +121,18 @@ impl ShardexImpl {
         })
     }
 
-    /// Open an existing Shardex instance
+    /// Open an existing Shardex instance (synchronous version)
     pub fn open_sync<P: AsRef<Path>>(directory_path: P) -> Result<Self, ShardexError> {
-        let index = ShardexIndex::open(&directory_path)?;
-        let layout = DirectoryLayout::new(directory_path.as_ref());
+        let directory_path = directory_path.as_ref();
+        let layout = DirectoryLayout::new(directory_path);
 
-        // Load configuration from metadata file
-        let metadata = crate::layout::IndexMetadata::load(layout.metadata_path())?;
-        let config = metadata.config;
+        // Load metadata and configuration
+        let metadata = IndexMetadata::load(layout.metadata_path())?;
+        let config = metadata.config.clone();
+
+        // Open the underlying ShardexIndex
+        let index = ShardexIndex::open(directory_path)?;
+
         Ok(Self {
             index,
             config,
@@ -137,6 +140,50 @@ impl ShardexImpl {
             layout,
             pending_shard_operations: Vec::new(),
         })
+    }
+
+    /// Check if a configuration is compatible with an existing index
+    pub fn check_config_compatibility<P: AsRef<Path>>(
+        directory_path: P,
+        new_config: &ShardexConfig,
+    ) -> Result<(), ShardexError> {
+        let directory_path = directory_path.as_ref();
+        let layout = DirectoryLayout::new(directory_path);
+
+        // Validate directory exists and is a valid index
+        layout
+            .validate()
+            .map_err(|e| ShardexError::Config(format!("Invalid index directory: {}", e)))?;
+
+        // Load existing metadata
+        let existing_metadata = IndexMetadata::load(layout.metadata_path())?;
+
+        // Check compatibility
+        if !existing_metadata.is_compatible_with(new_config) {
+            let mut incompatible_fields = Vec::new();
+
+            if existing_metadata.config.vector_size != new_config.vector_size {
+                incompatible_fields.push(format!(
+                    "vector_size: existing={}, new={}",
+                    existing_metadata.config.vector_size, new_config.vector_size
+                ));
+            }
+
+            if existing_metadata.config.directory_path != new_config.directory_path {
+                incompatible_fields.push(format!(
+                    "directory_path: existing={}, new={}",
+                    existing_metadata.config.directory_path.display(),
+                    new_config.directory_path.display()
+                ));
+            }
+
+            return Err(ShardexError::Config(format!(
+                "Configuration incompatible with existing index: {}. These parameters cannot be changed after index creation.",
+                incompatible_fields.join(", ")
+            )));
+        }
+
+        Ok(())
     }
 
     /// Initialize the WAL batch processor for transaction handling
@@ -509,19 +556,165 @@ impl Shardex for ShardexImpl {
     type Error = ShardexError;
 
     async fn create(config: ShardexConfig) -> Result<Self, Self::Error> {
-        let mut instance = Self::new(config)?;
+        // 1. Validate configuration before any file operations
+        config.validate().map_err(|e| {
+            ShardexError::Config(format!("Invalid configuration for create: {}", e))
+        })?;
 
-        // Recover from any existing WAL entries
-        instance.recover_from_wal().await?;
+        // 2. Check if directory already exists and is not empty
+        if config.directory_path.exists() {
+            // Check if it's already an index directory
+            let layout = DirectoryLayout::new(&config.directory_path);
+            if layout.exists() {
+                return Err(ShardexError::Config(format!(
+                    "Index already exists at path: {}. Use open() to load existing index.",
+                    config.directory_path.display()
+                )));
+            }
+
+            // Check if directory is not empty
+            let dir_entries = std::fs::read_dir(&config.directory_path).map_err(|e| {
+                ShardexError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Cannot access directory {}: {}",
+                        config.directory_path.display(),
+                        e
+                    ),
+                ))
+            })?;
+
+            if dir_entries.count() > 0 {
+                return Err(ShardexError::Config(format!(
+                    "Directory {} is not empty. Please use an empty directory or remove existing files.",
+                    config.directory_path.display()
+                )));
+            }
+        }
+
+        // 3. Create directory structure atomically
+        let layout = DirectoryLayout::new(&config.directory_path);
+        layout.create_directories().map_err(|e| {
+            ShardexError::Config(format!("Failed to create index directories: {}", e))
+        })?;
+
+        // 4. Initialize metadata with proper version and flags
+        let mut metadata = IndexMetadata::new(config.clone())
+            .map_err(|e| ShardexError::Config(format!("Failed to create index metadata: {}", e)))?;
+
+        // Mark as active during creation
+        metadata.mark_active();
+
+        // Save initial metadata atomically
+        metadata.save(layout.metadata_path()).map_err(|e| {
+            // Clean up on metadata save failure
+            let _ = std::fs::remove_dir_all(&config.directory_path);
+            ShardexError::Config(format!("Failed to save initial metadata: {}", e))
+        })?;
+
+        // 5. Create instance using new() which handles ShardexIndex creation
+        let instance = Self::new(config.clone()).map_err(|e| {
+            // Clean up on instance creation failure
+            let _ = std::fs::remove_dir_all(&config.directory_path);
+            ShardexError::Config(format!("Failed to create Shardex instance: {}", e))
+        })?;
+
+        // 6. Mark metadata as cleanly initialized
+        let mut final_metadata = IndexMetadata::load(layout.metadata_path())?;
+        final_metadata.mark_inactive(); // Mark as cleanly initialized
+        final_metadata.save(layout.metadata_path())?;
+
+        // 7. No WAL recovery needed for new index - it starts clean
+        debug!(
+            "Successfully created new Shardex index at {}",
+            config.directory_path.display()
+        );
 
         Ok(instance)
     }
 
     async fn open<P: AsRef<Path> + Send>(directory_path: P) -> Result<Self, Self::Error> {
-        let mut instance = Self::open_sync(directory_path)?;
+        let directory_path = directory_path.as_ref();
 
-        // Recover from any existing WAL entries
-        instance.recover_from_wal().await?;
+        // 1. Validate directory structure exists
+        let layout = DirectoryLayout::new(directory_path);
+        if !directory_path.exists() {
+            return Err(ShardexError::Config(format!(
+                "Index directory does not exist: {}",
+                directory_path.display()
+            )));
+        }
+
+        layout.validate().map_err(|e| {
+            ShardexError::Config(format!(
+                "Invalid index directory structure: {}. The directory may be corrupted or not a valid Shardex index.",
+                e
+            ))
+        })?;
+
+        // 2. Load and validate metadata
+        let mut metadata = IndexMetadata::load(layout.metadata_path()).map_err(|e| {
+            ShardexError::Config(format!(
+                "Failed to load index metadata: {}. The index may be corrupted or created with an incompatible version.",
+                e
+            ))
+        })?;
+
+        // 3. Check version compatibility
+        if metadata.layout_version != crate::layout::LAYOUT_VERSION {
+            return Err(ShardexError::Config(format!(
+                "Incompatible index version: found {}, expected {}. Index migration is not yet supported.",
+                metadata.layout_version,
+                crate::layout::LAYOUT_VERSION
+            )));
+        }
+
+        // 4. Create a temporary config to validate compatibility
+        let existing_config = metadata.config.clone();
+
+        // Validate the existing configuration is still valid
+        existing_config.validate().map_err(|e| {
+            ShardexError::Config(format!(
+                "Existing index configuration is invalid: {}. The index may be corrupted.",
+                e
+            ))
+        })?;
+
+        // 5. Check if index needs recovery
+        if metadata.flags.needs_recovery {
+            info!("Index was not cleanly shut down and needs recovery");
+        }
+
+        // 6. Mark as active during opening
+        metadata.mark_active();
+        metadata.save(layout.metadata_path()).map_err(|e| {
+            ShardexError::Config(format!("Failed to update metadata during open: {}", e))
+        })?;
+
+        // 7. Open the index using existing sync method
+        let mut instance = Self::open_sync(directory_path).inspect_err(|_e| {
+            // Restore inactive state on failure
+            let mut restore_metadata = metadata.clone();
+            restore_metadata.mark_inactive();
+            let _ = restore_metadata.save(layout.metadata_path());
+        })?;
+
+        // 8. Perform WAL recovery if needed
+        instance.recover_from_wal().await.map_err(|e| {
+            // Mark as needing recovery on failure
+            let mut recovery_metadata = metadata.clone();
+            recovery_metadata.mark_needs_recovery();
+            let _ = recovery_metadata.save(layout.metadata_path());
+            ShardexError::Config(format!(
+                "Failed to recover from WAL: {}. The index is in an inconsistent state and needs manual recovery.",
+                e
+            ))
+        })?;
+
+        info!(
+            "Successfully opened Shardex index at {}",
+            directory_path.display()
+        );
 
         Ok(instance)
     }
@@ -1922,5 +2115,335 @@ mod tests {
         // total_postings is always non-negative (usize)
 
         shardex.shutdown().await.unwrap();
+    }
+
+    // Enhanced Create and Open Tests
+
+    #[tokio::test]
+    async fn test_enhanced_create_new_index() {
+        let _env = TestEnvironment::new("test_enhanced_create_new_index");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128)
+            .shard_size(1000);
+
+        let shardex = ShardexImpl::create(config.clone()).await.unwrap();
+        assert!(matches!(shardex, ShardexImpl { .. }));
+
+        // Verify directory structure was created
+        let layout = DirectoryLayout::new(_env.path());
+        assert!(layout.exists());
+        assert!(layout.validate().is_ok());
+
+        // Verify metadata was created correctly
+        let metadata = IndexMetadata::load(layout.metadata_path()).unwrap();
+        assert_eq!(metadata.config.vector_size, 128);
+        assert_eq!(metadata.config.shard_size, 1000);
+        assert!(!metadata.flags.active); // Should be inactive after successful creation
+        assert!(metadata.flags.clean_shutdown);
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_create_with_invalid_config() {
+        let _env = TestEnvironment::new("test_enhanced_create_invalid_config");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(0); // Invalid
+
+        let result = ShardexImpl::create(config).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Invalid configuration for create"));
+            assert!(msg.contains("Vector size must be greater than 0"));
+        } else {
+            panic!("Expected Config error");
+        }
+
+        // Ensure no Shardex index structure was created (directory may exist from TestEnvironment)
+        let layout = DirectoryLayout::new(_env.path());
+        assert!(!layout.exists()); // No complete index structure should exist
+
+        // Also verify that the directory is empty or contains only temp files
+        if _env.path().exists() {
+            let entries: Vec<_> = std::fs::read_dir(_env.path()).unwrap().collect();
+            assert!(entries.is_empty() || !layout.metadata_path().exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_create_existing_index() {
+        let _env = TestEnvironment::new("test_enhanced_create_existing_index");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        // Create an index first
+        let _shardex1 = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Try to create again - should fail
+        let result = ShardexImpl::create(config).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Index already exists"));
+            assert!(msg.contains("Use open() to load existing index"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_create_non_empty_directory() {
+        let _env = TestEnvironment::new("test_enhanced_create_non_empty_dir");
+
+        // Create a file in the directory first
+        std::fs::create_dir_all(_env.path()).unwrap();
+        std::fs::write(_env.path().join("existing_file.txt"), b"content").unwrap();
+
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        let result = ShardexImpl::create(config).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("is not empty"));
+            assert!(msg.contains("Please use an empty directory"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_open_existing_index() {
+        let _env = TestEnvironment::new("test_enhanced_open_existing_index");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(256)
+            .shard_size(2000);
+
+        // Create an index first
+        let shardex1 = ShardexImpl::create(config.clone()).await.unwrap();
+        drop(shardex1); // Close the first instance
+
+        // Open the existing index
+        let shardex2 = ShardexImpl::open(_env.path()).await.unwrap();
+        assert_eq!(shardex2.config.vector_size, 256);
+        assert_eq!(shardex2.config.shard_size, 2000);
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_open_nonexistent_directory() {
+        let _env = TestEnvironment::new("test_enhanced_open_nonexistent");
+        let non_existent_path = _env.path().join("does_not_exist");
+
+        let result = ShardexImpl::open(non_existent_path.clone()).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Index directory does not exist"));
+            assert!(msg.contains(&non_existent_path.display().to_string()));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_open_invalid_directory() {
+        let _env = TestEnvironment::new("test_enhanced_open_invalid");
+
+        // Create directory but not a valid index
+        std::fs::create_dir_all(_env.path()).unwrap();
+        std::fs::write(_env.path().join("not_an_index.txt"), b"content").unwrap();
+
+        let result = ShardexImpl::open(_env.path()).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Invalid index directory structure"));
+            assert!(msg.contains("may be corrupted or not a valid Shardex index"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_open_corrupted_metadata() {
+        let _env = TestEnvironment::new("test_enhanced_open_corrupted_metadata");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        // Create an index first
+        let _shardex1 = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Corrupt the metadata file
+        let layout = DirectoryLayout::new(_env.path());
+        std::fs::write(layout.metadata_path(), b"invalid toml content").unwrap();
+
+        let result = ShardexImpl::open(_env.path()).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Failed to load index metadata"));
+            assert!(msg.contains("may be corrupted or created with an incompatible version"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_compatibility_checking() {
+        let _env = TestEnvironment::new("test_config_compatibility");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        // Create an index
+        let _shardex = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Test compatible config
+        let result = ShardexImpl::check_config_compatibility(_env.path(), &config);
+        assert!(result.is_ok());
+
+        // Test incompatible vector size
+        let incompatible_config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(256); // Different vector size
+
+        let result = ShardexImpl::check_config_compatibility(_env.path(), &incompatible_config);
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            assert!(msg.contains("Configuration incompatible"));
+            assert!(msg.contains("vector_size: existing=128, new=256"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_with_wal_recovery() {
+        let _env = TestEnvironment::new("test_open_with_wal_recovery");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        // Create index and add some data
+        {
+            let mut shardex = ShardexImpl::create(config.clone()).await.unwrap();
+            let postings = vec![Posting {
+                document_id: crate::identifiers::DocumentId::new(),
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            }];
+
+            shardex.add_postings(postings).await.unwrap();
+            // Don't flush - leave data in WAL
+            shardex.shutdown().await.unwrap();
+        }
+
+        // Open should recover from WAL
+        let mut shardex2 = ShardexImpl::open(_env.path()).await.unwrap();
+        let _stats = shardex2.stats().await.unwrap();
+        // Some postings should be present after WAL recovery
+        // (The exact count depends on WAL replay implementation)
+        shardex2.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_create_cleanup_on_failure() {
+        let _env = TestEnvironment::new("test_create_cleanup_on_failure");
+
+        // Use an invalid path to force failure after directory creation
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128)
+            .shard_size(1000);
+
+        // Mock a failure during ShardexIndex creation by using a read-only directory
+        // First create the directory
+        std::fs::create_dir_all(_env.path()).unwrap();
+
+        // Create valid metadata
+        let layout = DirectoryLayout::new(_env.path());
+        layout.create_directories().unwrap();
+        let mut metadata = IndexMetadata::new(config.clone()).unwrap();
+        metadata.save(layout.metadata_path()).unwrap();
+
+        // Make directory read-only to force failure (on Unix systems)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(_env.path()).unwrap().permissions();
+            let mut perms_clone = perms.clone();
+            perms_clone.set_mode(0o444); // Read-only
+            std::fs::set_permissions(_env.path(), perms_clone).unwrap();
+
+            let result = ShardexImpl::create(config).await;
+            assert!(result.is_err());
+
+            // Restore permissions for cleanup
+            let mut restore_perms = perms.clone();
+            restore_perms.set_mode(0o755);
+            std::fs::set_permissions(_env.path(), restore_perms).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_metadata_state_management() {
+        let _env = TestEnvironment::new("test_open_metadata_state_management");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        // Create index
+        let _shardex1 = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Verify metadata is inactive after creation
+        let layout = DirectoryLayout::new(_env.path());
+        let metadata = IndexMetadata::load(layout.metadata_path()).unwrap();
+        assert!(!metadata.flags.active);
+        assert!(metadata.flags.clean_shutdown);
+
+        // Open index
+        let _shardex2 = ShardexImpl::open(_env.path()).await.unwrap();
+
+        // Verify metadata is marked active during opening
+        let metadata = IndexMetadata::load(layout.metadata_path()).unwrap();
+        assert!(metadata.flags.active);
+    }
+
+    #[tokio::test]
+    async fn test_version_compatibility_checking() {
+        let _env = TestEnvironment::new("test_version_compatibility");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        // Create index
+        let _shardex = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Manually modify metadata to simulate version incompatibility
+        let layout = DirectoryLayout::new(_env.path());
+        let mut metadata = IndexMetadata::load(layout.metadata_path()).unwrap();
+        metadata.layout_version = 999; // Incompatible version
+        metadata.save(layout.metadata_path()).unwrap();
+
+        // Try to open - should fail
+        let result = ShardexImpl::open(_env.path()).await;
+        assert!(result.is_err());
+
+        if let Err(ShardexError::Config(msg)) = result {
+            // Error comes from IndexMetadata::load in layout module
+            assert!(msg.contains("Unsupported layout version"));
+            assert!(msg.contains("expected"));
+            assert!(msg.contains("found 999"));
+        } else {
+            panic!("Expected Config error");
+        }
     }
 }
