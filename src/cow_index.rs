@@ -78,7 +78,8 @@
 
 use crate::error::ShardexError;
 use crate::shardex_index::ShardexIndex;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Copy-on-Write wrapper for ShardexIndex enabling non-blocking concurrent access
 ///
@@ -128,7 +129,7 @@ impl CowShardexIndex {
     /// An Arc reference to the current index that can be safely shared
     /// across threads and will remain valid for the lifetime of the reference.
     pub fn read(&self) -> Arc<ShardexIndex> {
-        let guard = self.inner.read().expect("RwLock poisoned");
+        let guard = self.inner.read();
         Arc::clone(&*guard)
     }
 
@@ -216,10 +217,7 @@ impl IndexWriter {
 
         // Atomically swap the index - this is the only blocking operation
         {
-            let mut guard = self
-                .cow_index_ref
-                .write()
-                .map_err(|_| ShardexError::Config("RwLock poisoned during commit".to_string()))?;
+            let mut guard = self.cow_index_ref.write();
             *guard = new_index;
         }
 

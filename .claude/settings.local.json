@@ -4,7 +4,8 @@
       "mcp__sah__files_write",
       "mcp__sah__files_glob",
       "mcp__sah__files_read",
-      "mcp__sah__files_grep"
+      "mcp__sah__files_grep",
+      "mcp__sah__files_edit"
     ],
     "deny": [],
     "ask": []
