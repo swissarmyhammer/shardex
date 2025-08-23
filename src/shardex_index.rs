@@ -1508,7 +1508,7 @@ impl ShardexIndex {
     ///
     /// # Arguments
     /// * `shard_id` - ID of the shard that was modified
-    fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
+    pub fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         // Load the shard to get updated metadata
         let shard = Shard::open_read_only(shard_id, &self.directory)?;
 
