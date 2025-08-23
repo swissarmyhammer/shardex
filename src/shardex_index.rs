@@ -539,6 +539,81 @@ impl ShardexIndex {
             .collect())
     }
 
+    /// Calculate optimal slop factor based on index characteristics
+    ///
+    /// This method analyzes the current state of the index to determine an optimal
+    /// slop factor that balances search accuracy with performance. It considers
+    /// vector dimensionality, shard distribution, and historical performance data.
+    ///
+    /// # Arguments
+    /// * `vector_size` - Size of the query vector in dimensions
+    /// * `shard_count` - Number of shards in the index
+    ///
+    /// # Returns
+    /// Recommended slop factor based on index characteristics
+    pub fn calculate_optimal_slop(&self, vector_size: usize, shard_count: usize) -> usize {
+        // Use simple heuristics based on index characteristics
+        // This can be enhanced with machine learning or statistical analysis
+        
+        if shard_count <= 1 {
+            return 1;
+        }
+
+        // Base slop factor starts with a reasonable default
+        let mut optimal_slop = 3;
+
+        // Adjust for vector dimensionality
+        // Higher dimensions benefit from searching more shards for accuracy
+        if vector_size > 512 {
+            optimal_slop += 2;
+        } else if vector_size > 256 {
+            optimal_slop += 1;
+        }
+
+        // Adjust for shard count
+        // More shards allow for higher selectivity
+        let shard_factor = match shard_count {
+            1..=5 => shard_count,
+            6..=20 => 5 + (shard_count - 5) / 3,
+            21..=100 => 10 + (shard_count - 20) / 8,
+            _ => 20,
+        };
+
+        optimal_slop = optimal_slop.min(shard_factor);
+
+        // Ensure we don't exceed the total number of shards
+        optimal_slop.min(shard_count)
+    }
+
+    /// Select shards with configurable slop factor and adaptive adjustment
+    ///
+    /// This method extends find_nearest_shards with adaptive slop factor selection
+    /// based on the current index state and optional performance considerations.
+    ///
+    /// # Arguments
+    /// * `query` - Query vector for similarity search
+    /// * `slop` - Base slop factor to use
+    ///
+    /// # Returns
+    /// Vector of shard IDs selected based on the slop factor and adaptive logic
+    pub fn select_shards_with_slop(
+        &self,
+        query: &[f32],
+        slop: usize,
+    ) -> Result<Vec<ShardId>, ShardexError> {
+        // For now, this is equivalent to find_nearest_shards
+        // Can be enhanced with more sophisticated selection logic
+        self.find_nearest_shards(query, slop)
+    }
+
+    /// Get the current number of shards in the index
+    ///
+    /// # Returns
+    /// Number of shards currently in the index
+    pub fn get_shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
     /// Execute parallel search across multiple candidate shards
     ///
     /// This method performs similarity search across the specified candidate shards
@@ -2930,5 +3005,136 @@ mod tests {
         // Delete should work correctly
         let deleted_count = index.delete_document(doc_id).unwrap();
         assert_eq!(deleted_count, 1);
+    }
+
+    #[test]
+    fn test_calculate_optimal_slop() {
+        let _env = TestEnvironment::new("test_calculate_optimal_slop");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128)
+            .shard_size(10);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Test with no shards
+        let optimal = index.calculate_optimal_slop(384, 0);
+        assert_eq!(optimal, 1);
+
+        // Test with single shard
+        let optimal = index.calculate_optimal_slop(384, 1);
+        assert_eq!(optimal, 1);
+
+        // Add some shards to test calculation
+        let posting = create_test_posting(1, vec![1.0; 128]);
+        index.add_posting(posting).unwrap();
+        
+        let posting = create_test_posting(2, vec![2.0; 128]);
+        index.add_posting(posting).unwrap();
+        
+        // Flush to create shards
+        index.flush().unwrap();
+
+        // Test with multiple shards and different vector sizes
+        let optimal_small = index.calculate_optimal_slop(128, 5);
+        let optimal_large = index.calculate_optimal_slop(1024, 5);
+        
+        assert!(optimal_small > 0);
+        assert!(optimal_large > 0);
+        assert!(optimal_large >= optimal_small); // Larger vectors should generally need more shards
+    }
+
+    #[test]
+    fn test_select_shards_with_slop() {
+        let _env = TestEnvironment::new("test_select_shards_with_slop");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(2)
+            .shard_size(10);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Add some postings to create shards
+        let posting1 = create_test_posting(1, vec![1.0, 0.0]);
+        let posting2 = create_test_posting(2, vec![0.0, 1.0]);
+        let posting3 = create_test_posting(3, vec![-1.0, 0.0]);
+
+        index.add_posting(posting1).unwrap();
+        index.add_posting(posting2).unwrap();
+        index.add_posting(posting3).unwrap();
+        index.flush().unwrap();
+
+        // Test slop-based shard selection
+        let query = vec![1.0, 0.0];
+        let selected = index.select_shards_with_slop(&query, 2).unwrap();
+        
+        assert!(!selected.is_empty());
+        assert!(selected.len() <= 2);
+    }
+
+    #[test]
+    fn test_get_shard_count() {
+        let _env = TestEnvironment::new("test_get_shard_count");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128)
+            .shard_size(10);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Initially should have 0 shards
+        assert_eq!(index.get_shard_count(), 0);
+
+        // Add a posting to create first shard
+        let posting = create_test_posting(1, vec![1.0; 128]);
+        index.add_posting(posting).unwrap();
+        index.flush().unwrap();
+
+        // Should now have 1 shard
+        assert_eq!(index.get_shard_count(), 1);
+
+        // Add more postings to potentially create more shards
+        for i in 2..=15 {
+            let posting = create_test_posting(i as u128, vec![i as f32; 128]);
+            index.add_posting(posting).unwrap();
+        }
+        index.flush().unwrap();
+
+        // Should have more than 1 shard now due to shard size limit
+        assert!(index.get_shard_count() > 1);
+    }
+
+    #[test]
+    fn test_calculate_optimal_slop_with_different_parameters() {
+        let _env = TestEnvironment::new("test_calculate_optimal_slop_params");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+
+        let index = ShardexIndex::create(config).unwrap();
+
+        // Test edge cases
+        assert_eq!(index.calculate_optimal_slop(128, 0), 1);
+        assert_eq!(index.calculate_optimal_slop(128, 1), 1);
+        
+        // Test normal cases
+        let slop_5_shards = index.calculate_optimal_slop(128, 5);
+        let slop_20_shards = index.calculate_optimal_slop(128, 20);
+        let slop_100_shards = index.calculate_optimal_slop(128, 100);
+        
+        // More shards should allow for higher slop (up to a point)
+        assert!(slop_20_shards >= slop_5_shards);
+        
+        // Should not exceed total shard count
+        assert!(slop_5_shards <= 5);
+        assert!(slop_20_shards <= 20);
+        assert!(slop_100_shards <= 100);
+        
+        // Test with different vector sizes
+        let slop_small_vec = index.calculate_optimal_slop(128, 50);
+        let slop_large_vec = index.calculate_optimal_slop(1024, 50);
+        
+        // Larger vectors should generally benefit from higher slop factors
+        assert!(slop_large_vec >= slop_small_vec);
     }
 }

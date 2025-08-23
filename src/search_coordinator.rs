@@ -94,6 +94,12 @@ pub struct SearchMetrics {
     pub average_results_per_search: f64,
     pub total_shards_searched: u64,
     pub average_shards_per_search: f64,
+    /// Slop factor usage statistics
+    pub average_slop_factor: f64,
+    pub min_slop_factor_used: usize,
+    pub max_slop_factor_used: usize,
+    /// Performance correlation with slop factor
+    pub slop_factor_performance_correlation: f64,
 }
 
 impl SearchMetrics {
@@ -111,6 +117,7 @@ impl SearchMetrics {
         success: bool,
         timed_out: bool,
         cancelled: bool,
+        slop_factor: usize,
     ) {
         self.total_searches += 1;
 
@@ -140,6 +147,31 @@ impl SearchMetrics {
         self.total_shards_searched += shards_searched as u64;
         self.average_shards_per_search =
             self.total_shards_searched as f64 / self.total_searches as f64;
+
+        // Update slop factor statistics
+        self.average_slop_factor = (self.average_slop_factor * (self.total_searches - 1) as f64
+            + slop_factor as f64)
+            / self.total_searches as f64;
+
+        if self.total_searches == 1 {
+            self.min_slop_factor_used = slop_factor;
+            self.max_slop_factor_used = slop_factor;
+        } else {
+            self.min_slop_factor_used = self.min_slop_factor_used.min(slop_factor);
+            self.max_slop_factor_used = self.max_slop_factor_used.max(slop_factor);
+        }
+
+        // Simple correlation calculation between slop factor and latency
+        // This is a basic implementation and can be enhanced with proper statistical correlation
+        if self.total_searches > 1 {
+            let slop_factor_deviation = slop_factor as f64 - self.average_slop_factor;
+            let latency_deviation = latency_ms - self.average_latency_ms;
+            let correlation_update = slop_factor_deviation * latency_deviation;
+            
+            self.slop_factor_performance_correlation = (self.slop_factor_performance_correlation 
+                * (self.total_searches - 1) as f64 + correlation_update)
+                / self.total_searches as f64;
+        }
     }
 }
 
@@ -168,6 +200,7 @@ impl PerformanceMonitor {
         success: bool,
         timed_out: bool,
         cancelled: bool,
+        slop_factor: usize,
     ) {
         if !self.enabled {
             return;
@@ -181,6 +214,7 @@ impl PerformanceMonitor {
             success,
             timed_out,
             cancelled,
+            slop_factor,
         );
     }
 
@@ -253,6 +287,23 @@ impl SearchCoordinatorConfig {
         self.max_result_buffer_size = size;
         self
     }
+}
+
+/// Analysis report for slop factor performance impact
+#[derive(Debug, Clone)]
+pub struct SlopFactorAnalysis {
+    /// Total number of searches analyzed
+    pub total_searches_analyzed: u64,
+    /// Average slop factor used across all searches
+    pub average_slop_factor: f64,
+    /// Range of slop factors used (min, max)
+    pub slop_factor_range: (usize, usize),
+    /// Correlation between slop factor and search performance
+    /// Positive values indicate higher slop factors lead to higher latency
+    /// Negative values indicate higher slop factors improve performance
+    pub performance_correlation: f64,
+    /// Human-readable recommendation based on analysis
+    pub recommendation: String,
 }
 
 /// Multi-shard search coordinator
@@ -436,6 +487,7 @@ impl SearchCoordinator {
                 success,
                 timed_out,
                 cancelled,
+                slop_factor,
             )
             .await;
 
@@ -486,6 +538,91 @@ impl SearchCoordinator {
     /// Get current performance metrics
     pub async fn get_performance_metrics(&self) -> SearchMetrics {
         self.performance_monitor.get_metrics().await
+    }
+
+    /// Calculate adaptive slop factor based on index characteristics and performance history
+    ///
+    /// This method analyzes the current index state and performance metrics to suggest
+    /// an optimal slop factor for searches. It considers vector dimensionality, number of shards,
+    /// and historical performance data to balance accuracy with performance.
+    ///
+    /// # Arguments
+    /// * `vector_size` - Size of the query vector in dimensions
+    ///
+    /// # Returns
+    /// Recommended slop factor based on adaptive analysis
+    pub async fn calculate_adaptive_slop_factor(&self, vector_size: usize) -> usize {
+        let index = self.index.lock().await;
+        let shard_count = index.get_shard_count();
+        
+        // Get base recommendation from index characteristics
+        let base_slop = index.calculate_optimal_slop(vector_size, shard_count);
+        
+        // Adjust based on performance metrics if available
+        let metrics = self.get_performance_metrics().await;
+        if metrics.total_searches > 10 {
+            // If we have sufficient data, consider performance correlation
+            if metrics.slop_factor_performance_correlation > 0.0 {
+                // Positive correlation means higher slop factors lead to higher latency
+                // Consider reducing slop factor
+                base_slop.saturating_sub(1)
+            } else if metrics.slop_factor_performance_correlation < -0.1 {
+                // Negative correlation suggests higher slop factors improve performance
+                // Consider increasing slop factor (within reason)
+                base_slop + 1
+            } else {
+                base_slop
+            }
+        } else {
+            base_slop
+        }
+    }
+
+    /// Search with adaptive slop factor selection
+    ///
+    /// This method automatically selects an optimal slop factor based on the query
+    /// characteristics and current index state, then performs the search.
+    ///
+    /// # Arguments
+    /// * `query` - Query vector
+    /// * `k` - Number of results to return
+    /// * `timeout` - Optional timeout (uses default if None)
+    ///
+    /// # Returns
+    /// Vector of search results sorted by similarity score
+    pub async fn coordinate_search_adaptive(
+        &self,
+        query: &[f32],
+        k: usize,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<SearchResult>, ShardexError> {
+        let adaptive_slop = self.calculate_adaptive_slop_factor(query.len()).await;
+        self.coordinate_search(query, k, adaptive_slop, timeout).await
+    }
+
+    /// Get slop factor impact analysis report
+    ///
+    /// Analyzes the relationship between slop factor usage and search performance
+    /// to provide insights for optimization.
+    ///
+    /// # Returns
+    /// Analysis report with performance insights
+    pub async fn get_slop_factor_analysis(&self) -> SlopFactorAnalysis {
+        let metrics = self.get_performance_metrics().await;
+        
+        SlopFactorAnalysis {
+            total_searches_analyzed: metrics.total_searches,
+            average_slop_factor: metrics.average_slop_factor,
+            slop_factor_range: (metrics.min_slop_factor_used, metrics.max_slop_factor_used),
+            performance_correlation: metrics.slop_factor_performance_correlation,
+            recommendation: if metrics.slop_factor_performance_correlation > 0.1 {
+                "Consider reducing slop factor to improve performance".to_string()
+            } else if metrics.slop_factor_performance_correlation < -0.1 {
+                "Consider increasing slop factor for better accuracy".to_string()
+            } else {
+                "Current slop factor usage appears optimal".to_string()
+            },
+        }
     }
 
     /// Get search coordinator configuration
@@ -645,5 +782,192 @@ mod tests {
         assert!(!config.performance_monitoring_enabled);
         assert_eq!(config.result_streaming_threshold, 500);
         assert_eq!(config.max_result_buffer_size, 5000);
+    }
+
+    #[tokio::test]
+    async fn test_search_metrics_with_slop_factor() {
+        let mut metrics = SearchMetrics::new();
+        
+        // Record a few searches with different slop factors
+        metrics.record_search(
+            Duration::from_millis(100),
+            10,
+            3,
+            true,
+            false,
+            false,
+            3,
+        );
+        
+        metrics.record_search(
+            Duration::from_millis(150),
+            8,
+            5,
+            true,
+            false,
+            false,
+            5,
+        );
+        
+        metrics.record_search(
+            Duration::from_millis(80),
+            12,
+            2,
+            true,
+            false,
+            false,
+            2,
+        );
+
+        assert_eq!(metrics.total_searches, 3);
+        assert_eq!(metrics.successful_searches, 3);
+        assert_eq!(metrics.min_slop_factor_used, 2);
+        assert_eq!(metrics.max_slop_factor_used, 5);
+        
+        // Average slop factor should be (3 + 5 + 2) / 3 = 3.33...
+        assert!((metrics.average_slop_factor - 3.333).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_adaptive_slop_factor() {
+        let _env = TestEnvironment::new("test_calculate_adaptive_slop_factor");
+        let shardex_config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+        let coordinator_config =
+            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+
+        let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
+            .await
+            .unwrap();
+
+        // Test adaptive slop factor calculation
+        let adaptive_slop = coordinator.calculate_adaptive_slop_factor(384).await;
+        
+        // Should return a reasonable slop factor
+        assert!(adaptive_slop > 0);
+        assert!(adaptive_slop <= 100);
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_search_adaptive() {
+        let _env = TestEnvironment::new("test_coordinate_search_adaptive");
+        let shardex_config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+        let coordinator_config =
+            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+
+        let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
+            .await
+            .unwrap();
+
+        let query = vec![1.0; 128];
+        let results = coordinator.coordinate_search_adaptive(&query, 10, None).await;
+
+        // Should handle adaptive search without errors
+        // Results may be empty for an empty index, but shouldn't error
+        if let Ok(results) = results {
+            assert!(results.len() <= 10);
+        }
+        // Errors are acceptable for empty index
+    }
+
+    #[tokio::test]
+    async fn test_slop_factor_analysis() {
+        let _env = TestEnvironment::new("test_slop_factor_analysis");
+        let shardex_config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+        let coordinator_config =
+            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+
+        let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
+            .await
+            .unwrap();
+
+        // Get initial analysis (should work with no searches)
+        let analysis = coordinator.get_slop_factor_analysis().await;
+        
+        assert_eq!(analysis.total_searches_analyzed, 0);
+        assert_eq!(analysis.average_slop_factor, 0.0);
+        assert_eq!(analysis.slop_factor_range, (0, 0));
+        assert!(analysis.recommendation.contains("optimal"));
+    }
+
+    #[tokio::test]
+    async fn test_performance_monitor_with_slop_factor() {
+        let monitor = PerformanceMonitor::new(true);
+        
+        // Record some searches with slop factor tracking
+        monitor.record_search(
+            Duration::from_millis(100),
+            10,
+            3,
+            true,
+            false,
+            false,
+            3,
+        ).await;
+        
+        monitor.record_search(
+            Duration::from_millis(200),
+            5,
+            6,
+            true,
+            false,
+            false,
+            6,
+        ).await;
+        
+        let metrics = monitor.get_metrics().await;
+        
+        assert_eq!(metrics.total_searches, 2);
+        assert_eq!(metrics.successful_searches, 2);
+        assert_eq!(metrics.min_slop_factor_used, 3);
+        assert_eq!(metrics.max_slop_factor_used, 6);
+        assert_eq!(metrics.average_slop_factor, 4.5);
+    }
+
+    #[tokio::test]
+    async fn test_slop_factor_analysis_with_data() {
+        let _env = TestEnvironment::new("test_slop_factor_analysis_with_data");
+        let shardex_config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(128);
+        let coordinator_config =
+            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+
+        let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
+            .await
+            .unwrap();
+
+        // Simulate some searches by directly recording metrics
+        coordinator.performance_monitor.record_search(
+            Duration::from_millis(100),
+            10,
+            3,
+            true,
+            false,
+            false,
+            3,
+        ).await;
+        
+        coordinator.performance_monitor.record_search(
+            Duration::from_millis(150),
+            8,
+            5,
+            true,
+            false,
+            false,
+            5,
+        ).await;
+
+        let analysis = coordinator.get_slop_factor_analysis().await;
+        
+        assert_eq!(analysis.total_searches_analyzed, 2);
+        assert_eq!(analysis.average_slop_factor, 4.0);
+        assert_eq!(analysis.slop_factor_range, (3, 5));
+        assert!(!analysis.recommendation.is_empty());
     }
 }

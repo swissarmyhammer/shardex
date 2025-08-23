@@ -8,6 +8,133 @@ use crate::error::ShardexError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Configuration for slop factor behavior
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlopFactorConfig {
+    /// Default slop factor for search operations
+    pub default_factor: usize,
+    /// Minimum allowed slop factor
+    pub min_factor: usize,
+    /// Maximum allowed slop factor
+    pub max_factor: usize,
+    /// Enable adaptive slop factor selection
+    pub adaptive_enabled: bool,
+    /// Performance threshold in milliseconds for adaptive adjustment
+    pub performance_threshold_ms: u64,
+}
+
+impl Default for SlopFactorConfig {
+    fn default() -> Self {
+        Self {
+            default_factor: 3,
+            min_factor: 1,
+            max_factor: 100,
+            adaptive_enabled: false,
+            performance_threshold_ms: 100,
+        }
+    }
+}
+
+impl SlopFactorConfig {
+    /// Create a new slop factor configuration with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the default slop factor
+    pub fn default_factor(mut self, factor: usize) -> Self {
+        self.default_factor = factor;
+        self
+    }
+
+    /// Set the minimum slop factor
+    pub fn min_factor(mut self, factor: usize) -> Self {
+        self.min_factor = factor;
+        self
+    }
+
+    /// Set the maximum slop factor
+    pub fn max_factor(mut self, factor: usize) -> Self {
+        self.max_factor = factor;
+        self
+    }
+
+    /// Enable or disable adaptive slop factor selection
+    pub fn adaptive_enabled(mut self, enabled: bool) -> Self {
+        self.adaptive_enabled = enabled;
+        self
+    }
+
+    /// Set the performance threshold for adaptive adjustment
+    pub fn performance_threshold_ms(mut self, threshold_ms: u64) -> Self {
+        self.performance_threshold_ms = threshold_ms;
+        self
+    }
+
+    /// Validate the slop factor configuration
+    pub fn validate(&self) -> Result<(), ShardexError> {
+        if self.default_factor == 0 {
+            return Err(ShardexError::Config(
+                "Default slop factor must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.min_factor == 0 {
+            return Err(ShardexError::Config(
+                "Minimum slop factor must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.max_factor == 0 {
+            return Err(ShardexError::Config(
+                "Maximum slop factor must be greater than 0".to_string(),
+            ));
+        }
+
+        if self.min_factor > self.max_factor {
+            return Err(ShardexError::Config(
+                "Minimum slop factor cannot be greater than maximum slop factor".to_string(),
+            ));
+        }
+
+        if self.default_factor < self.min_factor || self.default_factor > self.max_factor {
+            return Err(ShardexError::Config(
+                "Default slop factor must be within min and max range".to_string(),
+            ));
+        }
+
+        if self.performance_threshold_ms == 0 {
+            return Err(ShardexError::Config(
+                "Performance threshold must be greater than 0".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Build the configuration after validation
+    pub fn build(self) -> Result<Self, ShardexError> {
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Calculate optimal slop factor based on index characteristics
+    pub fn calculate_optimal_slop(&self, vector_size: usize, shard_count: usize) -> usize {
+        if !self.adaptive_enabled {
+            return self.default_factor;
+        }
+
+        // Adaptive algorithm based on index characteristics
+        // Larger vector sizes benefit from more shards to search
+        // More shards available allows for higher selectivity
+        let size_factor = ((vector_size as f64).log2() / 10.0).max(0.1) as usize;
+        let shard_factor = (shard_count as f64 / 10.0).sqrt().max(1.0) as usize;
+        
+        let calculated = self.default_factor + size_factor + shard_factor;
+        calculated.clamp(self.min_factor, self.max_factor)
+    }
+}
+
 /// Configuration for a Shardex index
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShardexConfig {
@@ -23,8 +150,8 @@ pub struct ShardexConfig {
     pub wal_segment_size: usize,
     /// Interval between batch writes in milliseconds
     pub batch_write_interval_ms: u64,
-    /// Default slop factor for search operations
-    pub default_slop_factor: usize,
+    /// Slop factor configuration for search operations
+    pub slop_factor_config: SlopFactorConfig,
     /// Size of bloom filters in bits
     pub bloom_filter_size: usize,
     /// Deduplication policy for search results
@@ -40,7 +167,7 @@ impl Default for ShardexConfig {
             shardex_segment_size: 1000,
             wal_segment_size: 1024 * 1024, // 1MB
             batch_write_interval_ms: 100,
-            default_slop_factor: 3,
+            slop_factor_config: SlopFactorConfig::default(),
             bloom_filter_size: 1024,
             deduplication_policy: DeduplicationPolicy::default(),
         }
@@ -89,9 +216,15 @@ impl ShardexConfig {
         self
     }
 
-    /// Set the default slop factor
+    /// Set the default slop factor (deprecated - use slop_factor_config)
     pub fn default_slop_factor(mut self, factor: usize) -> Self {
-        self.default_slop_factor = factor;
+        self.slop_factor_config.default_factor = factor;
+        self
+    }
+
+    /// Set the slop factor configuration
+    pub fn slop_factor_config(mut self, config: SlopFactorConfig) -> Self {
+        self.slop_factor_config = config;
         self
     }
 
@@ -145,11 +278,8 @@ impl ShardexConfig {
             ));
         }
 
-        if self.default_slop_factor == 0 {
-            return Err(ShardexError::Config(
-                "Default slop factor must be greater than 0".to_string(),
-            ));
-        }
+        // Validate slop factor configuration
+        self.slop_factor_config.validate()?;
 
         if self.bloom_filter_size == 0 {
             return Err(ShardexError::Config(
@@ -187,7 +317,7 @@ mod tests {
         assert_eq!(config.shardex_segment_size, 1000);
         assert_eq!(config.wal_segment_size, 1024 * 1024);
         assert_eq!(config.batch_write_interval_ms, 100);
-        assert_eq!(config.default_slop_factor, 3);
+        assert_eq!(config.slop_factor_config.default_factor, 3);
         assert_eq!(config.bloom_filter_size, 1024);
     }
 
@@ -215,7 +345,7 @@ mod tests {
         assert_eq!(config.shardex_segment_size, 500);
         assert_eq!(config.wal_segment_size, 2048);
         assert_eq!(config.batch_write_interval_ms, 200);
-        assert_eq!(config.default_slop_factor, 5);
+        assert_eq!(config.slop_factor_config.default_factor, 5);
         assert_eq!(config.bloom_filter_size, 2048);
     }
 
@@ -387,5 +517,192 @@ mod tests {
         // Test maximum valid WAL segment size
         let config = ShardexConfig::new().wal_segment_size(1024 * 1024 * 1024);
         assert!(config.validate().is_ok());
+    }
+
+    // Tests for SlopFactorConfig
+    
+    #[test]
+    fn test_slop_factor_config_default() {
+        let config = SlopFactorConfig::default();
+        assert_eq!(config.default_factor, 3);
+        assert_eq!(config.min_factor, 1);
+        assert_eq!(config.max_factor, 100);
+        assert!(!config.adaptive_enabled);
+        assert_eq!(config.performance_threshold_ms, 100);
+    }
+
+    #[test]
+    fn test_slop_factor_config_new() {
+        let config = SlopFactorConfig::new();
+        assert_eq!(config, SlopFactorConfig::default());
+    }
+
+    #[test]
+    fn test_slop_factor_config_builder() {
+        let config = SlopFactorConfig::new()
+            .default_factor(5)
+            .min_factor(2)
+            .max_factor(50)
+            .adaptive_enabled(true)
+            .performance_threshold_ms(200);
+
+        assert_eq!(config.default_factor, 5);
+        assert_eq!(config.min_factor, 2);
+        assert_eq!(config.max_factor, 50);
+        assert!(config.adaptive_enabled);
+        assert_eq!(config.performance_threshold_ms, 200);
+    }
+
+    #[test]
+    fn test_slop_factor_config_validation() {
+        let config = SlopFactorConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_slop_factor_config_zero_default_validation() {
+        let config = SlopFactorConfig::new().default_factor(0);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Default slop factor must be greater than 0");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_zero_min_validation() {
+        let config = SlopFactorConfig::new().min_factor(0);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Minimum slop factor must be greater than 0");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_zero_max_validation() {
+        let config = SlopFactorConfig::new().max_factor(0);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Maximum slop factor must be greater than 0");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_min_greater_than_max_validation() {
+        let config = SlopFactorConfig::new().min_factor(10).max_factor(5);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Minimum slop factor cannot be greater than maximum slop factor");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_default_out_of_range_validation() {
+        let config = SlopFactorConfig::new().default_factor(10).min_factor(1).max_factor(5);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Default slop factor must be within min and max range");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_zero_performance_threshold_validation() {
+        let config = SlopFactorConfig::new().performance_threshold_ms(0);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "Performance threshold must be greater than 0");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_slop_factor_config_build_valid() {
+        let config = SlopFactorConfig::new().default_factor(5).build();
+        assert!(config.is_ok());
+    }
+
+    #[test]
+    fn test_slop_factor_config_build_invalid() {
+        let config = SlopFactorConfig::new().default_factor(0).build();
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn test_calculate_optimal_slop_adaptive_disabled() {
+        let config = SlopFactorConfig::new().default_factor(5).adaptive_enabled(false);
+        let result = config.calculate_optimal_slop(384, 10);
+        assert_eq!(result, 5);
+    }
+
+    #[test]
+    fn test_calculate_optimal_slop_adaptive_enabled() {
+        let config = SlopFactorConfig::new()
+            .default_factor(3)
+            .min_factor(1)
+            .max_factor(10)
+            .adaptive_enabled(true);
+        
+        let result = config.calculate_optimal_slop(384, 10);
+        // Should be clamped within min/max range
+        assert!(result >= 1 && result <= 10);
+        
+        // Larger vector size should generally result in higher slop
+        let result_large = config.calculate_optimal_slop(1024, 10);
+        assert!(result_large >= result);
+    }
+
+    #[test]
+    fn test_calculate_optimal_slop_clamping() {
+        let config = SlopFactorConfig::new()
+            .default_factor(50)
+            .min_factor(40)
+            .max_factor(60)
+            .adaptive_enabled(true);
+        
+        let result = config.calculate_optimal_slop(128, 5);
+        assert!(result >= 40 && result <= 60);
+    }
+
+    #[test]
+    fn test_shardex_config_with_slop_factor_config() {
+        let slop_config = SlopFactorConfig::new()
+            .default_factor(5)
+            .adaptive_enabled(true);
+            
+        let config = ShardexConfig::new().slop_factor_config(slop_config);
+        assert_eq!(config.slop_factor_config.default_factor, 5);
+        assert!(config.slop_factor_config.adaptive_enabled);
+    }
+
+    #[test]
+    fn test_slop_factor_config_clone() {
+        let config1 = SlopFactorConfig::new().default_factor(7);
+        let config2 = config1.clone();
+        assert_eq!(config1, config2);
+    }
+
+    #[test]
+    fn test_slop_factor_config_debug() {
+        let config = SlopFactorConfig::new();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("SlopFactorConfig"));
+        assert!(debug_str.contains("default_factor"));
+        assert!(debug_str.contains("adaptive_enabled"));
     }
 }
