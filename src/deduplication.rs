@@ -67,23 +67,23 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeduplicationPolicy {
     /// No deduplication - return all results
-    /// 
+    ///
     /// Use when performance is critical and duplicates are acceptable
     None,
 
     /// Deduplicate by document ID only
-    /// 
+    ///
     /// Only one result per document will be returned, typically the highest scoring
     ByDocumentId,
 
     /// Deduplicate by document ID and start position
-    /// 
+    ///
     /// This is the current default behavior - allows multiple results per document
     /// but prevents exact position duplicates
     ByDocumentAndPosition,
 
     /// Exact deduplication considering all fields
-    /// 
+    ///
     /// Most thorough but slowest - considers document_id, start, length, and vector similarity
     Exact,
 }
@@ -189,11 +189,6 @@ impl ResultDeduplicator {
         }
     }
 
-    /// Create a deduplicator with default policy (ByDocumentAndPosition)
-    pub fn default() -> Self {
-        Self::new(DeduplicationPolicy::default())
-    }
-
     /// Get the current deduplication policy
     pub fn policy(&self) -> DeduplicationPolicy {
         self.policy
@@ -221,7 +216,7 @@ impl ResultDeduplicator {
     /// Vector of deduplicated results, typically sorted by similarity score
     pub fn deduplicate(&mut self, results: Vec<SearchResult>) -> Vec<SearchResult> {
         let original_count = results.len();
-        
+
         let unique_results = match self.policy {
             DeduplicationPolicy::None => results,
             DeduplicationPolicy::ByDocumentId => self.deduplicate_by_document_id(results),
@@ -237,11 +232,12 @@ impl ResultDeduplicator {
 
     /// Deduplicate keeping only one result per document (highest scoring)
     fn deduplicate_by_document_id(&mut self, results: Vec<SearchResult>) -> Vec<SearchResult> {
-        let mut document_best: std::collections::HashMap<u128, SearchResult> = std::collections::HashMap::new();
+        let mut document_best: std::collections::HashMap<u128, SearchResult> =
+            std::collections::HashMap::new();
 
         for result in results {
             let doc_id = result.document_id.raw();
-            
+
             match document_best.get(&doc_id) {
                 None => {
                     document_best.insert(doc_id, result);
@@ -256,7 +252,7 @@ impl ResultDeduplicator {
         }
 
         let mut unique_results: Vec<SearchResult> = document_best.into_values().collect();
-        
+
         // Sort by similarity score (descending)
         unique_results.sort_by(|a, b| {
             b.similarity_score
@@ -273,7 +269,7 @@ impl ResultDeduplicator {
 
         for result in results {
             let key = (result.document_id.raw(), result.start);
-            
+
             if !self.seen_postings.contains(&key) {
                 self.seen_postings.insert(key);
                 unique_results.push(result);
@@ -296,7 +292,7 @@ impl ResultDeduplicator {
 
         for result in results {
             let hash = self.hash_search_result(&result);
-            
+
             if !self.seen_exact.contains(&hash) {
                 self.seen_exact.insert(hash);
                 unique_results.push(result);
@@ -314,17 +310,17 @@ impl ResultDeduplicator {
     }
 
     /// Hash a search result for exact deduplication
-    /// 
+    ///
     /// Uses all fields except similarity_score for deduplication.
     /// Vector similarity is computed to handle floating point precision issues.
     fn hash_search_result(&self, result: &SearchResult) -> u64 {
         let mut hasher = DefaultHasher::new();
-        
+
         // Hash core identifying fields
         result.document_id.raw().hash(&mut hasher);
         result.start.hash(&mut hasher);
         result.length.hash(&mut hasher);
-        
+
         // Hash vector by quantizing to handle floating point precision
         // This prevents minor precision differences from being treated as different results
         for &val in &result.vector {
@@ -332,8 +328,14 @@ impl ResultDeduplicator {
             let quantized = (val * 1_000_000.0).round() as i64;
             quantized.hash(&mut hasher);
         }
-        
+
         hasher.finish()
+    }
+}
+
+impl Default for ResultDeduplicator {
+    fn default() -> Self {
+        Self::new(DeduplicationPolicy::default())
     }
 }
 
@@ -342,37 +344,61 @@ mod tests {
     use super::*;
     use crate::identifiers::DocumentId;
 
-    fn create_test_result(doc_id: DocumentId, start: u32, length: u32, vector: Vec<f32>, score: f32) -> SearchResult {
+    fn create_test_result(
+        doc_id: DocumentId,
+        start: u32,
+        length: u32,
+        vector: Vec<f32>,
+        score: f32,
+    ) -> SearchResult {
         let vector_len = vector.len();
         SearchResult::new(doc_id, start, length, vector, score, vector_len).unwrap()
     }
 
     #[test]
     fn test_deduplication_policy_default() {
-        assert_eq!(DeduplicationPolicy::default(), DeduplicationPolicy::ByDocumentAndPosition);
+        assert_eq!(
+            DeduplicationPolicy::default(),
+            DeduplicationPolicy::ByDocumentAndPosition
+        );
     }
 
     #[test]
     fn test_deduplication_policy_descriptions() {
         assert_eq!(DeduplicationPolicy::None.description(), "No deduplication");
-        assert_eq!(DeduplicationPolicy::ByDocumentId.description(), "Deduplicate by document ID");
-        assert_eq!(DeduplicationPolicy::ByDocumentAndPosition.description(), "Deduplicate by document ID and position");
-        assert_eq!(DeduplicationPolicy::Exact.description(), "Exact deduplication using all fields");
+        assert_eq!(
+            DeduplicationPolicy::ByDocumentId.description(),
+            "Deduplicate by document ID"
+        );
+        assert_eq!(
+            DeduplicationPolicy::ByDocumentAndPosition.description(),
+            "Deduplicate by document ID and position"
+        );
+        assert_eq!(
+            DeduplicationPolicy::Exact.description(),
+            "Exact deduplication using all fields"
+        );
     }
 
     #[test]
     fn test_deduplication_policy_performance_costs() {
         assert_eq!(DeduplicationPolicy::None.performance_cost(), 1.0);
         assert!(DeduplicationPolicy::ByDocumentId.performance_cost() > 1.0);
-        assert!(DeduplicationPolicy::ByDocumentAndPosition.performance_cost() > DeduplicationPolicy::ByDocumentId.performance_cost());
-        assert!(DeduplicationPolicy::Exact.performance_cost() > DeduplicationPolicy::ByDocumentAndPosition.performance_cost());
+        assert!(
+            DeduplicationPolicy::ByDocumentAndPosition.performance_cost()
+                > DeduplicationPolicy::ByDocumentId.performance_cost()
+        );
+        assert!(
+            DeduplicationPolicy::Exact.performance_cost()
+                > DeduplicationPolicy::ByDocumentAndPosition.performance_cost()
+        );
     }
 
     #[test]
     fn test_deduplication_stats() {
         let mut stats = DeduplicationStats::new();
         assert_eq!(stats.efficiency, 1.0);
-        
+
         // Record some duplicates
         stats.record(100, 80);
         assert_eq!(stats.total_processed, 100);
@@ -391,7 +417,7 @@ mod tests {
     #[test]
     fn test_no_deduplication() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::None);
-        
+
         let doc_id = DocumentId::new();
         let results = vec![
             create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9),
@@ -406,7 +432,7 @@ mod tests {
     #[test]
     fn test_by_document_id_deduplication() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentId);
-        
+
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
         let results = vec![
@@ -417,7 +443,7 @@ mod tests {
 
         let deduplicated = deduplicator.deduplicate(results);
         assert_eq!(deduplicated.len(), 2); // One per document
-        
+
         // Should keep the highest scoring result for doc_id1
         assert_eq!(deduplicated[0].document_id, doc_id1);
         assert_eq!(deduplicated[0].similarity_score, 0.9);
@@ -427,7 +453,7 @@ mod tests {
     #[test]
     fn test_by_position_deduplication() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
-        
+
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
         let results = vec![
@@ -440,7 +466,7 @@ mod tests {
         let deduplicated = deduplicator.deduplicate(results);
         assert_eq!(deduplicated.len(), 3); // One duplicate removed
         assert_eq!(deduplicator.stats().duplicates_removed, 1);
-        
+
         // Results should be sorted by similarity score
         assert_eq!(deduplicated[0].similarity_score, 0.9);
         assert_eq!(deduplicated[1].similarity_score, 0.7);
@@ -450,7 +476,7 @@ mod tests {
     #[test]
     fn test_exact_deduplication() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::Exact);
-        
+
         let doc_id = DocumentId::new();
         let results = vec![
             create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9),
@@ -467,17 +493,17 @@ mod tests {
     #[test]
     fn test_hash_search_result_consistency() {
         let deduplicator = ResultDeduplicator::new(DeduplicationPolicy::Exact);
-        
+
         let doc_id = DocumentId::new();
         let result1 = create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9);
         let result2 = create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.8); // Different score
 
         let hash1 = deduplicator.hash_search_result(&result1);
         let hash2 = deduplicator.hash_search_result(&result2);
-        
+
         // Should be the same hash (score not included)
         assert_eq!(hash1, hash2);
-        
+
         // Different vector should produce different hash
         let result3 = create_test_result(doc_id, 0, 100, vec![0.1, 0.3], 0.9);
         let hash3 = deduplicator.hash_search_result(&result3);
@@ -487,7 +513,7 @@ mod tests {
     #[test]
     fn test_deduplicator_reset() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
-        
+
         let doc_id = DocumentId::new();
         let results = vec![
             create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9),
@@ -496,7 +522,7 @@ mod tests {
 
         let _deduplicated = deduplicator.deduplicate(results);
         assert_eq!(deduplicator.stats().total_processed, 2);
-        
+
         deduplicator.reset();
         assert_eq!(deduplicator.stats().total_processed, 0);
         assert!(deduplicator.seen_postings.is_empty());
@@ -506,7 +532,7 @@ mod tests {
     fn test_empty_results() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
         let results = vec![];
-        
+
         let deduplicated = deduplicator.deduplicate(results);
         assert!(deduplicated.is_empty());
         assert_eq!(deduplicator.stats().efficiency, 1.0);
@@ -517,7 +543,7 @@ mod tests {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::Exact);
         let doc_id = DocumentId::new();
         let results = vec![create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9)];
-        
+
         let deduplicated = deduplicator.deduplicate(results);
         assert_eq!(deduplicated.len(), 1);
         assert_eq!(deduplicator.stats().efficiency, 1.0);
@@ -527,7 +553,7 @@ mod tests {
     #[test]
     fn test_all_duplicates() {
         let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
-        
+
         let doc_id = DocumentId::new();
         let results = vec![
             create_test_result(doc_id, 0, 100, vec![0.1, 0.2], 0.9),
@@ -544,7 +570,7 @@ mod tests {
     #[test]
     fn test_vector_quantization_in_hashing() {
         let deduplicator = ResultDeduplicator::new(DeduplicationPolicy::Exact);
-        
+
         let doc_id = DocumentId::new();
         // These vectors are very close but not exactly equal due to floating point precision
         let result1 = create_test_result(doc_id, 0, 100, vec![0.1, 0.2000001], 0.9);
@@ -552,10 +578,10 @@ mod tests {
 
         let hash1 = deduplicator.hash_search_result(&result1);
         let hash2 = deduplicator.hash_search_result(&result2);
-        
+
         // Should be the same hash due to quantization (difference < 1e-6)
         assert_eq!(hash1, hash2);
-        
+
         // But larger differences should still produce different hashes
         let result3 = create_test_result(doc_id, 0, 100, vec![0.1, 0.3], 0.9);
         let hash3 = deduplicator.hash_search_result(&result3);
