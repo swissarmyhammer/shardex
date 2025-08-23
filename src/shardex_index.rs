@@ -71,6 +71,7 @@
 
 use crate::config::ShardexConfig;
 use crate::deduplication::{DeduplicationPolicy, ResultDeduplicator};
+use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, ShardId};
 use crate::shard::{Shard, ShardMetadata as BaseShardMetadata};
@@ -688,6 +689,74 @@ impl ShardexIndex {
 
                 // Perform search on this shard
                 let mut results = shard.search(query, per_shard_limit).map_err(|e| {
+                    ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
+                })?;
+
+                // Sort results by similarity score (highest first) for early termination potential
+                results.sort_by(|a, b| {
+                    b.similarity_score
+                        .partial_cmp(&a.similarity_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                Ok(results)
+            })
+            .collect();
+
+        let all_shard_results = shard_results?;
+
+        // Merge and rank results from all shards using configured deduplication policy
+        let final_results =
+            Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
+
+        Ok(final_results)
+    }
+
+    /// Parallel search across multiple shards with configurable distance metric
+    /// 
+    /// Similar to parallel_search but allows specifying the distance metric to use
+    /// for similarity calculations.
+    pub fn parallel_search_with_metric(
+        &mut self,
+        query: &[f32],
+        candidate_shards: &[ShardId],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Result<Vec<SearchResult>, ShardexError> {
+        use rayon::prelude::*;
+
+        // Validate query vector dimension
+        if query.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query.len(),
+            });
+        }
+
+        if k == 0 || candidate_shards.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Calculate per-shard result limit for efficiency
+        // Request more than k from each shard to improve result quality
+        // but limit to avoid excessive memory usage
+        let per_shard_limit = (k * 2).clamp(50, 1000);
+
+        // Convert candidate_shards to Vec for parallel processing
+        let candidate_vec: Vec<ShardId> = candidate_shards.to_vec();
+
+        // Perform parallel search across all candidate shards with specified metric
+        let shard_results: Result<Vec<Vec<SearchResult>>, ShardexError> = candidate_vec
+            .par_iter()
+            .map(|&shard_id| {
+                // We need to handle the mutable borrow issue for get_shard
+                // For now, we'll open shards directly to avoid borrowing conflicts
+                let shard = Shard::open_read_only(shard_id, &self.directory).map_err(|e| {
+                    ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e))
+                })?;
+
+                // Perform search on this shard with the specified metric
+                let mut results = shard.search_with_metric(query, per_shard_limit, metric).map_err(|e| {
                     ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
                 })?;
 
@@ -1518,16 +1587,6 @@ mod tests {
     use crate::structures::Posting;
     use crate::test_utils::TestEnvironment;
     use tempfile::TempDir;
-
-    /// Helper function to create a test posting
-    fn create_test_posting(_id: u128, vector: Vec<f32>) -> Posting {
-        Posting {
-            document_id: DocumentId::new(),
-            start: 0,
-            length: 100,
-            vector,
-        }
-    }
 
     #[test]
     fn test_create_shardex_index() {

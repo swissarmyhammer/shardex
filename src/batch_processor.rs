@@ -20,6 +20,8 @@ use tracing::{debug, error, warn};
 ///
 /// BatchProcessor coordinates between the batch management layer and WAL storage,
 /// providing automatic timer-based flushing and manual flush capabilities.
+/// After successfully writing to WAL, it applies the same operations to the shards
+/// to complete the transaction workflow.
 pub struct BatchProcessor {
     /// Timer interval for batch processing
     batch_interval: Duration,
@@ -107,9 +109,7 @@ impl BatchProcessor {
                 match batch_manager.add_operation(operation) {
                     Ok(should_flush) => {
                         if should_flush {
-                            if let Err(e) =
-                                Self::flush_batch(&mut batch_manager, &mut wal_manager).await
-                            {
+                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
                                 error!("Failed to flush batch from pending operations: {}", e);
                             }
                         }
@@ -286,8 +286,9 @@ impl BatchProcessor {
                 current_segment.append(&serialized_data)?;
 
                 debug!(
-                    "Successfully wrote transaction {} to WAL segment",
-                    transaction.id
+                    "Successfully wrote transaction {} with {} operations to WAL segment",
+                    transaction.id,
+                    transaction.operations.len()
                 );
                 Ok(())
             })
@@ -308,6 +309,8 @@ impl BatchProcessor {
             }
         }
     }
+
+
 }
 
 #[cfg(test)]

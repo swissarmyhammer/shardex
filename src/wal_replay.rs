@@ -383,6 +383,11 @@ impl WalReplayer {
         self.processed_transactions.len()
     }
 
+    /// Consume the replayer and return the ShardexIndex
+    pub fn into_index(self) -> ShardexIndex {
+        self.shardex_index
+    }
+
     /// Create a default shard for recovery when no shards exist
     /// This is a recovery scenario where we need to replay operations but the index is empty
     fn create_default_shard_for_recovery(
