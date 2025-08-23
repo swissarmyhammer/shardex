@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_environment_creation() {
         let test_env = TestEnvironment::new("test_environment_creation");
-        
+
         assert_eq!(test_env.name(), "test_environment_creation");
         assert!(test_env.path().exists());
         assert!(test_env.path().is_dir());
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn test_subdir_creation() {
         let test_env = TestEnvironment::new("test_subdir_creation");
-        
+
         let subdir = test_env.create_subdir("test_sub").unwrap();
         assert!(subdir.exists());
         assert!(subdir.is_dir());
@@ -109,10 +109,10 @@ mod tests {
     #[test]
     fn test_file_operations() {
         let test_env = TestEnvironment::new("test_file_operations");
-        
+
         let test_file = test_env.path().join("test.txt");
         fs::write(&test_file, "test content").unwrap();
-        
+
         assert!(test_file.exists());
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, "test content");
@@ -121,10 +121,10 @@ mod tests {
     #[test]
     fn test_path_methods() {
         let test_env = TestEnvironment::new("test_path_methods");
-        
+
         let path = test_env.path();
         let path_buf = test_env.path_buf();
-        
+
         assert_eq!(path, path_buf.as_path());
         assert!(path.exists());
         assert!(path_buf.exists());
