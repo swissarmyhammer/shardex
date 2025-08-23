@@ -1383,7 +1383,7 @@ mod tests {
     #[test]
     fn test_shardex_metadata_operations() {
         let shard_id = ShardId::new();
-        let base_metadata = BaseShardMetadata::new(false);
+        let base_metadata = BaseShardMetadata::new(false, 100).unwrap();
 
         let centroid = vec![0.1, 0.2, 0.3];
         let metadata =
@@ -1621,7 +1621,7 @@ mod tests {
     #[test]
     fn test_euclidean_distance_calculation() {
         let shard_id = ShardId::new();
-        let base_metadata = BaseShardMetadata::new(false);
+        let base_metadata = BaseShardMetadata::new(false, 100).unwrap();
         let centroid = vec![1.0, 0.0, 0.0];
         let metadata =
             ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid, 100);
@@ -1661,7 +1661,7 @@ mod tests {
     #[test]
     fn test_shardex_metadata_splitting_logic() {
         let shard_id = ShardId::new();
-        let mut base_metadata = BaseShardMetadata::new(false);
+        let mut base_metadata = BaseShardMetadata::new(false, 100).unwrap();
 
         // Test different utilization levels
         base_metadata.active_count = 50; // 50% utilization

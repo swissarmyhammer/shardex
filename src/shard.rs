@@ -86,6 +86,7 @@
 //! # }
 //! ```
 
+use crate::bloom_filter::BloomFilter;
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, ShardId};
 use crate::posting_storage::PostingStorage;
@@ -107,6 +108,8 @@ pub struct ShardMetadata {
     pub disk_usage: usize,
     /// Whether the shard is read-only
     pub read_only: bool,
+    /// Bloom filter for efficient document ID lookups
+    pub bloom_filter: BloomFilter,
 }
 
 /// Individual shard combining vector and posting storage
@@ -137,14 +140,18 @@ pub struct Shard {
 
 impl ShardMetadata {
     /// Create new shard metadata with current timestamp
-    pub fn new(read_only: bool) -> Self {
-        Self {
+    pub fn new(read_only: bool, capacity: usize) -> Result<Self, ShardexError> {
+        // Create bloom filter with 1% false positive rate
+        let bloom_filter = BloomFilter::new(capacity, 0.01)?;
+
+        Ok(Self {
             created_at: SystemTime::now(),
             current_count: 0,
             active_count: 0,
             disk_usage: 0,
             read_only,
-        }
+            bloom_filter,
+        })
     }
 
     /// Update metadata from storage components
@@ -257,7 +264,7 @@ impl Shard {
             .map_err(|e| ShardexError::Shard(format!("Failed to reopen posting storage: {}", e)))?;
 
         // Create metadata
-        let mut metadata = ShardMetadata::new(false);
+        let mut metadata = ShardMetadata::new(false, capacity)?;
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
         // Initialize centroid as zero vector
@@ -319,8 +326,10 @@ impl Shard {
         }
 
         // Create metadata
-        let mut metadata =
-            ShardMetadata::new(vector_storage.is_read_only() || posting_storage.is_read_only());
+        let mut metadata = ShardMetadata::new(
+            vector_storage.is_read_only() || posting_storage.is_read_only(),
+            capacity,
+        )?;
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
         // Initialize centroid and calculate from existing data
@@ -343,6 +352,9 @@ impl Shard {
         if active_vector_count > 0 {
             shard.recalculate_centroid();
         }
+
+        // Populate bloom filter from existing postings
+        shard.populate_bloom_filter()?;
 
         Ok(shard)
     }
@@ -386,7 +398,7 @@ impl Shard {
         }
 
         // Create metadata
-        let mut metadata = ShardMetadata::new(true);
+        let mut metadata = ShardMetadata::new(true, capacity)?;
         metadata.update_from_storages(&vector_storage, &posting_storage);
 
         // Initialize centroid and calculate from existing data
@@ -409,6 +421,9 @@ impl Shard {
         if active_vector_count > 0 {
             shard.recalculate_centroid();
         }
+
+        // Populate bloom filter from existing postings
+        shard.populate_bloom_filter()?;
 
         Ok(shard)
     }
@@ -468,6 +483,15 @@ impl Shard {
         &self.metadata
     }
 
+    /// Check if a document might exist in this shard using bloom filter
+    ///
+    /// Returns true if the document might be in this shard (with possible false positives).
+    /// Returns false if the document is definitely not in this shard (no false negatives).
+    /// Use this method to skip expensive shard scans when the document is not present.
+    pub async fn contains_document(&self, doc_id: DocumentId) -> bool {
+        self.metadata.bloom_filter.contains(doc_id)
+    }
+
     /// Add a posting to the shard
     ///
     /// This method adds both the vector and posting metadata atomically.
@@ -520,6 +544,9 @@ impl Shard {
                 vector_index, posting_index
             )));
         }
+
+        // Update bloom filter with the document ID
+        self.metadata.bloom_filter.insert(posting.document_id);
 
         // Update centroid with the new vector
         self.update_centroid_add(&posting.vector);
@@ -643,6 +670,11 @@ impl Shard {
             return Err(ShardexError::Config(
                 "Cannot remove documents from read-only shard".to_string(),
             ));
+        }
+
+        // Check bloom filter first - if document is definitely not in shard, skip expensive scan
+        if !self.metadata.bloom_filter.contains(doc_id) {
+            return Ok(0); // No documents removed - document definitely not in shard
         }
 
         let mut removed_vectors = Vec::new();
@@ -1058,6 +1090,35 @@ impl Shard {
             }
         }
         self.active_vector_count = count;
+    }
+
+    /// Populate bloom filter from existing postings
+    ///
+    /// This method scans all non-deleted postings and adds their document IDs
+    /// to the bloom filter. This is used when opening existing shards to
+    /// rebuild the bloom filter state.
+    fn populate_bloom_filter(&mut self) -> Result<(), ShardexError> {
+        // Clear the bloom filter first
+        self.metadata.bloom_filter.clear();
+
+        // Scan through all postings and add document IDs to bloom filter
+        for index in 0..self.current_count() {
+            // Skip deleted postings
+            if self.is_deleted(index)? {
+                continue;
+            }
+
+            // Get the document ID for this posting
+            let (document_id, _, _) = self
+                .posting_storage
+                .get_posting(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
+
+            // Add to bloom filter
+            self.metadata.bloom_filter.insert(document_id);
+        }
+
+        Ok(())
     }
 
     /// Check if the shard should be split based on capacity utilization
@@ -2771,5 +2832,206 @@ mod tests {
         assert!((centroid_a[1] - 5.0).abs() < 0.1);
         assert!((centroid_b[0] - 5.0).abs() < 0.1);
         assert!((centroid_b[1] - 5.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_bloom_filter_integration_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new(); // Not added
+        let vector = vec![1.0, 2.0, 3.0];
+
+        // Add postings
+        let posting1 = Posting::new(doc_id1, 100, 50, vector.clone(), 3).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 75, vector, 3).unwrap();
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        // Test bloom filter contains inserted documents
+        assert!(tokio_test::block_on(shard.contains_document(doc_id1)));
+        assert!(tokio_test::block_on(shard.contains_document(doc_id2)));
+        // This might be false or true due to potential false positives, but we'll test removal optimization
+        let doc_id3_maybe_present = tokio_test::block_on(shard.contains_document(doc_id3));
+
+        // Test removal optimization
+        let removed = shard.remove_document(doc_id3).unwrap();
+        if !doc_id3_maybe_present {
+            // If bloom filter correctly identified doc_id3 as not present, no removal should occur
+            assert_eq!(removed, 0);
+        }
+
+        // Test that actual documents can still be removed
+        let removed = shard.remove_document(doc_id1).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(shard.active_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_bloom_filter_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let vector = vec![1.0, 2.0, 3.0];
+
+        // Create shard and add postings
+        {
+            let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+            let posting1 = Posting::new(doc_id1, 100, 50, vector.clone(), 3).unwrap();
+            let posting2 = Posting::new(doc_id2, 200, 75, vector, 3).unwrap();
+
+            shard.add_posting(posting1).unwrap();
+            shard.add_posting(posting2).unwrap();
+            shard.sync().unwrap();
+        }
+
+        // Reopen shard and verify bloom filter is populated
+        {
+            let shard = Shard::open(shard_id, temp_dir.path()).unwrap();
+
+            // Bloom filter should be populated from existing postings
+            assert!(shard.contains_document(doc_id1).await);
+            assert!(shard.contains_document(doc_id2).await);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bloom_filter_split_maintenance() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut doc_ids = Vec::new();
+
+        // Add multiple postings to trigger split
+        for i in 0..9 {
+            let doc_id = DocumentId::new();
+            doc_ids.push(doc_id);
+            let vector = vec![i as f32, i as f32];
+            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Split the shard
+        let (mut shard_a, mut shard_b) = shard.split().await.unwrap();
+
+        // Each split shard should have bloom filters containing only its documents
+        let mut docs_in_a = 0;
+        let mut docs_in_b = 0;
+
+        for doc_id in &doc_ids {
+            if shard_a.contains_document(*doc_id).await {
+                docs_in_a += 1;
+            }
+            if shard_b.contains_document(*doc_id).await {
+                docs_in_b += 1;
+            }
+        }
+
+        // The total found should be at least the actual count (allowing for false positives)
+        assert!(docs_in_a >= shard_a.active_count());
+        assert!(docs_in_b >= shard_b.active_count());
+
+        // Verify that the bloom filters are working by testing removal optimization
+        let unknown_doc = DocumentId::new();
+
+        // If bloom filters correctly identify unknown document as not present
+        if !shard_a.contains_document(unknown_doc).await {
+            let removed_a = shard_a.remove_document(unknown_doc).unwrap();
+            assert_eq!(removed_a, 0);
+        }
+        if !shard_b.contains_document(unknown_doc).await {
+            let removed_b = shard_b.remove_document(unknown_doc).unwrap();
+            assert_eq!(removed_b, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bloom_filter_false_positive_handling() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add a few documents
+        let doc_ids: Vec<_> = (0..10)
+            .map(|i| {
+                let doc_id = DocumentId::new();
+                let vector = vec![i as f32, i as f32, i as f32];
+                let posting = Posting::new(doc_id, i * 100, 50, vector, 3).unwrap();
+                shard.add_posting(posting).unwrap();
+                doc_id
+            })
+            .collect();
+
+        // Test many unknown documents - some might return true due to false positives
+        let mut false_positives = 0;
+        let mut true_negatives = 0;
+
+        for _ in 0..1000 {
+            let unknown_doc = DocumentId::new();
+            if shard.contains_document(unknown_doc).await {
+                false_positives += 1;
+                // Even with false positive, removal should return 0 since document isn't actually there
+                let removed = shard.remove_document(unknown_doc).unwrap();
+                assert_eq!(removed, 0);
+            } else {
+                true_negatives += 1;
+            }
+        }
+
+        // Should have many true negatives and few false positives (1% expected rate)
+        assert!(true_negatives > false_positives);
+        // False positive rate should be reasonable (allow some variance)
+        let fp_rate = false_positives as f64 / 1000.0;
+        assert!(fp_rate < 0.05, "False positive rate too high: {}", fp_rate);
+
+        // Original documents should still be found
+        for doc_id in doc_ids {
+            assert!(shard.contains_document(doc_id).await);
+        }
+    }
+
+    #[test]
+    fn test_bloom_filter_metadata_consistency() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Check initial bloom filter state
+        assert_eq!(shard.metadata.bloom_filter.inserted_count(), 0);
+        assert_eq!(shard.metadata.bloom_filter.capacity(), 100);
+        assert!((shard.metadata.bloom_filter.false_positive_rate() - 0.01).abs() < 1e-6);
+
+        // Add postings and verify bloom filter stats update
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let vector = vec![1.0, 2.0, 3.0];
+
+        let posting1 = Posting::new(doc_id1, 100, 50, vector.clone(), 3).unwrap();
+        let posting2 = Posting::new(doc_id2, 200, 75, vector, 3).unwrap();
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        // Bloom filter should track insertions
+        assert_eq!(shard.metadata.bloom_filter.inserted_count(), 2);
+        assert!(!shard.metadata.bloom_filter.is_at_capacity());
+
+        // Get statistics
+        let stats = shard.metadata.bloom_filter.stats();
+        assert_eq!(stats.inserted_count, 2);
+        assert_eq!(stats.capacity, 100);
+        assert!(stats.load_factor > 0.0 && stats.load_factor < 1.0);
+        assert!(stats.memory_usage > 0);
     }
 }
