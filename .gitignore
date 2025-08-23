@@ -1,9 +1,8 @@
 semantic.db
 mcp.log
-.swissarmyhammer/tmp
-.swissarmyhammer/workflow-runs/
-.swissarmyhammer/todo/
+.swissarmyhammer/
 target/
+ideas/
 
 # Rust
 *.pdb

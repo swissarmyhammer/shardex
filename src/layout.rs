@@ -714,7 +714,7 @@ impl CleanupManager {
         if !errors.is_empty() {
             return Err(ShardexError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Cleanup errors: {}", errors.join(", "))
+                format!("Cleanup errors: {}", errors.join(", ")),
             )));
         }
 
@@ -740,7 +740,7 @@ impl CleanupManager {
         if !errors.is_empty() {
             return Err(ShardexError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Orphaned file cleanup errors: {}", errors.join(", "))
+                format!("Orphaned file cleanup errors: {}", errors.join(", ")),
             )));
         }
 
