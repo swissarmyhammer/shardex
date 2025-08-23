@@ -87,6 +87,7 @@
 //! ```
 
 use crate::bloom_filter::BloomFilter;
+use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, ShardId};
 use crate::posting_storage::PostingStorage;
@@ -843,6 +844,79 @@ impl Shard {
         // Normalize to 0.0-1.0 range: (cosine + 1.0) / 2.0
         // This maps -1.0 -> 0.0, 0.0 -> 0.5, 1.0 -> 1.0
         (cosine + 1.0) / 2.0
+    }
+
+    /// Search for the K nearest neighbors using a specific distance metric
+    ///
+    /// This method is similar to the basic search method but allows specifying
+    /// which distance metric to use for similarity calculation.
+    pub fn search_with_metric(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Result<Vec<SearchResult>, ShardexError> {
+        // Validate query vector dimension
+        if query.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: query.len(),
+            });
+        }
+
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::new();
+
+        // Scan through all postings
+        for index in 0..self.current_count() {
+            // Skip deleted postings
+            if self.is_deleted(index)? {
+                continue;
+            }
+
+            // Get the vector for this posting
+            let vector = self
+                .vector_storage
+                .get_vector(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get vector: {}", e)))?;
+
+            // Calculate similarity using specified metric
+            let similarity_score = metric.similarity(query, vector)?;
+
+            // Get posting metadata
+            let (document_id, start, length) = self
+                .posting_storage
+                .get_posting(index)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
+
+            // Create search result
+            let search_result = SearchResult::from_posting(
+                Posting::new(
+                    document_id,
+                    start,
+                    length,
+                    vector.to_vec(),
+                    self.vector_size,
+                )?,
+                similarity_score,
+            )?;
+
+            results.push(search_result);
+        }
+
+        // Sort by similarity score in descending order
+        results.sort_by(|a, b| {
+            b.similarity_score
+                .partial_cmp(&a.similarity_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Return top K results
+        results.truncate(k);
+        Ok(results)
     }
 
     /// Synchronize the shard to disk
@@ -2385,6 +2459,176 @@ mod tests {
         // Verify they are in descending order
         for i in 0..results.len() - 1 {
             assert!(results[i].similarity_score >= results[i + 1].similarity_score);
+        }
+    }
+
+    #[test]
+    fn test_shard_search_with_metric_cosine() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings with predictable vectors
+        let vectors = [
+            [1.0, 0.0, 0.0], // Same direction as query
+            [-1.0, 0.0, 0.0], // Opposite direction
+            [0.0, 1.0, 0.0], // Orthogonal
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 3).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let query = vec![1.0, 0.0, 0.0];
+        let results = shard.search_with_metric(&query, 3, DistanceMetric::Cosine).unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].similarity_score, 1.0); // Same direction
+        assert_eq!(results[1].similarity_score, 0.5); // Orthogonal
+        assert_eq!(results[2].similarity_score, 0.0); // Opposite direction
+    }
+
+    #[test]
+    fn test_shard_search_with_metric_euclidean() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings at different distances from origin
+        let vectors = [
+            [0.0, 0.0], // Same as query (distance = 0)
+            [1.0, 0.0], // Distance = 1
+            [3.0, 4.0], // Distance = 5
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let query = vec![0.0, 0.0];
+        let results = shard.search_with_metric(&query, 3, DistanceMetric::Euclidean).unwrap();
+
+        assert_eq!(results.len(), 3);
+        
+        // Results should be sorted by similarity (descending)
+        assert!(results[0].similarity_score > results[1].similarity_score);
+        assert!(results[1].similarity_score > results[2].similarity_score);
+        
+        // Check that closer points have higher similarity
+        assert_eq!(results[0].similarity_score, 1.0); // Same point: 1/(1+0) = 1.0
+        assert!((results[1].similarity_score - 0.5).abs() < 1e-6); // Distance 1: 1/(1+1) = 0.5
+        assert!((results[2].similarity_score - 1.0/6.0).abs() < 1e-6); // Distance 5: 1/(1+5) ≈ 0.167
+    }
+
+    #[test] 
+    fn test_shard_search_with_metric_dot_product() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings with different dot products
+        let vectors = [
+            [2.0, 0.0], // Dot product with query [1,0] = 2.0 (positive)
+            [0.0, 1.0], // Dot product = 0.0 (orthogonal)
+            [-1.0, 0.0], // Dot product = -1.0 (negative)
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 2).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let query = vec![1.0, 0.0];
+        let results = shard.search_with_metric(&query, 3, DistanceMetric::DotProduct).unwrap();
+
+        assert_eq!(results.len(), 3);
+        
+        // Results should be sorted by similarity (higher dot product = higher similarity)
+        assert!(results[0].similarity_score > results[1].similarity_score);
+        assert!(results[1].similarity_score > results[2].similarity_score);
+        
+        // Positive dot product should give high similarity, negative should give low
+        assert!(results[0].similarity_score > 0.8); // Dot product = 2.0
+        assert!((results[1].similarity_score - 0.5).abs() < 0.1); // Dot product = 0.0
+        assert!(results[2].similarity_score < 0.4); // Dot product = -1.0
+    }
+
+    #[test]
+    fn test_search_with_metric_dimension_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add a posting
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 0, 50, vec![1.0, 2.0, 3.0], 3).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        // Test with wrong dimension query
+        let wrong_query = vec![1.0, 2.0]; // 2D instead of 3D
+        for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean, DistanceMetric::DotProduct] {
+            let result = shard.search_with_metric(&wrong_query, 5, metric);
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), ShardexError::InvalidDimension { .. }));
+        }
+    }
+
+    #[test]
+    fn test_search_with_metric_empty_k() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add a posting
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 0, 50, vec![1.0, 2.0, 3.0], 3).unwrap();
+        shard.add_posting(posting).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0];
+        
+        // Search with k=0 should return empty results for all metrics
+        for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean, DistanceMetric::DotProduct] {
+            let results = shard.search_with_metric(&query, 0, metric).unwrap();
+            assert!(results.is_empty());
+        }
+    }
+
+    #[test] 
+    fn test_search_with_metric_vs_regular_search() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        // Add postings
+        let vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0], 
+            [-1.0, 0.0, 0.0],
+        ];
+
+        for (i, vector) in vectors.iter().enumerate() {
+            let doc_id = DocumentId::new();
+            let posting = Posting::new(doc_id, i as u32 * 100, 50, vector.to_vec(), 3).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        let query = vec![1.0, 0.0, 0.0];
+        
+        // Compare regular search (which uses cosine) with explicit cosine search
+        let regular_results = shard.search(&query, 3).unwrap();
+        let cosine_results = shard.search_with_metric(&query, 3, DistanceMetric::Cosine).unwrap();
+
+        assert_eq!(regular_results.len(), cosine_results.len());
+        
+        // Results should be identical (same order, same similarity scores)
+        for (regular, cosine) in regular_results.iter().zip(cosine_results.iter()) {
+            assert_eq!(regular.document_id, cosine.document_id);
+            assert!((regular.similarity_score - cosine.similarity_score).abs() < 1e-6);
         }
     }
 
