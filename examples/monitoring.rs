@@ -446,6 +446,7 @@ fn generate_test_vector(size: usize) -> Vec<f32> {
     vector
 }
 
+#[allow(dead_code)]
 struct HistoricalDataPoint {
     timestamp: std::time::SystemTime,
     total_postings: usize,

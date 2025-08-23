@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
     // Prepare some sample data
-    let sample_documents = vec![
+    let sample_documents = [
         ("Document about cats and dogs", generate_text_vector("cats dogs pets animals")),
         ("Article on machine learning", generate_text_vector("machine learning AI neural networks")),
         ("Cooking recipe for pasta", generate_text_vector("pasta cooking recipe italian food")),

@@ -277,7 +277,7 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
     let index_path = temp_dir.join("recovery_index");
     let mut attempts = 0;
     
-    let index = loop {
+    let _index = loop {
         attempts += 1;
         let config = ShardexConfig::new().directory_path(&index_path);
         
@@ -325,7 +325,7 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
     ];
 
     match validate_and_add(test_postings).await {
-        Ok(validated_postings) => {
+        Ok(_validated_postings) => {
             println!("    ✓ Postings validated successfully");
             // Would proceed with index.add_postings(validated_postings)
         }

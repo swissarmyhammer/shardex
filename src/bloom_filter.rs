@@ -203,7 +203,7 @@ impl BloomFilter {
 
         let (bit_array_size, hash_functions) =
             Self::calculate_parameters(capacity, false_positive_rate);
-        let bit_array = vec![0u64; bit_array_size.div_ceil(64)]; // Round up to u64 boundaries
+        let bit_array = vec![0u64; (bit_array_size + 63) / 64]; // Round up to u64 boundaries
 
         Ok(Self {
             bit_array,
