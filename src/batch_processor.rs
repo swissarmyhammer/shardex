@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tracing::{debug, warn, error};
+use tracing::{debug, error, warn};
 
 /// High-level batch processor for timer-based WAL operations
 ///
@@ -49,7 +49,6 @@ enum BatchProcessorCommand {
     /// Shutdown the processor
     Shutdown,
 }
-
 
 impl BatchProcessor {
     /// Create a new batch processor with the given configuration
@@ -108,7 +107,9 @@ impl BatchProcessor {
                 match batch_manager.add_operation(operation) {
                     Ok(should_flush) => {
                         if should_flush {
-                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                            if let Err(e) =
+                                Self::flush_batch(&mut batch_manager, &mut wal_manager).await
+                            {
                                 error!("Failed to flush batch from pending operations: {}", e);
                             }
                         }
@@ -202,7 +203,7 @@ impl BatchProcessor {
                 .send(BatchProcessorCommand::FlushNow(response_tx))
                 .await
                 .map_err(|_| ShardexError::Wal("Failed to send flush command".to_string()))?;
-            
+
             // Wait for the flush to complete
             response_rx
                 .await
@@ -274,18 +275,23 @@ impl BatchProcessor {
     ) -> Result<(), ShardexError> {
         // Get or create a current segment
         let current_segment = wal_manager.current_segment()?;
-        
+
         // Define the write function that will be used by batch_manager
-        let write_result = batch_manager.flush_batch(|transaction: &WalTransaction| {
-            // Serialize the transaction
-            let serialized_data = transaction.serialize()?;
-            
-            // Write to the WAL segment
-            current_segment.append(&serialized_data)?;
-            
-            debug!("Successfully wrote transaction {} to WAL segment", transaction.id);
-            Ok(())
-        }).await;
+        let write_result = batch_manager
+            .flush_batch(|transaction: &WalTransaction| {
+                // Serialize the transaction
+                let serialized_data = transaction.serialize()?;
+
+                // Write to the WAL segment
+                current_segment.append(&serialized_data)?;
+
+                debug!(
+                    "Successfully wrote transaction {} to WAL segment",
+                    transaction.id
+                );
+                Ok(())
+            })
+            .await;
 
         match write_result {
             Ok(Some(transaction_id)) => {
@@ -318,7 +324,7 @@ mod tests {
         let _test_env = TestEnvironment::new("test_batch_processor_creation");
         let layout = DirectoryLayout::new(_test_env.path());
         layout.create_directories().unwrap();
-        
+
         let batch_interval = Duration::from_millis(100);
         let batch_config = BatchConfig::default();
         let processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
@@ -333,7 +339,7 @@ mod tests {
         let _test_env = TestEnvironment::new("test_batch_processor_start");
         let layout = DirectoryLayout::new(_test_env.path());
         layout.create_directories().unwrap();
-        
+
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
         let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
@@ -367,7 +373,8 @@ mod tests {
             max_batch_size_bytes: 1024,
         };
         let batch_interval = Duration::from_millis(50);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone());
+        let mut processor =
+            BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone());
 
         // Start the processor
         processor.start().await.unwrap();
@@ -476,7 +483,7 @@ mod tests {
         let _test_env = TestEnvironment::new("test_batch_processor_basic_lifecycle");
         let layout = DirectoryLayout::new(_test_env.path());
         layout.create_directories().unwrap();
-        
+
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
         let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);

@@ -5,6 +5,7 @@
 //! in shards, each consisting of embedding vectors and postings data structures.
 
 pub mod batch_processor;
+pub mod bloom_filter;
 pub mod config;
 pub mod cow_index;
 pub mod error;
@@ -25,6 +26,7 @@ pub mod wal_replay;
 pub mod test_utils;
 
 pub use batch_processor::BatchProcessor;
+pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
 pub use config::ShardexConfig;
 pub use cow_index::{CowShardexIndex, IndexWriter};
 pub use error::ShardexError;
