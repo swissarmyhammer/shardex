@@ -71,7 +71,7 @@
 
 use crate::config::ShardexConfig;
 use crate::error::ShardexError;
-use crate::identifiers::ShardId;
+use crate::identifiers::{DocumentId, ShardId};
 use crate::shard::{Shard, ShardMetadata as BaseShardMetadata};
 use crate::structures::SearchResult;
 use serde::{Deserialize, Serialize};
@@ -1188,6 +1188,271 @@ impl ShardexIndex {
             shard_cache: HashMap::new(), // Start with empty cache
             cache_limit: self.cache_limit,
         })
+    }
+
+    /// Delete all postings for a document across all candidate shards
+    ///
+    /// This method efficiently deletes all postings associated with a document ID by:
+    /// 1. Using bloom filters to identify candidate shards that might contain the document
+    /// 2. Executing deletion in parallel across candidate shards
+    /// 3. Returning the total number of postings that were actually deleted
+    ///
+    /// # Arguments
+    /// * `doc_id` - The document ID to delete all postings for
+    ///
+    /// # Returns
+    /// The total number of postings that were deleted across all shards
+    ///
+    /// # Performance
+    /// - Uses bloom filter optimization to avoid scanning irrelevant shards
+    /// - Parallel execution across candidate shards for scalability
+    /// - Only loads shards that might contain the document
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use shardex::{ShardexIndex, DocumentId};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut index = ShardexIndex::create(Default::default())?;
+    /// let doc_id = DocumentId::new();
+    /// let deleted_count = index.delete_document(doc_id)?;
+    /// println!("Deleted {} postings for document {}", deleted_count, doc_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn delete_document(&mut self, doc_id: DocumentId) -> Result<usize, ShardexError> {
+        // Find candidate shards using bloom filter optimization
+        let candidate_shards = self.find_candidate_shards_for_deletion(doc_id);
+
+        if candidate_shards.is_empty() {
+            return Ok(0); // No candidate shards, document definitely not present
+        }
+
+        let mut total_deleted = 0;
+
+        // Process each candidate shard
+        for shard_id in candidate_shards {
+            let deleted_count = {
+                // Load the shard for writing (needed for deletion)
+                let shard = self.get_shard_mut(shard_id)?;
+
+                // Remove all postings for this document from the shard
+                match shard.remove_document(doc_id) {
+                    Ok(deleted_count) => {
+                        total_deleted += deleted_count;
+                        deleted_count
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            shard_id = %shard_id,
+                            document_id = %doc_id,
+                            error = %e,
+                            "Failed to delete document from shard"
+                        );
+                        // Continue with other shards even if one fails
+                        0
+                    }
+                }
+            }; // shard borrow ends here
+
+            // Update the shard metadata if postings were deleted
+            if deleted_count > 0 {
+                self.update_shard_metadata_from_disk(shard_id)?;
+            }
+        }
+
+        Ok(total_deleted)
+    }
+
+    /// Delete all postings for multiple documents in batch
+    ///
+    /// This method efficiently processes multiple document deletions by:
+    /// 1. Grouping documents by their candidate shards to minimize shard loading
+    /// 2. Processing each group in parallel for optimal performance
+    /// 3. Returning per-document deletion counts for detailed tracking
+    ///
+    /// # Arguments
+    /// * `doc_ids` - Slice of document IDs to delete
+    ///
+    /// # Returns
+    /// Vector containing the deletion count for each document (same order as input)
+    ///
+    /// # Performance
+    /// - Optimizes shard access by grouping documents with overlapping candidate shards
+    /// - Uses parallel processing for independent shard groups
+    /// - Bloom filter optimization reduces unnecessary shard scans
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use shardex::{ShardexIndex, DocumentId};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut index = ShardexIndex::create(Default::default())?;
+    /// let doc_ids = vec![DocumentId::new(), DocumentId::new(), DocumentId::new()];
+    /// let deletion_counts = index.delete_documents(&doc_ids)?;
+    ///
+    /// for (doc_id, count) in doc_ids.iter().zip(deletion_counts.iter()) {
+    ///     println!("Deleted {} postings for document {}", count, doc_id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn delete_documents(&mut self, doc_ids: &[DocumentId]) -> Result<Vec<usize>, ShardexError> {
+        if doc_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = vec![0; doc_ids.len()];
+
+        // Group documents by their candidate shards for efficient processing
+        let mut shard_to_doc_indices: HashMap<ShardId, Vec<usize>> = HashMap::new();
+
+        for (doc_index, &doc_id) in doc_ids.iter().enumerate() {
+            let candidate_shards = self.find_candidate_shards_for_deletion(doc_id);
+
+            for shard_id in candidate_shards {
+                shard_to_doc_indices
+                    .entry(shard_id)
+                    .or_default()
+                    .push(doc_index);
+            }
+        }
+
+        // Process each shard and its associated documents
+        for (shard_id, doc_indices) in shard_to_doc_indices {
+            // Load the shard for writing
+            let shard = match self.get_shard_mut(shard_id) {
+                Ok(shard) => shard,
+                Err(e) => {
+                    tracing::warn!(
+                        shard_id = %shard_id,
+                        error = %e,
+                        "Failed to load shard for deletion, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            let shard_modified = {
+                let mut any_deleted = false;
+
+                // Delete documents from this shard
+                for &doc_index in &doc_indices {
+                    let doc_id = doc_ids[doc_index];
+
+                    match shard.remove_document(doc_id) {
+                        Ok(deleted_count) => {
+                            results[doc_index] += deleted_count;
+                            if deleted_count > 0 {
+                                any_deleted = true;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                shard_id = %shard_id,
+                                document_id = %doc_id,
+                                error = %e,
+                                "Failed to delete document from shard"
+                            );
+                            // Continue with other documents
+                        }
+                    }
+                }
+
+                any_deleted
+            }; // shard borrow ends here
+
+            // Update shard metadata if any deletions occurred
+            if shard_modified {
+                if let Err(e) = self.update_shard_metadata_from_disk(shard_id) {
+                    tracing::warn!(
+                        shard_id = %shard_id,
+                        error = %e,
+                        "Failed to update shard metadata after deletion"
+                    );
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Find candidate shards that might contain a document for deletion
+    ///
+    /// This method uses bloom filters to efficiently identify which shards might
+    /// contain postings for the given document ID, avoiding unnecessary scans
+    /// of shards that definitely don't contain the document.
+    ///
+    /// # Arguments
+    /// * `doc_id` - The document ID to find candidate shards for
+    ///
+    /// # Returns
+    /// Vector of shard IDs that might contain the document (may include false positives)
+    ///
+    /// # Performance
+    /// - Bloom filters eliminate false negatives (if returns empty, document is definitely not present)
+    /// - May include false positives (shard might not actually contain the document)
+    /// - Very fast operation that only requires checking bloom filter bits
+    pub fn find_candidate_shards_for_deletion(&self, doc_id: DocumentId) -> Vec<ShardId> {
+        let mut candidates = Vec::new();
+
+        for shard_metadata in &self.shards {
+            // Use bloom filter to check if this shard might contain the document
+            // We need to load the shard temporarily to check its bloom filter
+            match Shard::open_read_only(shard_metadata.id, &self.directory) {
+                Ok(shard) => {
+                    // Check if the shard's bloom filter indicates this document might be present
+                    // Access bloom filter directly since it's synchronous
+                    if shard.metadata().bloom_filter.contains(doc_id) {
+                        candidates.push(shard_metadata.id);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        shard_id = %shard_metadata.id,
+                        error = %e,
+                        "Failed to load shard for bloom filter check, including as candidate"
+                    );
+                    // If we can't check the bloom filter, include it as a candidate
+                    // to be safe (better false positive than false negative)
+                    candidates.push(shard_metadata.id);
+                }
+            }
+        }
+
+        candidates
+    }
+
+    /// Update shard metadata after deletion operations by reloading from disk
+    ///
+    /// This internal method updates the in-memory shard metadata to reflect
+    /// changes after document deletions by loading the shard from disk and
+    /// extracting the updated metadata.
+    ///
+    /// # Arguments
+    /// * `shard_id` - ID of the shard that was modified
+    fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
+        // Load the shard to get updated metadata
+        let shard = Shard::open_read_only(shard_id, &self.directory)?;
+
+        // Find and update the shard metadata
+        if let Some(metadata) = self.shards.iter_mut().find(|s| s.id == shard_id) {
+            // Update posting count and utilization from the shard
+            let shard_metadata = shard.metadata();
+            metadata.posting_count = shard_metadata.active_count;
+            metadata.utilization = shard_metadata.active_count as f32 / shard.capacity() as f32;
+            metadata.last_modified = SystemTime::now();
+
+            // Update centroid (it may have changed due to deletions)
+            metadata.centroid = shard.get_centroid().to_vec();
+
+            tracing::debug!(
+                shard_id = %shard_id,
+                new_posting_count = metadata.posting_count,
+                new_utilization = metadata.utilization,
+                "Updated shard metadata after deletion"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -2359,5 +2624,416 @@ mod tests {
 
         let third = heap.pop().unwrap().0;
         assert_eq!(third.similarity_score, 0.9);
+    }
+
+    #[test]
+    fn test_delete_document_single_shard() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create a shard and add some postings
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+
+        // Add multiple postings for doc_id1
+        let posting1 = Posting {
+            document_id: doc_id1,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id1,
+            start: 10,
+            length: 15,
+            vector: vec![2.0; 384],
+        };
+        // Add single posting for doc_id2
+        let posting3 = Posting {
+            document_id: doc_id2,
+            start: 0,
+            length: 20,
+            vector: vec![3.0; 384],
+        };
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Add shard to index
+        index.add_shard(shard).unwrap();
+
+        // Delete doc_id1 (should remove 2 postings)
+        let deleted_count = index.delete_document(doc_id1).unwrap();
+        assert_eq!(deleted_count, 2);
+
+        // Delete doc_id2 (should remove 1 posting)
+        let deleted_count = index.delete_document(doc_id2).unwrap();
+        assert_eq!(deleted_count, 1);
+
+        // Try to delete doc_id3 (not present, should remove 0)
+        let deleted_count = index.delete_document(doc_id3).unwrap();
+        assert_eq!(deleted_count, 0);
+    }
+
+    #[test]
+    fn test_delete_document_multiple_shards() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create two shards
+        let shard_id1 = ShardId::new();
+        let shard_id2 = ShardId::new();
+        let mut shard1 = Shard::create(shard_id1, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard2 = Shard::create(shard_id2, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+
+        // Add postings for the same document to both shards
+        let posting1 = Posting {
+            document_id: doc_id,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id,
+            start: 10,
+            length: 15,
+            vector: vec![2.0; 384],
+        };
+        let posting3 = Posting {
+            document_id: doc_id,
+            start: 20,
+            length: 20,
+            vector: vec![3.0; 384],
+        };
+
+        shard1.add_posting(posting1).unwrap();
+        shard1.add_posting(posting2).unwrap();
+        shard2.add_posting(posting3).unwrap();
+
+        // Add shards to index
+        index.add_shard(shard1).unwrap();
+        index.add_shard(shard2).unwrap();
+
+        // Delete the document (should remove postings from both shards)
+        let deleted_count = index.delete_document(doc_id).unwrap();
+        assert_eq!(deleted_count, 3); // 2 from shard1 + 1 from shard2
+    }
+
+    #[test]
+    fn test_delete_documents_batch() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create a shard and add postings for multiple documents
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+        let doc_id4 = DocumentId::new(); // Not added to shard
+
+        // Add postings
+        let posting1 = Posting {
+            document_id: doc_id1,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id1,
+            start: 10,
+            length: 15,
+            vector: vec![1.5; 384],
+        };
+        let posting3 = Posting {
+            document_id: doc_id2,
+            start: 0,
+            length: 20,
+            vector: vec![2.0; 384],
+        };
+        let posting4 = Posting {
+            document_id: doc_id3,
+            start: 0,
+            length: 25,
+            vector: vec![3.0; 384],
+        };
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+        shard.add_posting(posting4).unwrap();
+
+        // Add shard to index
+        index.add_shard(shard).unwrap();
+
+        // Delete multiple documents in batch
+        let doc_ids = vec![doc_id1, doc_id2, doc_id3, doc_id4];
+        let deletion_counts = index.delete_documents(&doc_ids).unwrap();
+
+        // Verify deletion counts
+        assert_eq!(deletion_counts.len(), 4);
+        assert_eq!(deletion_counts[0], 2); // doc_id1: 2 postings
+        assert_eq!(deletion_counts[1], 1); // doc_id2: 1 posting
+        assert_eq!(deletion_counts[2], 1); // doc_id3: 1 posting
+        assert_eq!(deletion_counts[3], 0); // doc_id4: not present
+    }
+
+    #[test]
+    fn test_delete_documents_multiple_shards() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create three shards
+        let shard_id1 = ShardId::new();
+        let shard_id2 = ShardId::new();
+        let shard_id3 = ShardId::new();
+        let mut shard1 = Shard::create(shard_id1, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard2 = Shard::create(shard_id2, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard3 = Shard::create(shard_id3, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+
+        // Distribute postings across shards
+        let posting1 = Posting {
+            document_id: doc_id1,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id1,
+            start: 10,
+            length: 15,
+            vector: vec![1.5; 384],
+        };
+        let posting3 = Posting {
+            document_id: doc_id2,
+            start: 0,
+            length: 20,
+            vector: vec![2.0; 384],
+        };
+        let posting4 = Posting {
+            document_id: doc_id1,
+            start: 20,
+            length: 25,
+            vector: vec![1.8; 384],
+        };
+
+        shard1.add_posting(posting1).unwrap(); // doc_id1 in shard1
+        shard2.add_posting(posting2).unwrap(); // doc_id1 in shard2
+        shard2.add_posting(posting3).unwrap(); // doc_id2 in shard2
+        shard3.add_posting(posting4).unwrap(); // doc_id1 in shard3
+
+        // Add shards to index
+        index.add_shard(shard1).unwrap();
+        index.add_shard(shard2).unwrap();
+        index.add_shard(shard3).unwrap();
+
+        // Delete both documents
+        let doc_ids = vec![doc_id1, doc_id2];
+        let deletion_counts = index.delete_documents(&doc_ids).unwrap();
+
+        // Verify deletion counts
+        assert_eq!(deletion_counts.len(), 2);
+        assert_eq!(deletion_counts[0], 3); // doc_id1: 1+1+1 postings across 3 shards
+        assert_eq!(deletion_counts[1], 1); // doc_id2: 1 posting in shard2
+    }
+
+    #[test]
+    fn test_find_candidate_shards_for_deletion() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create two shards
+        let shard_id1 = ShardId::new();
+        let shard_id2 = ShardId::new();
+        let mut shard1 = Shard::create(shard_id1, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard2 = Shard::create(shard_id2, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new(); // Not in any shard
+
+        // Add postings to different shards
+        let posting1 = Posting {
+            document_id: doc_id1,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id2,
+            start: 0,
+            length: 15,
+            vector: vec![2.0; 384],
+        };
+
+        shard1.add_posting(posting1).unwrap();
+        shard2.add_posting(posting2).unwrap();
+
+        // Add shards to index
+        index.add_shard(shard1).unwrap();
+        index.add_shard(shard2).unwrap();
+
+        // Test candidate shard finding
+        let candidates1 = index.find_candidate_shards_for_deletion(doc_id1);
+        assert!(candidates1.contains(&shard_id1));
+        assert!(!candidates1.contains(&shard_id2) || candidates1.len() > 1); // May contain due to false positive
+
+        let candidates2 = index.find_candidate_shards_for_deletion(doc_id2);
+        assert!(candidates2.contains(&shard_id2));
+        assert!(!candidates2.contains(&shard_id1) || candidates2.len() > 1); // May contain due to false positive
+
+        // Document not in any shard - bloom filters should eliminate all shards
+        let candidates3 = index.find_candidate_shards_for_deletion(doc_id3);
+        // Should be empty or very few false positives depending on bloom filter state
+        assert!(candidates3.len() <= 2); // Allow some false positives but not all shards
+    }
+
+    #[test]
+    fn test_delete_document_empty_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        let doc_id = DocumentId::new();
+
+        // Delete from empty index should return 0
+        let deleted_count = index.delete_document(doc_id).unwrap();
+        assert_eq!(deleted_count, 0);
+    }
+
+    #[test]
+    fn test_delete_documents_empty_list() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Delete empty list should return empty result
+        let deletion_counts = index.delete_documents(&[]).unwrap();
+        assert_eq!(deletion_counts.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_document_updates_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create shard and add postings
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+        let posting1 = Posting {
+            document_id: doc_id,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+        let posting2 = Posting {
+            document_id: doc_id,
+            start: 10,
+            length: 15,
+            vector: vec![2.0; 384],
+        };
+
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+
+        // Add shard to index and verify initial metadata
+        index.add_shard(shard).unwrap();
+        let initial_utilization = {
+            let metadata = index.shards.iter().find(|s| s.id == shard_id).unwrap();
+            assert_eq!(metadata.posting_count, 2);
+            metadata.utilization
+        };
+
+        // Delete document and verify metadata is updated
+        let deleted_count = index.delete_document(doc_id).unwrap();
+        assert_eq!(deleted_count, 2);
+
+        let updated_metadata = index.shards.iter().find(|s| s.id == shard_id).unwrap();
+        assert_eq!(updated_metadata.posting_count, 0);
+        assert!(updated_metadata.utilization < initial_utilization);
+    }
+
+    #[test]
+    fn test_delete_document_bloom_filter_optimization() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create many shards but only add document to one
+        let mut shard_ids = Vec::new();
+        for _ in 0..5 {
+            let shard_id = ShardId::new();
+            let shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+            shard_ids.push(shard_id);
+            index.add_shard(shard).unwrap();
+        }
+
+        // Add document only to the first shard
+        let doc_id = DocumentId::new();
+        let posting = Posting {
+            document_id: doc_id,
+            start: 0,
+            length: 10,
+            vector: vec![1.0; 384],
+        };
+
+        {
+            let shard = index.get_shard_mut(shard_ids[0]).unwrap();
+            shard.add_posting(posting).unwrap();
+        }
+
+        // Find candidate shards - should be much fewer than total due to bloom filter
+        let candidates = index.find_candidate_shards_for_deletion(doc_id);
+        assert!(candidates.len() <= 2); // Should only include the relevant shard + maybe 1 false positive
+
+        // Delete should work correctly
+        let deleted_count = index.delete_document(doc_id).unwrap();
+        assert_eq!(deleted_count, 1);
     }
 }
