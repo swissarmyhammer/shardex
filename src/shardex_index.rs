@@ -717,7 +717,7 @@ impl ShardexIndex {
     /// Similar to parallel_search but allows specifying the distance metric to use
     /// for similarity calculations.
     pub fn parallel_search_with_metric(
-        &mut self,
+        &self,
         query: &[f32],
         candidate_shards: &[ShardId],
         k: usize,
