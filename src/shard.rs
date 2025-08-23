@@ -3029,9 +3029,9 @@ mod tests {
         let doc_ids: Vec<DocumentId> = (0..15).map(|_| DocumentId::new()).collect();
 
         // Add 15 initial postings
-        for i in 0..15 {
+        for (i, &doc_id) in doc_ids.iter().enumerate() {
             let vector = vec![i as f32, i as f32];
-            let posting = Posting::new(doc_ids[i], (i * 100) as u32, 50, vector, 2).unwrap();
+            let posting = Posting::new(doc_id, (i * 100) as u32, 50, vector, 2).unwrap();
             shard.add_posting(posting).unwrap();
         }
 
