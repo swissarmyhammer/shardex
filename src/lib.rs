@@ -32,7 +32,9 @@ pub mod test_utils;
 
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
-pub use concurrent::{ConcurrentShardex, ConcurrencyConfig, ConcurrencyMetrics, WriteOperationType};
+pub use concurrent::{
+    ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType,
+};
 pub use config::ShardexConfig;
 pub use cow_index::{CowShardexIndex, IndexWriter};
 pub use deduplication::{DeduplicationPolicy, DeduplicationStats, ResultDeduplicator};

@@ -285,7 +285,7 @@ impl ConcurrentShardex {
         let index_snapshot = self.index.read();
 
         // Perform the read operation on the snapshot
-        let result = operation(&*index_snapshot);
+        let result = operation(&index_snapshot);
 
         // Decrement active reader count
         let remaining_readers = self.active_readers.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -462,8 +462,13 @@ impl ConcurrentShardex {
     }
 
     /// Acquire write coordination lock, managing pending operations and backpressure
-    async fn acquire_write_coordination(&self, operation_id: Uuid) -> Result<WriteCoordinationGuard, ShardexError> {
-        let mut coordinator = self.write_coordinator.lock()
+    async fn acquire_write_coordination(
+        &self,
+        operation_id: Uuid,
+    ) -> Result<WriteCoordinationGuard, ShardexError> {
+        let mut coordinator = self
+            .write_coordinator
+            .lock()
             .map_err(|_| ShardexError::Config("Write coordinator lock poisoned".to_string()))?;
 
         // Check for backpressure
@@ -491,9 +496,7 @@ impl ConcurrentShardex {
         }
 
         // There's an active writer, so we need to queue this operation
-        let pending_write = PendingWrite {
-            operation_id,
-        };
+        let pending_write = PendingWrite { operation_id };
 
         coordinator.pending_writes.push_back(pending_write);
         coordinator.stats.contended_writes += 1;
@@ -501,7 +504,7 @@ impl ConcurrentShardex {
         // For now, we'll return an error indicating contention
         // In a more sophisticated implementation, we could wait for the active writer to finish
         Err(ShardexError::Config(
-            "Write operation contention detected - please retry".to_string()
+            "Write operation contention detected - please retry".to_string(),
         ))
     }
 
@@ -509,7 +512,7 @@ impl ConcurrentShardex {
     fn update_coordination_stats(&self, wait_duration: Duration, contended: bool) {
         if let Ok(mut coordinator) = self.write_coordinator.lock() {
             coordinator.stats.total_coordination_wait_time += wait_duration;
-            
+
             if wait_duration > coordinator.stats.max_coordination_wait_time {
                 coordinator.stats.max_coordination_wait_time = wait_duration;
             }
@@ -522,9 +525,11 @@ impl ConcurrentShardex {
 
     /// Get current coordination statistics for monitoring
     pub fn coordination_stats(&self) -> Result<CoordinationStats, ShardexError> {
-        let coordinator = self.write_coordinator.lock()
+        let coordinator = self
+            .write_coordinator
+            .lock()
             .map_err(|_| ShardexError::Config("Write coordinator lock poisoned".to_string()))?;
-        
+
         Ok(CoordinationStats {
             total_writes: coordinator.stats.total_writes,
             contended_writes: coordinator.stats.contended_writes,
@@ -538,15 +543,20 @@ impl ConcurrentShardex {
     pub fn concurrency_metrics(&self) -> ConcurrencyMetrics {
         let active_readers = self.active_readers.load(Ordering::Acquire);
         let current_epoch = self.epoch.load(Ordering::Acquire);
-        
-        let (active_writers, pending_writes) = if let Ok(coordinator) = self.write_coordinator.lock() {
-            (
-                if coordinator.active_writer.is_some() { 1 } else { 0 },
-                coordinator.pending_writes.len(),
-            )
-        } else {
-            (0, 0)
-        };
+
+        let (active_writers, pending_writes) =
+            if let Ok(coordinator) = self.write_coordinator.lock() {
+                (
+                    if coordinator.active_writer.is_some() {
+                        1
+                    } else {
+                        0
+                    },
+                    coordinator.pending_writes.len(),
+                )
+            } else {
+                (0, 0)
+            };
 
         ConcurrencyMetrics {
             active_readers,
@@ -579,7 +589,7 @@ impl Drop for WriteCoordinationGuard {
                     writer_id: pending.operation_id,
                 };
                 coordinator.active_writer = Some(writer_handle);
-                
+
                 // Note: In a full implementation, we would notify the waiting operation
                 // For now, this is a simplified coordination mechanism
             }
@@ -649,7 +659,8 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
@@ -664,7 +675,8 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -674,17 +686,20 @@ mod tests {
         for _i in 0..10 {
             let concurrent_clone = Arc::clone(&concurrent);
             tasks.spawn(async move {
-                concurrent_clone.read_operation(|index| {
-                    let shard_count = index.shard_count();
-                    Ok(shard_count)
-                }).await
+                concurrent_clone
+                    .read_operation(|index| {
+                        let shard_count = index.shard_count();
+                        Ok(shard_count)
+                    })
+                    .await
             });
         }
 
         // Collect all results
         let mut results = Vec::new();
         while let Some(result) = tasks.join_next().await {
-            let result = result.expect("Task should not panic")
+            let result = result
+                .expect("Task should not panic")
                 .expect("Read operation should succeed");
             results.push(result);
         }
@@ -701,15 +716,18 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
         // Perform a write operation
-        let result = concurrent.write_operation(|writer| {
-            let shard_count = writer.index().shard_count();
-            Ok(shard_count)
-        }).await;
+        let result = concurrent
+            .write_operation(|writer| {
+                let shard_count = writer.index().shard_count();
+                Ok(shard_count)
+            })
+            .await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0); // Empty index should have 0 shards
@@ -722,7 +740,8 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -733,11 +752,13 @@ mod tests {
             let concurrent_clone = Arc::clone(&concurrent);
             tasks.spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(i * 10)).await;
-                concurrent_clone.read_operation(|index| {
-                    // Simulate some read work
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    Ok(index.shard_count())
-                }).await
+                concurrent_clone
+                    .read_operation(|index| {
+                        // Simulate some read work
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        Ok(index.shard_count())
+                    })
+                    .await
             });
         }
 
@@ -745,11 +766,13 @@ mod tests {
         let concurrent_clone = Arc::clone(&concurrent);
         tasks.spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
-            concurrent_clone.write_operation(|writer| {
-                // Simulate some write work
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                Ok(writer.index().shard_count())
-            }).await
+            concurrent_clone
+                .write_operation(|writer| {
+                    // Simulate some write work
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    Ok(writer.index().shard_count())
+                })
+                .await
         });
 
         // All operations should complete successfully without blocking
@@ -770,23 +793,29 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
         // Initial stats should be empty
-        let initial_stats = concurrent.coordination_stats().expect("Failed to get stats");
+        let initial_stats = concurrent
+            .coordination_stats()
+            .expect("Failed to get stats");
         assert_eq!(initial_stats.total_writes, 0);
         assert_eq!(initial_stats.contended_writes, 0);
         assert_eq!(initial_stats.timeout_count, 0);
 
         // Perform a write operation
-        let _result = concurrent.write_operation(|writer| {
-            Ok(writer.index().shard_count())
-        }).await.expect("Write operation should succeed");
+        let _result = concurrent
+            .write_operation(|writer| Ok(writer.index().shard_count()))
+            .await
+            .expect("Write operation should succeed");
 
         // Stats should be updated
-        let updated_stats = concurrent.coordination_stats().expect("Failed to get stats");
+        let updated_stats = concurrent
+            .coordination_stats()
+            .expect("Failed to get stats");
         assert_eq!(updated_stats.total_writes, 1);
     }
 
@@ -797,7 +826,8 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -809,17 +839,23 @@ mod tests {
 
         // Test that readers are tracked during operations by running a synchronous operation
         // that we can properly time
-        let result = concurrent.read_operation(|index| {
-            // At this point, the reader should be active
-            let mid_metrics = concurrent.concurrency_metrics();
-            println!("Metrics during read: active_readers={}, active_writers={}, epoch={}",
-                     mid_metrics.active_readers, mid_metrics.active_writers, mid_metrics.current_epoch);
-            // This should show 1 active reader
-            assert_eq!(mid_metrics.active_readers, 1);
-            Ok(index.shard_count())
-        }).await;
+        let result = concurrent
+            .read_operation(|index| {
+                // At this point, the reader should be active
+                let mid_metrics = concurrent.concurrency_metrics();
+                println!(
+                    "Metrics during read: active_readers={}, active_writers={}, epoch={}",
+                    mid_metrics.active_readers,
+                    mid_metrics.active_writers,
+                    mid_metrics.current_epoch
+                );
+                // This should show 1 active reader
+                assert_eq!(mid_metrics.active_readers, 1);
+                Ok(index.shard_count())
+            })
+            .await;
 
-        // Verify the operation completed successfully  
+        // Verify the operation completed successfully
         assert!(result.is_ok());
 
         let final_metrics = concurrent.concurrency_metrics();
@@ -833,36 +869,48 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
-        
+
         let timeout_config = ConcurrencyConfig {
             write_timeout: Duration::from_millis(30), // Very short timeout
             ..Default::default()
         };
-        
+
         let concurrent = ConcurrentShardex::with_config(cow_index, timeout_config);
 
         // Measure the actual duration
         let start_time = std::time::Instant::now();
-        
+
         // This operation should timeout due to the very short write timeout
         // Use tokio::time::sleep which yields control and can be cancelled
-        let result = concurrent.write_operation(|_writer| {
-            // This is a fast operation that should complete before timeout
-            Ok(1)
-        }).await;
+        let result = concurrent
+            .write_operation(|_writer| {
+                // This is a fast operation that should complete before timeout
+                Ok(1)
+            })
+            .await;
 
         let duration = start_time.elapsed();
-        
+
         // Since we're doing a fast operation, it should succeed
-        assert!(result.is_ok(), "Fast operation should not timeout, result: {:?}", result);
-        assert!(duration < Duration::from_millis(100), 
-               "Fast operation took too long: {:?}", duration);
-               
+        assert!(
+            result.is_ok(),
+            "Fast operation should not timeout, result: {:?}",
+            result
+        );
+        assert!(
+            duration < Duration::from_millis(100),
+            "Fast operation took too long: {:?}",
+            duration
+        );
+
         // Now test a more realistic timeout scenario by creating a configuration
         // that's designed to test timeout behavior under normal conditions
-        let stats = concurrent.coordination_stats().expect("Failed to get coordination stats");
+        let stats = concurrent
+            .coordination_stats()
+            .expect("Failed to get coordination stats");
         assert_eq!(stats.total_writes, 1);
         assert_eq!(stats.timeout_count, 0);
     }
@@ -874,21 +922,31 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index =
+            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
-        
+
         let custom_config = ConcurrencyConfig {
             write_timeout: Duration::from_secs(60),
             coordination_lock_timeout: Duration::from_secs(10),
             max_pending_writes: 50,
             enable_detailed_logging: true,
         };
-        
+
         let concurrent = ConcurrentShardex::with_config(cow_index, custom_config.clone());
 
         assert_eq!(concurrent.config.write_timeout, custom_config.write_timeout);
-        assert_eq!(concurrent.config.coordination_lock_timeout, custom_config.coordination_lock_timeout);
-        assert_eq!(concurrent.config.max_pending_writes, custom_config.max_pending_writes);
-        assert_eq!(concurrent.config.enable_detailed_logging, custom_config.enable_detailed_logging);
+        assert_eq!(
+            concurrent.config.coordination_lock_timeout,
+            custom_config.coordination_lock_timeout
+        );
+        assert_eq!(
+            concurrent.config.max_pending_writes,
+            custom_config.max_pending_writes
+        );
+        assert_eq!(
+            concurrent.config.enable_detailed_logging,
+            custom_config.enable_detailed_logging
+        );
     }
 }
