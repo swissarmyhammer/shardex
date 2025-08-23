@@ -6,7 +6,7 @@
 //! - Performing similarity search
 //! - Basic error handling
 
-use shardex::{Shardex, ShardexConfig, ShardexImpl, Posting, DocumentId};
+use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
 use std::error::Error;
 
 #[tokio::main]
@@ -24,9 +24,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Configure the index
     let config = ShardexConfig::new()
         .directory_path(&temp_dir)
-        .vector_size(128)                    // 128-dimensional vectors
-        .shard_size(10000)                   // Max 10,000 vectors per shard
-        .batch_write_interval_ms(100);       // Batch writes every 100ms
+        .vector_size(128) // 128-dimensional vectors
+        .shard_size(10000) // Max 10,000 vectors per shard
+        .batch_write_interval_ms(100); // Batch writes every 100ms
 
     println!("Creating new index at: {}", temp_dir.display());
 
@@ -35,25 +35,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Prepare some sample data
     let sample_documents = [
-        ("Document about cats and dogs", generate_text_vector("cats dogs pets animals")),
-        ("Article on machine learning", generate_text_vector("machine learning AI neural networks")),
-        ("Cooking recipe for pasta", generate_text_vector("pasta cooking recipe italian food")),
-        ("Travel guide to Japan", generate_text_vector("japan travel guide tokyo culture")),
-        ("Programming tutorial", generate_text_vector("programming tutorial code software development")),
+        (
+            "Document about cats and dogs",
+            generate_text_vector("cats dogs pets animals"),
+        ),
+        (
+            "Article on machine learning",
+            generate_text_vector("machine learning AI neural networks"),
+        ),
+        (
+            "Cooking recipe for pasta",
+            generate_text_vector("pasta cooking recipe italian food"),
+        ),
+        (
+            "Travel guide to Japan",
+            generate_text_vector("japan travel guide tokyo culture"),
+        ),
+        (
+            "Programming tutorial",
+            generate_text_vector("programming tutorial code software development"),
+        ),
     ];
 
     // Create postings from sample documents
     let mut postings = Vec::new();
     for (i, (text, vector)) in sample_documents.iter().enumerate() {
         let document_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         let posting = Posting {
             document_id,
             start: 0,
             length: text.len() as u32,
             vector: vector.clone(),
         };
-        
+
         postings.push(posting);
         println!("Added document {}: {}", i + 1, text);
     }
@@ -64,7 +79,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Flush to ensure all data is written
     let flush_stats = index.flush_with_stats().await?;
-    println!("Flushed to disk - Operations: {}", flush_stats.operations_applied);
+    println!(
+        "Flushed to disk - Operations: {}",
+        flush_stats.operations_applied
+    );
 
     // Get index statistics
     let stats = index.stats().await?;
@@ -73,7 +91,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("- Total postings: {}", stats.total_postings);
     println!("- Active postings: {}", stats.active_postings);
     println!("- Vector dimension: {}", stats.vector_dimension);
-    println!("- Memory usage: {:.2} MB", stats.memory_usage as f64 / 1024.0 / 1024.0);
+    println!(
+        "- Memory usage: {:.2} MB",
+        stats.memory_usage as f64 / 1024.0 / 1024.0
+    );
 
     // Perform some searches
     println!("\nPerforming similarity searches:");
@@ -81,7 +102,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let search_queries = vec![
         ("pets and animals", "cats dogs pets animals"),
-        ("artificial intelligence", "artificial intelligence machine learning"),
+        (
+            "artificial intelligence",
+            "artificial intelligence machine learning",
+        ),
         ("cooking and food", "cooking food recipes"),
         ("travel and tourism", "travel tourism destinations"),
         ("software engineering", "programming software engineering"),
@@ -90,13 +114,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (query_desc, query_terms) in search_queries {
         println!("\nSearching for: {}", query_desc);
         let query_vector = generate_text_vector(query_terms);
-        
+
         // Search for top 3 most similar documents
         let results = index.search(&query_vector, 3, None).await?;
-        
+
         for (i, result) in results.iter().enumerate() {
-            println!("  {}. Document {} (similarity: {:.3})", 
-                i + 1, 
+            println!(
+                "  {}. Document {} (similarity: {:.3})",
+                i + 1,
                 result.document_id.raw(),
                 result.similarity_score
             );
@@ -107,10 +132,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\nSearching with custom slop factor (broader search):");
     let query_vector = generate_text_vector("food cooking");
     let results = index.search(&query_vector, 2, Some(3)).await?;
-    
+
     println!("Results with slop factor 3:");
     for result in results {
-        println!("  Document {} (similarity: {:.3})", 
+        println!(
+            "  Document {} (similarity: {:.3})",
             result.document_id.raw(),
             result.similarity_score
         );
@@ -128,14 +154,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn generate_text_vector(text: &str) -> Vec<f32> {
     let mut vector = vec![0.0; 128];
     let words: Vec<&str> = text.split_whitespace().collect();
-    
+
     // Simple hash-based vector generation (for demonstration only)
     for (i, word) in words.iter().enumerate() {
         let hash = simple_hash(word);
         let index = (hash % 128) as usize;
         vector[index] += 1.0 / (i + 1) as f32;
     }
-    
+
     // Normalize the vector
     let magnitude: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
     if magnitude > 0.0 {
@@ -143,7 +169,7 @@ fn generate_text_vector(text: &str) -> Vec<f32> {
             *value /= magnitude;
         }
     }
-    
+
     vector
 }
 

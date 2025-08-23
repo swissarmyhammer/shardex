@@ -242,6 +242,10 @@ impl ShardexIndex {
         // Ensure directory exists
         std::fs::create_dir_all(&config.directory_path).map_err(ShardexError::Io)?;
 
+        // Ensure shards subdirectory exists
+        let shards_directory = config.directory_path.join("shards");
+        std::fs::create_dir_all(&shards_directory).map_err(ShardexError::Io)?;
+
         // Create index metadata file
         let index_metadata_path = config.directory_path.join("shardex.meta");
         let metadata = IndexMetadata {
@@ -683,7 +687,9 @@ impl ShardexIndex {
             .map(|&shard_id| {
                 // We need to handle the mutable borrow issue for get_shard
                 // For now, we'll open shards directly to avoid borrowing conflicts
-                let shard = Shard::open_read_only(shard_id, &self.directory).map_err(|e| {
+                // Use the shards subdirectory for reading shard files
+                let shards_directory = self.directory.join("shards");
+                let shard = Shard::open_read_only(shard_id, &shards_directory).map_err(|e| {
                     ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e))
                 })?;
 
@@ -751,7 +757,9 @@ impl ShardexIndex {
             .map(|&shard_id| {
                 // We need to handle the mutable borrow issue for get_shard
                 // For now, we'll open shards directly to avoid borrowing conflicts
-                let shard = Shard::open_read_only(shard_id, &self.directory).map_err(|e| {
+                // Use the shards subdirectory for reading shard files
+                let shards_directory = self.directory.join("shards");
+                let shard = Shard::open_read_only(shard_id, &shards_directory).map_err(|e| {
                     ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e))
                 })?;
 
@@ -838,7 +846,8 @@ impl ShardexIndex {
         // Check if shard is already in cache
         if !self.shard_cache.contains_key(&shard_id) {
             // Load shard from disk
-            let shard = Shard::open(shard_id, &self.directory)?;
+            let shards_directory = self.directory.join("shards");
+            let shard = Shard::open(shard_id, &shards_directory)?;
 
             // Make room in cache if needed
             if self.shard_cache.len() >= self.cache_limit {
@@ -884,7 +893,8 @@ impl ShardexIndex {
     pub fn refresh_shard_metadata(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         // First ensure shard is loaded in cache
         if !self.shard_cache.contains_key(&shard_id) {
-            let shard = Shard::open_read_only(shard_id, &self.directory)?;
+            let shards_directory = self.directory.join("shards");
+            let shard = Shard::open_read_only(shard_id, &shards_directory)?;
 
             // Make room in cache if needed
             if self.shard_cache.len() >= self.cache_limit {
@@ -1081,8 +1091,9 @@ impl ShardexIndex {
             let shard_id = metadata.id;
 
             // Check if shard files exist
-            let vector_path = self.directory.join(format!("{}.vectors", shard_id));
-            let posting_path = self.directory.join(format!("{}.postings", shard_id));
+            let shards_directory = self.directory.join("shards");
+            let vector_path = shards_directory.join(format!("{}.vectors", shard_id));
+            let posting_path = shards_directory.join(format!("{}.postings", shard_id));
 
             if !vector_path.exists() {
                 warnings.push(format!("Missing vector file for shard {}", shard_id));
@@ -1095,7 +1106,7 @@ impl ShardexIndex {
             }
 
             // Load shard and verify metadata consistency
-            match Shard::open_read_only(shard_id, &self.directory) {
+            match Shard::open_read_only(shard_id, &shards_directory) {
                 Ok(shard) => {
                     // Check centroid accuracy
                     let actual_centroid = shard.get_centroid();
@@ -1161,7 +1172,14 @@ impl ShardexIndex {
     /// This method scans the directory for shard files and loads their metadata.
     /// It's called during index opening to populate the shard list.
     fn discover_shards(&mut self) -> Result<(), ShardexError> {
-        let entries = std::fs::read_dir(&self.directory).map_err(ShardexError::Io)?;
+        let shards_directory = self.directory.join("shards");
+
+        // If shards directory doesn't exist, there are no shards to discover
+        if !shards_directory.exists() {
+            return Ok(());
+        }
+
+        let entries = std::fs::read_dir(&shards_directory).map_err(ShardexError::Io)?;
 
         for entry in entries {
             let entry = entry.map_err(ShardexError::Io)?;
@@ -1176,7 +1194,7 @@ impl ShardexIndex {
                             if let Ok(shard_id) = filename_str.parse::<ShardId>() {
                                 // Check if corresponding .postings file exists
                                 let posting_path =
-                                    self.directory.join(format!("{}.postings", shard_id));
+                                    shards_directory.join(format!("{}.postings", shard_id));
                                 if posting_path.exists() {
                                     // Load shard metadata
                                     self.load_shard_metadata(shard_id)?;
@@ -1197,7 +1215,8 @@ impl ShardexIndex {
     /// then discards the shard instance to save memory.
     fn load_shard_metadata(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         // Load the shard to get its metadata
-        let shard = Shard::open_read_only(shard_id, &self.directory)?;
+        let shards_directory = self.directory.join("shards");
+        let shard = Shard::open_read_only(shard_id, &shards_directory)?;
 
         // Create metadata
         let metadata = ShardexMetadata::from_shard_metadata(
@@ -1483,7 +1502,8 @@ impl ShardexIndex {
         for shard_metadata in &self.shards {
             // Use bloom filter to check if this shard might contain the document
             // We need to load the shard temporarily to check its bloom filter
-            match Shard::open_read_only(shard_metadata.id, &self.directory) {
+            let shards_directory = self.directory.join("shards");
+            match Shard::open_read_only(shard_metadata.id, &shards_directory) {
                 Ok(shard) => {
                     // Check if the shard's bloom filter indicates this document might be present
                     // Access bloom filter directly since it's synchronous
@@ -1520,7 +1540,8 @@ impl ShardexIndex {
         shard_id: ShardId,
     ) -> Result<(), ShardexError> {
         // Load the shard to get updated metadata
-        let shard = Shard::open_read_only(shard_id, &self.directory)?;
+        let shards_directory = self.directory.join("shards");
+        let shard = Shard::open_read_only(shard_id, &shards_directory)?;
 
         // Find and update the shard metadata
         if let Some(metadata) = self.shards.iter_mut().find(|s| s.id == shard_id) {
@@ -1743,7 +1764,13 @@ mod tests {
             let mut index = ShardexIndex::create(config).unwrap();
 
             let shard_id = ShardId::new();
-            let shard = Shard::create(shard_id, 50, 32, temp_dir.path().to_path_buf()).unwrap();
+            let shards_dir = temp_dir.path().join("shards");
+            std::fs::create_dir_all(&shards_dir).unwrap();
+            let mut shard = Shard::create(shard_id, 50, 32, shards_dir).unwrap();
+            // Need to add at least one posting and sync for the test to work
+            let posting = Posting::new(DocumentId::new(), 0, 10, vec![1.0; 32], 32).unwrap();
+            shard.add_posting(posting).unwrap();
+            shard.sync().unwrap();
             index.add_shard(shard).unwrap();
         }
 
@@ -1870,9 +1897,11 @@ mod tests {
 
         // Create and add multiple shards
         let mut shard_ids = Vec::new();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
         for _ in 0..5 {
             let shard_id = ShardId::new();
-            let shard = Shard::create(shard_id, 10, 8, temp_dir.path().to_path_buf()).unwrap();
+            let shard = Shard::create(shard_id, 10, 8, shards_dir.clone()).unwrap();
             shard_ids.push(shard_id);
             index.add_shard(shard).unwrap();
         }
@@ -2015,7 +2044,13 @@ mod tests {
 
         // Create and add a valid shard
         let shard_id = ShardId::new();
-        let shard = Shard::create(shard_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+        let mut shard = Shard::create(shard_id, 10, 2, shards_dir).unwrap();
+        // Add a posting to make the shard non-empty for validation
+        let posting = Posting::new(DocumentId::new(), 0, 5, vec![1.0, 0.0], 2).unwrap();
+        shard.add_posting(posting).unwrap();
+        shard.sync().unwrap();
         index.add_shard(shard).unwrap();
 
         // Validate index - should have no warnings
@@ -2414,9 +2449,12 @@ mod tests {
             vec![-1.0, 0.0, 0.0], // West
         ];
 
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+
         for centroid in test_vectors.iter() {
             let shard_id = ShardId::new();
-            let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+            let mut shard = Shard::create(shard_id, 100, 3, shards_dir.clone()).unwrap();
 
             // Add multiple postings to each shard
             for j in 0..5 {
@@ -2427,6 +2465,9 @@ mod tests {
                 let posting = Posting::new(doc_id, j * 10, 10, vector, 3).unwrap();
                 shard.add_posting(posting).unwrap();
             }
+
+            // Sync shard to flush data to disk
+            shard.sync().unwrap();
 
             shard_ids.push(shard_id);
             index.add_shard(shard).unwrap();
@@ -2469,10 +2510,12 @@ mod tests {
         let mut index = ShardexIndex::create(config).unwrap();
 
         // Create multiple shards with known postings
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
         let mut shard_ids = Vec::new();
         for i in 0..5 {
             let shard_id = ShardId::new();
-            let mut shard = Shard::create(shard_id, 20, 4, temp_dir.path().to_path_buf()).unwrap();
+            let mut shard = Shard::create(shard_id, 20, 4, shards_dir.clone()).unwrap();
 
             // Add postings with predictable vectors
             for j in 0..10 {
@@ -2481,6 +2524,9 @@ mod tests {
                 let posting = Posting::new(doc_id, j * 10, 10, vector, 4).unwrap();
                 shard.add_posting(posting).unwrap();
             }
+
+            // Sync shard to flush data to disk
+            shard.sync().unwrap();
 
             shard_ids.push(shard_id);
             index.add_shard(shard).unwrap();
@@ -2537,18 +2583,20 @@ mod tests {
         let mut index = ShardexIndex::create(config).unwrap();
 
         // Create two shards that might have overlapping results
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
         let doc_id = DocumentId::new(); // Same document ID for both shards
         let vector = vec![0.5, 0.5];
 
         // Shard 1
         let shard1_id = ShardId::new();
-        let mut shard1 = Shard::create(shard1_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard1 = Shard::create(shard1_id, 10, 2, shards_dir.clone()).unwrap();
         let posting1 = Posting::new(doc_id, 0, 10, vector.clone(), 2).unwrap();
         shard1.add_posting(posting1).unwrap();
 
         // Shard 2 with same document and start position (should be deduplicated)
         let shard2_id = ShardId::new();
-        let mut shard2 = Shard::create(shard2_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard2 = Shard::create(shard2_id, 10, 2, shards_dir.clone()).unwrap();
         let posting2 = Posting::new(doc_id, 0, 10, vector, 2).unwrap();
         shard2.add_posting(posting2).unwrap();
 
@@ -2556,6 +2604,10 @@ mod tests {
         let doc_id2 = DocumentId::new();
         let posting3 = Posting::new(doc_id2, 10, 10, vec![0.6, 0.6], 2).unwrap();
         shard2.add_posting(posting3).unwrap();
+
+        // Sync shards to flush data to disk
+        shard1.sync().unwrap();
+        shard2.sync().unwrap();
 
         index.add_shard(shard1).unwrap();
         index.add_shard(shard2).unwrap();
@@ -2693,8 +2745,10 @@ mod tests {
         let mut index = ShardexIndex::create(config).unwrap();
 
         // Create a shard with many postings
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
         let shard_id = ShardId::new();
-        let mut shard = Shard::create(shard_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut shard = Shard::create(shard_id, 100, 2, shards_dir).unwrap();
 
         // Add 50 postings with varying similarity to query
         for i in 0..50 {
@@ -2704,6 +2758,9 @@ mod tests {
             let posting = Posting::new(doc_id, i * 10, 10, vector, 2).unwrap();
             shard.add_posting(posting).unwrap();
         }
+
+        // Sync shard to flush data to disk
+        shard.sync().unwrap();
 
         index.add_shard(shard).unwrap();
 
@@ -2748,7 +2805,9 @@ mod tests {
 
         // Create a shard and add some postings
         let shard_id = ShardId::new();
-        let mut shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+        let mut shard = Shard::create(shard_id, 100, 384, shards_dir.clone()).unwrap();
 
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
@@ -2779,6 +2838,9 @@ mod tests {
         shard.add_posting(posting2).unwrap();
         shard.add_posting(posting3).unwrap();
 
+        // Sync shard to flush data to disk
+        shard.sync().unwrap();
+
         // Add shard to index
         index.add_shard(shard).unwrap();
 
@@ -2807,8 +2869,10 @@ mod tests {
         // Create two shards
         let shard_id1 = ShardId::new();
         let shard_id2 = ShardId::new();
-        let mut shard1 = Shard::create(shard_id1, 100, 384, temp_dir.path().to_path_buf()).unwrap();
-        let mut shard2 = Shard::create(shard_id2, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+        let mut shard1 = Shard::create(shard_id1, 100, 384, shards_dir.clone()).unwrap();
+        let mut shard2 = Shard::create(shard_id2, 100, 384, shards_dir.clone()).unwrap();
 
         let doc_id = DocumentId::new();
 
@@ -2835,6 +2899,10 @@ mod tests {
         shard1.add_posting(posting1).unwrap();
         shard1.add_posting(posting2).unwrap();
         shard2.add_posting(posting3).unwrap();
+
+        // Sync shards to flush data to disk
+        shard1.sync().unwrap();
+        shard2.sync().unwrap();
 
         // Add shards to index
         index.add_shard(shard1).unwrap();
@@ -3071,7 +3139,9 @@ mod tests {
 
         // Create shard and add postings
         let shard_id = ShardId::new();
-        let mut shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+        let mut shard = Shard::create(shard_id, 100, 384, shards_dir).unwrap();
 
         let doc_id = DocumentId::new();
         let posting1 = Posting {
@@ -3089,6 +3159,9 @@ mod tests {
 
         shard.add_posting(posting1).unwrap();
         shard.add_posting(posting2).unwrap();
+
+        // Sync shard to flush data to disk
+        shard.sync().unwrap();
 
         // Add shard to index and verify initial metadata
         index.add_shard(shard).unwrap();
@@ -3117,10 +3190,14 @@ mod tests {
         let mut index = ShardexIndex::create(config).unwrap();
 
         // Create many shards but only add document to one
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
         let mut shard_ids = Vec::new();
         for _ in 0..5 {
             let shard_id = ShardId::new();
-            let shard = Shard::create(shard_id, 100, 384, temp_dir.path().to_path_buf()).unwrap();
+            let mut shard = Shard::create(shard_id, 100, 384, shards_dir.clone()).unwrap();
+            // Sync empty shards to ensure they exist on disk
+            shard.sync().unwrap();
             shard_ids.push(shard_id);
             index.add_shard(shard).unwrap();
         }
@@ -3137,6 +3214,7 @@ mod tests {
         {
             let shard = index.get_shard_mut(shard_ids[0]).unwrap();
             shard.add_posting(posting).unwrap();
+            shard.sync().unwrap();
         }
 
         // Find candidate shards - should be much fewer than total due to bloom filter

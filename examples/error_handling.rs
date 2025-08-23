@@ -6,7 +6,7 @@
 //! - Input validation and error prevention
 //! - Robust application patterns
 
-use shardex::{Shardex, ShardexConfig, ShardexImpl, ShardexError, Posting, DocumentId};
+use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexError, ShardexImpl};
 use std::error::Error;
 
 #[tokio::main]
@@ -107,8 +107,7 @@ async fn demonstrate_config_errors(temp_dir: &std::path::Path) {
     }
 
     // Invalid directory path (empty)
-    let invalid_config = ShardexConfig::new()
-        .directory_path("");
+    let invalid_config = ShardexConfig::new().directory_path("");
 
     match ShardexImpl::create(invalid_config).await {
         Ok(_) => println!("✗ Unexpected success with empty directory path"),
@@ -130,7 +129,10 @@ async fn demonstrate_input_validation(index: &mut ShardexImpl) {
     match index.add_postings(vec![posting_wrong_dim]).await {
         Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
         Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
+            println!(
+                "✓ Caught dimension error: expected {}, got {}",
+                expected, actual
+            );
         }
         Err(e) => println!("✗ Unexpected error type: {}", e),
     }
@@ -193,7 +195,10 @@ async fn demonstrate_search_errors(index: &ShardexImpl) {
     match index.search(&wrong_query, 5, None).await {
         Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
         Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
+            println!(
+                "✓ Caught search dimension error: expected {}, got {}",
+                expected, actual
+            );
         }
         Err(e) => println!("✗ Unexpected error type: {}", e),
     }
@@ -225,12 +230,12 @@ async fn demonstrate_robust_patterns(temp_dir: &std::path::Path) -> Result<(), B
     let result = retry_with_backoff(
         || async {
             // Simulate operation that might fail
-            let config = ShardexConfig::new()
-                .directory_path(temp_dir.join("robust_index"));
+            let config = ShardexConfig::new().directory_path(temp_dir.join("robust_index"));
             ShardexImpl::create(config).await
         },
         3, // max retries
-    ).await;
+    )
+    .await;
 
     match result {
         Ok(_) => println!("    ✓ Operation succeeded"),
@@ -242,14 +247,12 @@ async fn demonstrate_robust_patterns(temp_dir: &std::path::Path) -> Result<(), B
     let mut index = create_or_recover_index(temp_dir.join("graceful_index")).await?;
 
     // Try to add some data
-    let postings = vec![
-        Posting {
-            document_id: DocumentId::from_raw(1),
-            start: 0,
-            length: 100,
-            vector: vec![0.1; 128],
-        }
-    ];
+    let postings = vec![Posting {
+        document_id: DocumentId::from_raw(1),
+        start: 0,
+        length: 100,
+        vector: vec![0.1; 128],
+    }];
 
     match index.add_postings(postings).await {
         Ok(_) => {
@@ -273,14 +276,14 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
 
     // Strategy 1: Automatic retry for transient errors
     println!("\n  Strategy 1: Automatic retry for transient errors");
-    
+
     let index_path = temp_dir.join("recovery_index");
     let mut attempts = 0;
-    
+
     let _index = loop {
         attempts += 1;
         let config = ShardexConfig::new().directory_path(&index_path);
-        
+
         match ShardexImpl::create(config).await {
             Ok(index) => {
                 println!("    ✓ Index created successfully on attempt {}", attempts);
@@ -292,7 +295,10 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
                 continue;
             }
             Err(e) => {
-                println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
+                println!(
+                    "    ✗ Failed to create index after {} attempts: {}",
+                    attempts, e
+                );
                 return Err(e.into());
             }
         }
@@ -300,7 +306,7 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
 
     // Strategy 2: Validate before operations
     println!("\n  Strategy 2: Input validation before operations");
-    
+
     let validate_and_add = |postings: Vec<Posting>| async {
         // Pre-validate postings
         for (i, posting) in postings.iter().enumerate() {
@@ -308,21 +314,23 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
                 return Err(format!("Posting {} has empty vector", i));
             }
             if posting.vector.len() != 128 {
-                return Err(format!("Posting {} has wrong vector dimension: {}", i, posting.vector.len()));
+                return Err(format!(
+                    "Posting {} has wrong vector dimension: {}",
+                    i,
+                    posting.vector.len()
+                ));
             }
         }
-        
+
         Ok(postings)
     };
 
-    let test_postings = vec![
-        Posting {
-            document_id: DocumentId::from_raw(1),
-            start: 0,
-            length: 100,
-            vector: vec![0.1; 128],
-        }
-    ];
+    let test_postings = vec![Posting {
+        document_id: DocumentId::from_raw(1),
+        start: 0,
+        length: 100,
+        vector: vec![0.1; 128],
+    }];
 
     match validate_and_add(test_postings).await {
         Ok(_validated_postings) => {
@@ -335,10 +343,7 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
     Ok(())
 }
 
-async fn retry_with_backoff<F, Fut, T, E>(
-    mut operation: F,
-    max_retries: usize,
-) -> Result<T, E>
+async fn retry_with_backoff<F, Fut, T, E>(mut operation: F, max_retries: usize) -> Result<T, E>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
@@ -356,7 +361,7 @@ where
             }
         }
     }
-    
+
     unreachable!()
 }
 
