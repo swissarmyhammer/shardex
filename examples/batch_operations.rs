@@ -30,7 +30,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .shard_size(20000) // Larger shards for batch efficiency
         .batch_write_interval_ms(250) // Longer batching window
         .default_slop_factor(3)
-        .bloom_filter_size(2048);
+        .bloom_filter_size(2048)
+        .wal_segment_size(64 * 1024 * 1024) // 64MB segments for batch operations
+        .wal_safety_margin(0.1); // 10% safety margin for better space utilization
 
     let mut index = ShardexImpl::create(config).await?;
 

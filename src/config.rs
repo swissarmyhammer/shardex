@@ -205,7 +205,7 @@ impl Default for ShardexConfig {
             shard_size: 10000,
             shardex_segment_size: 1000,
             wal_segment_size: 1024 * 1024, // 1MB
-            wal_safety_margin: 0.5, // 50% safety margin
+            wal_safety_margin: 0.5,        // 50% safety margin
             batch_write_interval_ms: 100,
             slop_factor_config: SlopFactorConfig::default(),
             bloom_filter_size: 1024,
