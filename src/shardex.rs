@@ -9,11 +9,12 @@ use crate::config_persistence::{ConfigurationManager, PersistedConfig};
 use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
 use crate::layout::{DirectoryLayout, IndexMetadata};
+use crate::monitoring::{DetailedIndexStats, PerformanceMonitor as MonitoringPerformanceMonitor};
 use crate::shardex_index::ShardexIndex;
 use crate::structures::{FlushStats, IndexStats, Posting, SearchResult};
-use crate::ShardId;
 use crate::transactions::{BatchConfig, WalOperation};
 use crate::wal_replay::WalReplayer;
+use crate::ShardId;
 use async_trait::async_trait;
 use std::path::Path;
 use std::time::Duration;
@@ -70,6 +71,9 @@ pub trait Shardex {
 
     /// Get index statistics
     async fn stats(&self) -> Result<IndexStats, Self::Error>;
+
+    /// Get detailed index statistics with comprehensive performance metrics
+    async fn detailed_stats(&self) -> Result<crate::monitoring::DetailedIndexStats, Self::Error>;
 }
 
 /// Main Shardex implementation
@@ -81,6 +85,8 @@ pub struct ShardexImpl {
     config_manager: ConfigurationManager,
     /// Operations waiting to be applied to shards after WAL commit
     pending_shard_operations: Vec<WalOperation>,
+    /// Performance monitoring system
+    performance_monitor: MonitoringPerformanceMonitor,
 }
 
 impl ShardexImpl {
@@ -123,6 +129,7 @@ impl ShardexImpl {
             layout,
             config_manager,
             pending_shard_operations: Vec::new(),
+            performance_monitor: MonitoringPerformanceMonitor::new(),
         })
     }
 
@@ -146,6 +153,7 @@ impl ShardexImpl {
             layout,
             config_manager,
             pending_shard_operations: Vec::new(),
+            performance_monitor: MonitoringPerformanceMonitor::new(),
         })
     }
 
@@ -316,13 +324,15 @@ impl ShardexImpl {
     }
 
     /// Search using the existing parallel_search infrastructure
-    pub fn search_impl(
+    pub async fn search_impl(
         &self,
         query_vector: &[f32],
         k: usize,
         metric: DistanceMetric,
         slop_factor: Option<usize>,
     ) -> Result<Vec<SearchResult>, ShardexError> {
+        let start_time = std::time::Instant::now();
+
         // Use slop_factor from config if not provided
         let slop = slop_factor.unwrap_or(self.config.slop_factor_config.default_factor);
 
@@ -330,9 +340,20 @@ impl ShardexImpl {
         let candidate_shards = self.index.find_nearest_shards(query_vector, slop)?;
 
         // Use parallel search with the specified metric
-        // Use parallel_search_with_metric for all distance metrics
-        self.index
-            .parallel_search_with_metric(query_vector, &candidate_shards, k, metric)
+        let search_result =
+            self.index
+                .parallel_search_with_metric(query_vector, &candidate_shards, k, metric);
+
+        // Record performance metrics
+        let elapsed = start_time.elapsed();
+        let success = search_result.is_ok();
+        let result_count = search_result.as_ref().map(|r| r.len()).unwrap_or(0);
+
+        self.performance_monitor
+            .record_search(elapsed, result_count, success)
+            .await;
+
+        search_result
     }
 
     /// Apply pending operations to shards after they've been committed to WAL
@@ -419,6 +440,15 @@ impl ShardexImpl {
             stats.shards_synced,
             stats.operations_applied
         );
+
+        // Record write performance metrics
+        self.performance_monitor
+            .record_write(
+                stats.total_duration,
+                stats.bytes_synced,
+                true, // success since we got to this point
+            )
+            .await;
 
         Ok(stats)
     }
@@ -509,7 +539,10 @@ impl ShardexImpl {
             if let Err(e) = posting.validate_dimension(self.config.vector_size) {
                 return Err(ShardexError::invalid_posting_data(
                     format!("posting at index {} has wrong vector dimension: {}", i, e),
-                    format!("Ensure all vectors have {} dimensions as configured for this index", self.config.vector_size)
+                    format!(
+                        "Ensure all vectors have {} dimensions as configured for this index",
+                        self.config.vector_size
+                    ),
                 ));
             }
 
@@ -533,7 +566,7 @@ impl ShardexImpl {
             if posting.length == 0 {
                 return Err(ShardexError::invalid_posting_data(
                     format!("posting at index {} has zero length", i),
-                    "Ensure all postings have a positive length value representing text span"
+                    "Ensure all postings have a positive length value representing text span",
                 ));
             }
 
@@ -575,7 +608,7 @@ impl ShardexImpl {
                 return Err(ShardexError::invalid_input(
                     "document_ids",
                     format!("duplicate document ID {} at index {}", doc_id, i),
-                    "Remove duplicate document IDs from your batch"
+                    "Remove duplicate document IDs from your batch",
                 ));
             }
         }
@@ -584,13 +617,21 @@ impl ShardexImpl {
     }
 
     /// Validate input parameters for search operations
-    fn validate_search_input(&self, query_vector: &[f32], k: usize, slop_factor: Option<usize>) -> Result<(), ShardexError> {
+    fn validate_search_input(
+        &self,
+        query_vector: &[f32],
+        k: usize,
+        slop_factor: Option<usize>,
+    ) -> Result<(), ShardexError> {
         // Validate query vector
         if query_vector.is_empty() {
             return Err(ShardexError::invalid_input(
                 "query_vector",
                 "cannot be empty",
-                format!("Provide a query vector with {} dimensions", self.config.vector_size)
+                format!(
+                    "Provide a query vector with {} dimensions",
+                    self.config.vector_size
+                ),
             ));
         }
 
@@ -598,7 +639,7 @@ impl ShardexImpl {
             return Err(ShardexError::invalid_dimension_with_context(
                 self.config.vector_size,
                 query_vector.len(),
-                "search_query"
+                "search_query",
             ));
         }
 
@@ -625,7 +666,7 @@ impl ShardexImpl {
             return Err(ShardexError::invalid_input(
                 "k",
                 "must be greater than 0",
-                "Specify how many nearest neighbors you want to find (e.g., k=10)"
+                "Specify how many nearest neighbors you want to find (e.g., k=10)",
             ));
         }
 
@@ -633,7 +674,7 @@ impl ShardexImpl {
             return Err(ShardexError::resource_exhausted(
                 "result_count",
                 format!("k={} is too large and may cause memory issues", k),
-                "Use a smaller k value (recommended: 10-1000 depending on your use case)"
+                "Use a smaller k value (recommended: 10-1000 depending on your use case)",
             ));
         }
 
@@ -643,15 +684,27 @@ impl ShardexImpl {
             if slop < config.min_factor {
                 return Err(ShardexError::invalid_input(
                     "slop_factor",
-                    format!("value {} is below minimum allowed value {}", slop, config.min_factor),
-                    format!("Use a slop factor between {} and {}", config.min_factor, config.max_factor)
+                    format!(
+                        "value {} is below minimum allowed value {}",
+                        slop, config.min_factor
+                    ),
+                    format!(
+                        "Use a slop factor between {} and {}",
+                        config.min_factor, config.max_factor
+                    ),
                 ));
             }
             if slop > config.max_factor {
                 return Err(ShardexError::invalid_input(
                     "slop_factor",
-                    format!("value {} exceeds maximum allowed value {}", slop, config.max_factor),
-                    format!("Use a slop factor between {} and {}", config.min_factor, config.max_factor)
+                    format!(
+                        "value {} exceeds maximum allowed value {}",
+                        slop, config.max_factor
+                    ),
+                    format!(
+                        "Use a slop factor between {} and {}",
+                        config.min_factor, config.max_factor
+                    ),
                 ));
             }
         }
@@ -659,9 +712,11 @@ impl ShardexImpl {
         Ok(())
     }
 
-
     /// Retry a transient operation with exponential backoff
-    pub async fn retry_transient_operation<F, T, Fut>(&self, mut operation: F) -> Result<T, ShardexError>
+    pub async fn retry_transient_operation<F, T, Fut>(
+        &self,
+        mut operation: F,
+    ) -> Result<T, ShardexError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, ShardexError>>,
@@ -671,7 +726,7 @@ impl ShardexImpl {
         const MAX_BACKOFF_MS: u64 = 5000;
 
         let mut backoff_ms = INITIAL_BACKOFF_MS;
-        
+
         for retry_count in 0..=MAX_RETRIES {
             match operation().await {
                 Ok(result) => {
@@ -688,13 +743,16 @@ impl ShardexImpl {
                         e,
                         backoff_ms
                     );
-                    
+
                     tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                     backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
                 }
                 Err(e) => {
                     if retry_count > 0 {
-                        warn!("Operation failed permanently after {} retries: {}", retry_count, e);
+                        warn!(
+                            "Operation failed permanently after {} retries: {}",
+                            retry_count, e
+                        );
                     }
                     return Err(e);
                 }
@@ -710,7 +768,7 @@ impl ShardexImpl {
 
         // Step 1: Validate current state and identify issues
         let mut recovery_issues = Vec::new();
-        
+
         if let Err(e) = self.validate_consistency().await {
             recovery_issues.push(format!("Consistency validation failed: {}", e));
         }
@@ -718,7 +776,7 @@ impl ShardexImpl {
         // Step 2: Check if WAL replay is needed
         let layout = DirectoryLayout::new(&self.config.directory_path);
         let metadata_result = IndexMetadata::load(layout.metadata_path());
-        
+
         match metadata_result {
             Ok(metadata) if metadata.flags.needs_recovery => {
                 info!("WAL recovery required, attempting replay");
@@ -745,8 +803,11 @@ impl ShardexImpl {
             };
 
             if let Err(e) = validation_result {
-                warn!("Shard {} integrity check failed: {}, attempting repair", shard_id, e);
-                
+                warn!(
+                    "Shard {} integrity check failed: {}, attempting repair",
+                    shard_id, e
+                );
+
                 // Implement shard repair strategies
                 match self.repair_shard(shard_id, &e).await {
                     Ok(()) => {
@@ -754,15 +815,20 @@ impl ShardexImpl {
                         // Re-validate after repair
                         if let Ok(shard) = self.index.get_shard(shard_id) {
                             if let Err(recheck_error) = shard.validate_integrity() {
-                                recovery_issues.push(format!("Shard {} failed validation after repair: {}", shard_id, recheck_error));
+                                recovery_issues.push(format!(
+                                    "Shard {} failed validation after repair: {}",
+                                    shard_id, recheck_error
+                                ));
                             } else {
                                 info!("Shard {} passed validation after repair", shard_id);
                             }
                         }
                     }
                     Err(repair_error) => {
-                        recovery_issues.push(format!("Shard {} repair failed: {} (original error: {})", 
-                                                    shard_id, repair_error, e));
+                        recovery_issues.push(format!(
+                            "Shard {} repair failed: {} (original error: {})",
+                            shard_id, repair_error, e
+                        ));
                     }
                 }
             }
@@ -775,15 +841,26 @@ impl ShardexImpl {
         } else {
             let issues_summary = recovery_issues.join("; ");
             Err(ShardexError::corruption_with_recovery(
-                format!("Index recovery found {} issues: {}", recovery_issues.len(), issues_summary),
-                "Consider rebuilding the index from source data or restoring from backup"
+                format!(
+                    "Index recovery found {} issues: {}",
+                    recovery_issues.len(),
+                    issues_summary
+                ),
+                "Consider rebuilding the index from source data or restoring from backup",
             ))
         }
     }
 
     /// Repair a corrupted shard using various recovery strategies
-    pub async fn repair_shard(&mut self, shard_id: ShardId, error: &ShardexError) -> Result<(), ShardexError> {
-        info!("Starting repair of shard {} due to error: {}", shard_id, error);
+    pub async fn repair_shard(
+        &mut self,
+        shard_id: ShardId,
+        error: &ShardexError,
+    ) -> Result<(), ShardexError> {
+        info!(
+            "Starting repair of shard {} due to error: {}",
+            shard_id, error
+        );
 
         // Strategy 1: Attempt to rebuild from WAL if available
         if error.to_string().contains("corruption") || error.to_string().contains("checksum") {
@@ -804,7 +881,10 @@ impl ShardexImpl {
             info!("Attempting partial data recovery for shard {}", shard_id);
             match self.salvage_shard_data(shard_id).await {
                 Ok(recovered_docs) => {
-                    info!("Salvaged {} documents from shard {}", recovered_docs, shard_id);
+                    info!(
+                        "Salvaged {} documents from shard {}",
+                        recovered_docs, shard_id
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -814,18 +894,22 @@ impl ShardexImpl {
         }
 
         // Strategy 3: Reset shard if other strategies fail
-        warn!("All repair strategies failed for shard {}, attempting reset", shard_id);
+        warn!(
+            "All repair strategies failed for shard {}, attempting reset",
+            shard_id
+        );
         match self.reset_shard(shard_id).await {
             Ok(()) => {
-                warn!("Shard {} was reset - data may be lost but shard is now functional", shard_id);
+                warn!(
+                    "Shard {} was reset - data may be lost but shard is now functional",
+                    shard_id
+                );
                 Ok(())
             }
-            Err(e) => {
-                Err(ShardexError::corruption_with_recovery(
-                    format!("All repair strategies failed for shard {}: {}", shard_id, e),
-                    "Consider rebuilding the entire index from source data or restoring from backup"
-                ))
-            }
+            Err(e) => Err(ShardexError::corruption_with_recovery(
+                format!("All repair strategies failed for shard {}: {}", shard_id, e),
+                "Consider rebuilding the entire index from source data or restoring from backup",
+            )),
         }
     }
 
@@ -833,45 +917,48 @@ impl ShardexImpl {
     async fn rebuild_shard_from_wal(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         let layout = DirectoryLayout::new(&self.config.directory_path);
         let wal_dir = layout.wal_dir();
-        
+
         if !wal_dir.exists() {
             return Err(ShardexError::invalid_input(
                 "wal_missing",
                 "WAL directory not found for shard rebuild",
-                "Cannot rebuild shard without WAL data"
+                "Cannot rebuild shard without WAL data",
             ));
         }
 
         info!("Rebuilding shard {} from WAL entries", shard_id);
         // Simplified implementation - would use actual WalReplayer
         info!("WAL replay completed for shard {}", shard_id);
-        
+
         Ok(())
     }
 
     /// Salvage uncorrupted data from a partially damaged shard
     async fn salvage_shard_data(&mut self, shard_id: ShardId) -> Result<u64, ShardexError> {
         info!("Attempting to salvage data from shard {}", shard_id);
-        
+
         // Simplified implementation - would analyze shard for recoverable data
         let salvaged_count = 0; // Would be actual count of recovered documents
-        
+
         if salvaged_count > 0 {
-            info!("Salvaged {} documents from shard {}", salvaged_count, shard_id);
+            info!(
+                "Salvaged {} documents from shard {}",
+                salvaged_count, shard_id
+            );
             self.flush().await?; // Ensure salvaged data is persisted
         }
-        
+
         Ok(salvaged_count)
     }
 
     /// Reset a shard to empty state (last resort)
     async fn reset_shard(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         warn!("Resetting shard {} - this will cause data loss", shard_id);
-        
+
         // Simplified implementation - would actually reset the shard
         info!("Shard {} reset operation initiated", shard_id);
         self.flush().await?; // Ensure the reset is persisted
-        
+
         info!("Shard {} has been reset to empty state", shard_id);
         Ok(())
     }
@@ -882,27 +969,27 @@ impl ShardexImpl {
             "memory" => {
                 warn!("Memory exhaustion detected, triggering emergency flush");
                 self.flush().await?;
-                
+
                 // Implement memory pressure relief strategies
                 info!("Implementing memory pressure relief strategies");
-                
+
                 // Reduce batch sizes for future operations (simulated - would need batch processor API)
                 warn!("Memory pressure detected - reducing batch processing efficiency");
-                
+
                 // Force memory cleanup through flush
                 info!("Completed emergency memory management procedures");
-                
+
                 // Temporarily disable non-essential operations
                 info!("Memory pressure relief strategies applied successfully")
             }
             "disk_space" => {
                 warn!("Disk space exhaustion detected, attempting cleanup");
-                
+
                 // Implement disk cleanup strategies
                 info!("Starting emergency disk cleanup procedures");
                 let _layout = DirectoryLayout::new(&self.config.directory_path);
                 let mut cleanup_successful = false;
-                
+
                 // Clean up temporary files (simplified implementation)
                 let temp_path = self.config.directory_path.join("temp");
                 match std::fs::read_dir(&temp_path) {
@@ -910,7 +997,8 @@ impl ShardexImpl {
                         let mut temp_files_cleaned = 0;
                         for entry in entries.flatten() {
                             if let Ok(metadata) = entry.metadata() {
-                                if metadata.is_file() && std::fs::remove_file(entry.path()).is_ok() {
+                                if metadata.is_file() && std::fs::remove_file(entry.path()).is_ok()
+                                {
                                     temp_files_cleaned += 1;
                                 }
                             }
@@ -922,7 +1010,7 @@ impl ShardexImpl {
                     }
                     Err(e) => warn!("Could not access temp directory: {}", e),
                 }
-                
+
                 // Compact WAL segments by forcing flush and compaction
                 if let Err(e) = self.flush().await {
                     warn!("Failed to flush during disk cleanup: {}", e);
@@ -930,12 +1018,12 @@ impl ShardexImpl {
                     info!("WAL compaction completed during disk cleanup");
                     cleanup_successful = true;
                 }
-                
+
                 // Assume cleanup was somewhat successful if we got this far
                 if cleanup_successful {
                     info!("Disk cleanup completed - space should be available");
                 }
-                
+
                 if !cleanup_successful {
                     return Err(ShardexError::resource_exhausted(
                         "disk_space",
@@ -943,46 +1031,49 @@ impl ShardexImpl {
                         "Free up disk space manually or move the index to a location with more available space"
                     ));
                 }
-                
+
                 info!("Disk cleanup completed successfully");
             }
             "file_handles" => {
                 warn!("File handle exhaustion detected, attempting to close unused handles");
-                
+
                 // Implement file handle management strategies
                 info!("Starting file handle recovery procedures");
-                
+
                 // Force flush to close WAL handles that may be accumulating
                 if let Err(e) = self.flush().await {
                     warn!("Failed to flush during file handle cleanup: {}", e);
                 } else {
                     info!("Flush completed - WAL handles released");
                 }
-                
+
                 // Force flush to close any WAL handles
                 info!("File handle management: forcing flush to close handles");
-                
+
                 // Simulate concurrency reduction (would need actual batch processor API)
                 info!("Reduced processing concurrency to manage file handles");
-                
+
                 // Log system file handle limits for diagnostics
                 match self.get_file_handle_limits() {
                     Ok((soft, hard)) => {
                         info!("System file handle limits: soft={}, hard={}", soft, hard);
                         if soft < 1024 {
-                            warn!("File handle soft limit ({}) is quite low, consider increasing", soft);
+                            warn!(
+                                "File handle soft limit ({}) is quite low, consider increasing",
+                                soft
+                            );
                         }
                     }
                     Err(e) => warn!("Could not query file handle limits: {}", e),
                 }
-                
+
                 info!("File handle management strategies applied successfully");
             }
             _ => {
                 return Err(ShardexError::resource_exhausted(
                     resource,
                     format!("Unknown resource type: {}", resource),
-                    "Check system resources and configuration"
+                    "Check system resources and configuration",
                 ));
             }
         }
@@ -1091,6 +1182,37 @@ impl ShardexImpl {
                 Ok(())
             }
         }
+    }
+
+    /// Update detailed statistics with current resource usage metrics
+    async fn update_resource_metrics(
+        &self,
+        detailed_stats: &mut DetailedIndexStats,
+    ) -> Result<(), ShardexError> {
+        // Count memory-mapped regions (estimate based on shards)
+        detailed_stats.memory_mapped_regions = detailed_stats.total_shards * 2; // vectors + postings per shard
+
+        // Count WAL segments (would be enhanced with actual WAL manager integration)
+        detailed_stats.wal_segment_count = if self.batch_processor.is_some() { 1 } else { 0 };
+
+        // Estimate file descriptors (basic estimation)
+        detailed_stats.file_descriptor_count = detailed_stats.total_shards * 2 // shard files
+            + detailed_stats.wal_segment_count // WAL files
+            + 10; // metadata and other files
+
+        // Active connections (would be enhanced with actual connection tracking)
+        detailed_stats.active_connections = 1; // Current process connection
+
+        // Update resource metrics in the performance monitor
+        self.performance_monitor
+            .update_resource_metrics(
+                detailed_stats.memory_usage,
+                detailed_stats.disk_usage,
+                detailed_stats.file_descriptor_count,
+            )
+            .await;
+
+        Ok(())
     }
 }
 
@@ -1389,8 +1511,9 @@ impl Shardex for ShardexImpl {
     ) -> Result<Vec<SearchResult>, Self::Error> {
         // Comprehensive input validation
         self.validate_search_input(query_vector, k, slop_factor)?;
-        
+
         self.search_impl(query_vector, k, DistanceMetric::Cosine, slop_factor)
+            .await
     }
 
     async fn search_with_metric(
@@ -1402,8 +1525,8 @@ impl Shardex for ShardexImpl {
     ) -> Result<Vec<SearchResult>, Self::Error> {
         // Comprehensive input validation
         self.validate_search_input(query_vector, k, slop_factor)?;
-        
-        self.search_impl(query_vector, k, metric, slop_factor)
+
+        self.search_impl(query_vector, k, metric, slop_factor).await
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
@@ -1477,6 +1600,9 @@ impl Shardex for ShardexImpl {
             0
         } + self.pending_shard_operations.len();
 
+        // Get performance metrics from the monitoring system
+        let detailed_stats = self.performance_monitor.get_detailed_stats().await;
+
         Ok(IndexStats {
             total_shards,
             total_postings,
@@ -1487,7 +1613,71 @@ impl Shardex for ShardexImpl {
             average_shard_utilization,
             vector_dimension: self.config.vector_size,
             disk_usage,
+            search_latency_p50: detailed_stats.search_latency_p50,
+            search_latency_p95: detailed_stats.search_latency_p95,
+            search_latency_p99: detailed_stats.search_latency_p99,
+            write_throughput: detailed_stats.write_throughput,
+            bloom_filter_hit_rate: detailed_stats.bloom_filter_hit_rate,
         })
+    }
+
+    async fn detailed_stats(&self) -> Result<DetailedIndexStats, Self::Error> {
+        // Collect basic index statistics (same as stats() method)
+        let metadata_slice = self.index.all_shard_metadata();
+        let total_shards = metadata_slice.len();
+
+        let mut total_postings = 0;
+        let mut active_postings = 0;
+        let mut deleted_postings = 0;
+        let mut memory_usage = 0;
+        let mut disk_usage = 0;
+        let mut shard_utilizations = Vec::new();
+
+        // Iterate through all shard metadata to collect statistics
+        for metadata in metadata_slice {
+            total_postings += metadata.posting_count;
+            let estimated_active = (metadata.utilization * metadata.capacity as f32) as usize;
+            active_postings += estimated_active;
+            deleted_postings += metadata.posting_count.saturating_sub(estimated_active);
+            memory_usage += metadata.memory_usage;
+
+            // Estimate disk usage
+            let estimated_disk_usage = metadata.posting_count * (self.config.vector_size * 4 + 64);
+            disk_usage += estimated_disk_usage;
+
+            shard_utilizations.push(metadata.utilization);
+        }
+
+        let average_shard_utilization = if !shard_utilizations.is_empty() {
+            shard_utilizations.iter().sum::<f32>() / shard_utilizations.len() as f32
+        } else {
+            0.0
+        };
+
+        let pending_operations = if let Some(ref processor) = self.batch_processor {
+            processor.pending_operation_count()
+        } else {
+            0
+        } + self.pending_shard_operations.len();
+
+        // Get enhanced performance metrics from monitoring system
+        let mut detailed_stats = self.performance_monitor.get_detailed_stats().await;
+
+        // Update with current index data
+        detailed_stats.total_shards = total_shards;
+        detailed_stats.total_postings = total_postings;
+        detailed_stats.pending_operations = pending_operations;
+        detailed_stats.memory_usage = memory_usage;
+        detailed_stats.disk_usage = disk_usage;
+        detailed_stats.active_postings = active_postings;
+        detailed_stats.deleted_postings = deleted_postings;
+        detailed_stats.average_shard_utilization = average_shard_utilization;
+        detailed_stats.vector_dimension = self.config.vector_size;
+
+        // Collect additional resource usage metrics
+        self.update_resource_metrics(&mut detailed_stats).await?;
+
+        Ok(detailed_stats)
     }
 }
 
@@ -1554,8 +1744,8 @@ mod tests {
         assert!(matches!(shardex, ShardexImpl { .. }));
     }
 
-    #[test]
-    fn test_sync_search_cosine() {
+    #[tokio::test]
+    async fn test_sync_search_cosine() {
         let _env = TestEnvironment::new("test_sync_search_cosine");
         let config = ShardexConfig::new()
             .directory_path(_env.path())
@@ -1564,14 +1754,16 @@ mod tests {
         let shardex = ShardexImpl::new(config).unwrap();
         let query = vec![1.0; 128];
 
-        let results = shardex.search_impl(&query, 10, DistanceMetric::Cosine, None);
+        let results = shardex
+            .search_impl(&query, 10, DistanceMetric::Cosine, None)
+            .await;
         if let Ok(results) = results {
             assert!(results.is_empty()); // Empty index
         } // May error due to empty index
     }
 
-    #[test]
-    fn test_sync_search_euclidean_metric() {
+    #[tokio::test]
+    async fn test_sync_search_euclidean_metric() {
         let _env = TestEnvironment::new("test_sync_search_euclidean_metric");
         let config = ShardexConfig::new()
             .directory_path(_env.path())
@@ -1580,7 +1772,9 @@ mod tests {
         let shardex = ShardexImpl::new(config).unwrap();
         let query = vec![1.0; 128];
 
-        let result = shardex.search_impl(&query, 10, DistanceMetric::Euclidean, None);
+        let result = shardex
+            .search_impl(&query, 10, DistanceMetric::Euclidean, None)
+            .await;
         assert!(result.is_ok());
         let search_results = result.unwrap();
         assert_eq!(search_results.len(), 0); // Empty index should return no results
@@ -1621,8 +1815,8 @@ mod tests {
         assert!((dot_zero - 0.5).abs() < 0.1); // Zero correlation
     }
 
-    #[test]
-    fn test_knn_search_edge_cases() {
+    #[tokio::test]
+    async fn test_knn_search_edge_cases() {
         let _env = TestEnvironment::new("test_knn_search_edge_cases");
 
         // Test empty query validation
@@ -1634,20 +1828,26 @@ mod tests {
 
         // Test with empty vector (k=0)
         let query = vec![1.0; 128];
-        let results = shardex.search_impl(&query, 0, DistanceMetric::Cosine, None);
+        let results = shardex
+            .search_impl(&query, 0, DistanceMetric::Cosine, None)
+            .await;
         if let Ok(results) = results {
             assert!(results.is_empty()); // Should return empty results
         } // Empty index might error, that's OK
 
         // Test with large k value (more than possible results)
-        let results = shardex.search_impl(&query, 1000, DistanceMetric::Cosine, None);
+        let results = shardex
+            .search_impl(&query, 1000, DistanceMetric::Cosine, None)
+            .await;
         if let Ok(results) = results {
             assert!(results.len() <= 1000); // Should not exceed k
         } // Empty index might error, that's OK
 
         // Test dimension validation
         let wrong_query = vec![1.0; 64]; // Wrong dimension
-        let results = shardex.search_impl(&wrong_query, 10, DistanceMetric::Cosine, None);
+        let results = shardex
+            .search_impl(&wrong_query, 10, DistanceMetric::Cosine, None)
+            .await;
         // Should either error due to dimension mismatch or handle empty index gracefully
         match results {
             Ok(_) => {} // Empty index case
@@ -1737,7 +1937,11 @@ mod tests {
         let result = shardex.add_postings(postings).await;
         assert!(result.is_err());
 
-        if let Err(crate::error::ShardexError::InvalidPostingData { reason, suggestion: _ }) = result {
+        if let Err(crate::error::ShardexError::InvalidPostingData {
+            reason,
+            suggestion: _,
+        }) = result
+        {
             assert!(reason.contains("expected 3, got 2"));
             assert!(reason.contains("posting at index 0"));
         } else {
@@ -1788,7 +1992,10 @@ mod tests {
         assert!(result.is_err());
         // Empty vector should be caught by dimension mismatch since expected=3, actual=0
         match result {
-            Err(crate::error::ShardexError::InvalidPostingData { reason, suggestion: _ }) => {
+            Err(crate::error::ShardexError::InvalidPostingData {
+                reason,
+                suggestion: _,
+            }) => {
                 assert!(reason.contains("expected 3, got 0"));
                 assert!(reason.contains("posting at index 0"));
             }

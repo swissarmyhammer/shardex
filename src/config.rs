@@ -77,7 +77,7 @@ impl SlopFactorConfig {
             return Err(ShardexError::config_error(
                 "slop_factor_config.default_factor",
                 "must be greater than 0",
-                "Set default_factor to a positive integer (recommended: 3-10 for most use cases)"
+                "Set default_factor to a positive integer (recommended: 3-10 for most use cases)",
             ));
         }
 
@@ -85,7 +85,7 @@ impl SlopFactorConfig {
             return Err(ShardexError::config_error(
                 "slop_factor_config.min_factor",
                 "must be greater than 0",
-                "Set min_factor to at least 1 (minimum valid slop factor)"
+                "Set min_factor to at least 1 (minimum valid slop factor)",
             ));
         }
 
@@ -100,16 +100,25 @@ impl SlopFactorConfig {
         if self.min_factor > self.max_factor {
             return Err(ShardexError::config_error(
                 "slop_factor_config",
-                format!("min_factor ({}) cannot be greater than max_factor ({})", self.min_factor, self.max_factor),
-                "Ensure min_factor <= max_factor. For example: min_factor=1, max_factor=10"
+                format!(
+                    "min_factor ({}) cannot be greater than max_factor ({})",
+                    self.min_factor, self.max_factor
+                ),
+                "Ensure min_factor <= max_factor. For example: min_factor=1, max_factor=10",
             ));
         }
 
         if self.default_factor < self.min_factor || self.default_factor > self.max_factor {
             return Err(ShardexError::config_error(
                 "slop_factor_config.default_factor",
-                format!("value {} is outside the allowed range [{}, {}]", self.default_factor, self.min_factor, self.max_factor),
-                format!("Set default_factor to a value between {} and {}", self.min_factor, self.max_factor)
+                format!(
+                    "value {} is outside the allowed range [{}, {}]",
+                    self.default_factor, self.min_factor, self.max_factor
+                ),
+                format!(
+                    "Set default_factor to a value between {} and {}",
+                    self.min_factor, self.max_factor
+                ),
             ));
         }
 
@@ -282,7 +291,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "shard_size",
                 format!("value {} may cause excessive memory usage", self.shard_size),
-                "Consider reducing shard_size to 100000 or less to avoid memory issues"
+                "Consider reducing shard_size to 100000 or less to avoid memory issues",
             ));
         }
 
@@ -290,15 +299,18 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "shardex_segment_size",
                 "must be greater than 0",
-                "Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)"
+                "Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)",
             ));
         }
 
         if self.wal_segment_size < 1024 {
             return Err(ShardexError::config_error(
                 "wal_segment_size",
-                format!("value {} bytes is too small for efficient WAL operations", self.wal_segment_size),
-                "Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)"
+                format!(
+                    "value {} bytes is too small for efficient WAL operations",
+                    self.wal_segment_size
+                ),
+                "Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)",
             ));
         }
 
@@ -306,7 +318,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "wal_segment_size",
                 format!("value {} bytes exceeds 1GB limit", self.wal_segment_size),
-                "Set wal_segment_size to 1GB or less to avoid memory and disk space issues"
+                "Set wal_segment_size to 1GB or less to avoid memory and disk space issues",
             ));
         }
 
@@ -321,8 +333,11 @@ impl ShardexConfig {
         if self.batch_write_interval_ms > 30000 {
             return Err(ShardexError::config_error(
                 "batch_write_interval_ms",
-                format!("value {} ms is too large and may cause data loss on crashes", self.batch_write_interval_ms),
-                "Set batch_write_interval_ms to 30 seconds or less to limit potential data loss"
+                format!(
+                    "value {} ms is too large and may cause data loss on crashes",
+                    self.batch_write_interval_ms
+                ),
+                "Set batch_write_interval_ms to 30 seconds or less to limit potential data loss",
             ));
         }
 

@@ -18,6 +18,7 @@ pub mod identifiers;
 pub mod integrity;
 pub mod layout;
 pub mod memory;
+pub mod monitoring;
 pub mod posting_storage;
 pub mod search_coordinator;
 pub mod shard;
@@ -31,6 +32,9 @@ pub mod wal_replay;
 
 #[cfg(test)]
 pub mod test_utils;
+
+#[cfg(test)]
+pub mod statistics_integration_test;
 
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
@@ -48,6 +52,11 @@ pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
+pub use monitoring::{
+    BloomFilterMetrics, DetailedIndexStats, HistoricalData, HistoricalDataPoint,
+    PercentileCalculator, PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics,
+    TrendAnalysis, WriteMetrics,
+};
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use search_coordinator::{
     PerformanceMonitor, SearchCoordinator, SearchCoordinatorConfig, SearchMetrics,

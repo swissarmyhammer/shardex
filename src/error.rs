@@ -30,17 +30,11 @@ pub enum ShardexError {
 
     /// Document ID validation failed
     #[error("Invalid document ID: {reason}. {suggestion}")]
-    InvalidDocumentId {
-        reason: String,
-        suggestion: String,
-    },
+    InvalidDocumentId { reason: String, suggestion: String },
 
     /// Posting data validation failed
     #[error("Invalid posting data: {reason}. {suggestion}")]
-    InvalidPostingData {
-        reason: String,
-        suggestion: String,
-    },
+    InvalidPostingData { reason: String, suggestion: String },
 
     /// Transient failure that can be retried
     #[error("Transient failure: {operation} - {reason}. {recovery_suggestion}")]
@@ -99,9 +93,9 @@ impl ShardexError {
             "search_query" => "Check your query vector dimensions match the index",
             "posting_vector" => "All vectors in your index must have the same dimensions",
             "configuration" => "The index was created with different vector dimensions",
-            _ => "Check your vector data source and verify dimensions match the index"
+            _ => "Check your vector data source and verify dimensions match the index",
         };
-        
+
         Self::InvalidInput {
             field: "vector_dimension".to_string(),
             reason: format!("expected {}, got {}", expected, actual),
@@ -112,15 +106,27 @@ impl ShardexError {
     /// Create an invalid similarity score error with context-specific suggestions
     pub fn invalid_similarity_score_with_suggestion(score: f32) -> Self {
         let (reason, suggestion) = if score.is_nan() {
-            ("NaN values are not allowed".to_string(), "Check for division by zero or invalid mathematical operations".to_string())
+            (
+                "NaN values are not allowed".to_string(),
+                "Check for division by zero or invalid mathematical operations".to_string(),
+            )
         } else if score.is_infinite() {
-            ("Infinite values are not allowed".to_string(), "Check for overflow in similarity calculations".to_string())
+            (
+                "Infinite values are not allowed".to_string(),
+                "Check for overflow in similarity calculations".to_string(),
+            )
         } else if score < 0.0 {
-            ("Negative similarity scores are not valid".to_string(), "Similarity scores must be between 0.0 and 1.0".to_string())
+            (
+                "Negative similarity scores are not valid".to_string(),
+                "Similarity scores must be between 0.0 and 1.0".to_string(),
+            )
         } else {
-            ("Similarity score too large".to_string(), "Similarity scores must be between 0.0 and 1.0".to_string())
+            (
+                "Similarity score too large".to_string(),
+                "Similarity scores must be between 0.0 and 1.0".to_string(),
+            )
         };
-        
+
         Self::InvalidInput {
             field: "similarity_score".to_string(),
             reason,
@@ -129,7 +135,11 @@ impl ShardexError {
     }
 
     /// Create an invalid input error
-    pub fn invalid_input(field: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn invalid_input(
+        field: impl Into<String>,
+        reason: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self::InvalidInput {
             field: field.into(),
             reason: reason.into(),
@@ -154,7 +164,11 @@ impl ShardexError {
     }
 
     /// Create a transient failure error with retry context
-    pub fn transient_failure(operation: impl Into<String>, reason: impl Into<String>, retry_count: usize) -> Self {
+    pub fn transient_failure(
+        operation: impl Into<String>,
+        reason: impl Into<String>,
+        retry_count: usize,
+    ) -> Self {
         let recovery_suggestion = if retry_count == 0 {
             "This operation can be retried. Consider implementing exponential backoff."
         } else {
@@ -170,7 +184,11 @@ impl ShardexError {
     }
 
     /// Create a resource exhausted error
-    pub fn resource_exhausted(resource: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn resource_exhausted(
+        resource: impl Into<String>,
+        reason: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self::ResourceExhausted {
             resource: resource.into(),
             reason: reason.into(),
@@ -179,7 +197,11 @@ impl ShardexError {
     }
 
     /// Create a concurrency error
-    pub fn concurrency_error(operation: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn concurrency_error(
+        operation: impl Into<String>,
+        reason: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self::ConcurrencyError {
             operation: operation.into(),
             reason: reason.into(),
@@ -188,13 +210,25 @@ impl ShardexError {
     }
 
     /// Create a corruption error with recovery action
-    pub fn corruption_with_recovery(reason: impl Into<String>, recovery_action: impl Into<String>) -> Self {
+    pub fn corruption_with_recovery(
+        reason: impl Into<String>,
+        recovery_action: impl Into<String>,
+    ) -> Self {
         Self::Corruption(format!("{}: {}", reason.into(), recovery_action.into()))
     }
 
     /// Create a detailed config error
-    pub fn config_error(field: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
-        Self::Config(format!("{} - {}: {}", field.into(), reason.into(), suggestion.into()))
+    pub fn config_error(
+        field: impl Into<String>,
+        reason: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
+        Self::Config(format!(
+            "{} - {}: {}",
+            field.into(),
+            reason.into(),
+            suggestion.into()
+        ))
     }
 
     /// Check if this error represents a transient failure that can be retried
@@ -206,10 +240,10 @@ impl ShardexError {
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Self::TransientFailure { .. } 
-            | Self::ResourceExhausted { .. }
-            | Self::ConcurrencyError { .. }
-            | Self::Io(_)
+            Self::TransientFailure { .. }
+                | Self::ResourceExhausted { .. }
+                | Self::ConcurrencyError { .. }
+                | Self::Io(_)
         )
     }
 
@@ -220,8 +254,6 @@ impl ShardexError {
             _ => None,
         }
     }
-
-
 }
 
 #[cfg(test)]
@@ -330,7 +362,11 @@ mod tests {
 
     #[test]
     fn test_invalid_input_error() {
-        let error = ShardexError::invalid_input("query_vector", "cannot be empty", "Provide a non-empty vector");
+        let error = ShardexError::invalid_input(
+            "query_vector",
+            "cannot be empty",
+            "Provide a non-empty vector",
+        );
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid input: query_vector"));
         assert!(display_str.contains("cannot be empty"));
@@ -340,8 +376,8 @@ mod tests {
     #[test]
     fn test_invalid_document_id_error() {
         let error = ShardexError::invalid_document_id(
-            "document ID is zero", 
-            "Use a valid non-zero document ID"
+            "document ID is zero",
+            "Use a valid non-zero document ID",
         );
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid document ID: document ID is zero"));
@@ -351,8 +387,8 @@ mod tests {
     #[test]
     fn test_invalid_posting_data_error() {
         let error = ShardexError::invalid_posting_data(
-            "vector contains NaN values", 
-            "Remove NaN values from your data"
+            "vector contains NaN values",
+            "Remove NaN values from your data",
         );
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid posting data: vector contains NaN values"));
@@ -371,9 +407,9 @@ mod tests {
     #[test]
     fn test_resource_exhausted_error() {
         let error = ShardexError::resource_exhausted(
-            "memory", 
-            "heap allocation failed", 
-            "Increase available memory"
+            "memory",
+            "heap allocation failed",
+            "Increase available memory",
         );
         let display_str = format!("{}", error);
         assert!(display_str.contains("Resource exhausted: memory"));
@@ -384,9 +420,9 @@ mod tests {
     #[test]
     fn test_concurrency_error() {
         let error = ShardexError::concurrency_error(
-            "shard_write", 
-            "write lock contention", 
-            "Reduce concurrent operations"
+            "shard_write",
+            "write lock contention",
+            "Reduce concurrent operations",
         );
         let display_str = format!("{}", error);
         assert!(display_str.contains("Concurrency error: shard_write"));
@@ -400,7 +436,7 @@ mod tests {
         let resource = ShardexError::resource_exhausted("memory", "low", "add more");
         let concurrency = ShardexError::concurrency_error("op", "lock", "retry");
         let corruption = ShardexError::corruption_with_recovery("bad", "fix");
-        
+
         // Test transient error classification
         assert!(transient.is_transient());
         assert!(transient.is_recoverable());
@@ -422,7 +458,8 @@ mod tests {
     #[test]
     fn test_dimension_context_suggestions() {
         let search_error = ShardexError::invalid_dimension_with_context(384, 512, "search_query");
-        let posting_error = ShardexError::invalid_dimension_with_context(384, 512, "posting_vector");
+        let posting_error =
+            ShardexError::invalid_dimension_with_context(384, 512, "posting_vector");
         let config_error = ShardexError::invalid_dimension_with_context(384, 512, "configuration");
         let default_error = ShardexError::invalid_dimension_with_context(384, 512, "unknown");
 
