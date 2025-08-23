@@ -10,8 +10,17 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+/// WAL file magic bytes for identification
 const WAL_MAGIC: &[u8; 4] = b"WLOG";
+/// WAL version number for format compatibility
 const WAL_VERSION: u32 = 1;
+/// Reserved space after StandardHeader for WAL metadata
+const RESERVED_SPACE_SIZE: usize = 9;
+
+/// Calculate the initial write position (after header and reserved space)
+const fn initial_write_position() -> usize {
+    StandardHeader::SIZE + RESERVED_SPACE_SIZE
+}
 
 /// WAL record header for proper record structure
 #[derive(Debug, Clone, Copy)]
@@ -111,11 +120,8 @@ impl WalSegment {
         memory_map.write_at(0, &header)?;
         memory_map.sync()?;
 
-
-
-        // Initialize write pointer to match test expectations (89)
-        // This corresponds to StandardHeader::SIZE (80) + 9 bytes for WAL metadata
-        let write_pointer = AtomicUsize::new(89);
+        // Initialize write pointer after header and reserved space
+        let write_pointer = AtomicUsize::new(initial_write_position());
 
         Ok(Self {
             id: segment_id,
@@ -172,7 +178,7 @@ impl WalSegment {
         capacity: usize,
     ) -> Result<usize, ShardexError> {
         let data_slice = memory_map.as_slice();
-        let mut current_pos = StandardHeader::SIZE + 9; // Account for reserved space
+        let mut current_pos = initial_write_position(); // Account for header and reserved space
 
         // Follow record headers to find the end of valid data
         while current_pos + WalRecordHeader::SIZE <= capacity {
@@ -317,7 +323,7 @@ impl WalSegment {
 
         // Validate write pointer bounds
         let write_pos = self.write_pointer();
-        let min_write_pos = StandardHeader::SIZE + 9; // Account for reserved space
+        let min_write_pos = initial_write_position(); // Account for header and reserved space
         if write_pos < min_write_pos {
             return Err(ShardexError::Wal(
                 "Write pointer is before end of header and reserved space".to_string(),
@@ -332,7 +338,7 @@ impl WalSegment {
 
         // Validate all records for integrity
         let data_slice = memory_map.as_slice();
-        let mut current_pos = StandardHeader::SIZE + 9; // Account for reserved space
+        let mut current_pos = initial_write_position(); // Account for header and reserved space
 
         while current_pos < write_pos {
             if current_pos + WalRecordHeader::SIZE > write_pos {
@@ -523,8 +529,6 @@ mod tests {
     use super::*;
     use crate::test_utils::TestEnvironment;
 
-
-
     #[test]
     fn test_wal_segment_create() {
         let _test_env = TestEnvironment::new("test_wal_segment_create");
@@ -537,7 +541,7 @@ mod tests {
         assert_eq!(segment.id(), 1);
         assert_eq!(segment.capacity(), capacity);
         // The write pointer should start after header + reserved space
-        let expected_start = StandardHeader::SIZE + 9;
+        let expected_start = initial_write_position();
         assert_eq!(segment.write_pointer(), expected_start);
         assert_eq!(segment.remaining_space(), capacity - expected_start);
         assert!(!segment.is_full());
@@ -554,17 +558,17 @@ mod tests {
         let data = b"test data";
 
         let offset = segment.append(data).unwrap();
-        println!("DEBUG: offset returned: {}", offset);
-        println!("DEBUG: expected offset in test: 89");
-        println!("DEBUG: record header starts at: 89");
-        println!("DEBUG: data starts at: 97 (89 + 8 header)");
-        
+
         // The offset should be where the data starts (after header)
-        assert_eq!(offset, 97, "Expected data offset to be 97, but got {}", offset);
-        
+        assert_eq!(
+            offset, 97,
+            "Expected data offset to be 97, but got {}",
+            offset
+        );
+
         // After append, write_pointer should have advanced by record header + data
         // WalRecordHeader is 8 bytes (u32 + u32)
-        let expected_write_pointer = 89 + 8 + data.len();
+        let expected_write_pointer = initial_write_position() + WalRecordHeader::SIZE + data.len();
         assert_eq!(segment.write_pointer(), expected_write_pointer);
         assert_eq!(segment.remaining_space(), capacity - expected_write_pointer);
     }
@@ -578,12 +582,12 @@ mod tests {
 
         let segment = WalSegment::create(1, segment_path, capacity).unwrap();
         // Account for record header in data size calculation
-        // First record starts at 89, then available space is capacity - 89 - 8
-        let available_data_space = capacity - 89 - 8; // 89 start + 8 header
+        // First record starts at initial_write_position(), then available space accounts for header
+        let available_data_space = capacity - initial_write_position() - WalRecordHeader::SIZE;
         let data = vec![0u8; available_data_space];
 
         let offset = segment.append(&data).unwrap();
-        assert_eq!(offset, 97); // First data starts at 97 (header starts at 89)
+        assert_eq!(offset, initial_write_position() + WalRecordHeader::SIZE); // First data starts after initial position + record header
         assert!(segment.is_full());
         assert_eq!(segment.remaining_space(), 0);
 
@@ -611,10 +615,10 @@ mod tests {
         let segment = WalSegment::open(segment_path).unwrap();
         assert_eq!(segment.id(), 1);
         assert_eq!(segment.capacity(), capacity);
-        // Account for record header in write pointer calculation  
-        // If append returns 89, then after writing "persistent data" (15 bytes)
-        // write pointer should be at 89 + 8 + 15 = 112
-        let expected_pos = 89 + 8 + "persistent data".len(); // record start + header + data
+        // Account for record header in write pointer calculation
+        // After writing data, write pointer should advance by header + data
+        let expected_pos =
+            initial_write_position() + WalRecordHeader::SIZE + "persistent data".len();
         assert_eq!(segment.write_pointer(), expected_pos);
     }
 
@@ -659,13 +663,9 @@ mod tests {
         assert_eq!(segment.id(), 1);
 
         // Fill the segment (account for record header overhead)
-        // For 128 byte segment, if first record starts at 97, available space is 128 - 97 - 8 = 23
+        // Available space = total capacity - initial write position - record header size
         let remaining = segment.remaining_space();
-        let data_size = if remaining >= 8 { // WalRecordHeader is 8 bytes
-            remaining - 8
-        } else {
-            0
-        };
+        let data_size = remaining.saturating_sub(8); // WalRecordHeader is 8 bytes
         let data = vec![0u8; data_size];
         segment.append(&data).unwrap();
         assert!(segment.is_full());
@@ -676,8 +676,6 @@ mod tests {
         assert_eq!(new_segment.id(), 2);
         assert!(!new_segment.is_full());
     }
-
-
 
     #[test]
     fn test_wal_segment_integrity() {
