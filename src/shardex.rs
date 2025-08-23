@@ -86,7 +86,7 @@ impl ShardexImpl {
         slop_factor: Option<usize>,
     ) -> Result<Vec<SearchResult>, ShardexError> {
         // Use slop_factor from config if not provided
-        let slop = slop_factor.unwrap_or(self.config.default_slop_factor);
+        let slop = slop_factor.unwrap_or(self.config.slop_factor_config.default_factor);
 
         // Find candidate shards using existing infrastructure
         let candidate_shards = self.index.find_nearest_shards(query_vector, slop)?;
