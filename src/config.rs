@@ -3,6 +3,7 @@
 //! This module provides the configuration system for Shardex, including
 //! parameter validation and builder pattern implementation.
 
+use crate::deduplication::DeduplicationPolicy;
 use crate::error::ShardexError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -26,6 +27,8 @@ pub struct ShardexConfig {
     pub default_slop_factor: usize,
     /// Size of bloom filters in bits
     pub bloom_filter_size: usize,
+    /// Deduplication policy for search results
+    pub deduplication_policy: DeduplicationPolicy,
 }
 
 impl Default for ShardexConfig {
@@ -39,6 +42,7 @@ impl Default for ShardexConfig {
             batch_write_interval_ms: 100,
             default_slop_factor: 3,
             bloom_filter_size: 1024,
+            deduplication_policy: DeduplicationPolicy::default(),
         }
     }
 }
@@ -94,6 +98,12 @@ impl ShardexConfig {
     /// Set the bloom filter size in bits
     pub fn bloom_filter_size(mut self, size: usize) -> Self {
         self.bloom_filter_size = size;
+        self
+    }
+
+    /// Set the deduplication policy for search results
+    pub fn deduplication_policy(mut self, policy: DeduplicationPolicy) -> Self {
+        self.deduplication_policy = policy;
         self
     }
 
