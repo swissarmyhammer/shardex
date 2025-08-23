@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     monitor_basic_stats(&mut index).await?;
 
     println!("\nMonitoring examples completed successfully!");
-    
+
     // Additional monitoring features (performance metrics, resource usage, health monitoring)
     // are available as functions in this file but not enabled by default.
     // Enable them by calling collect_performance_metrics(), monitor_resource_usage(), etc.
@@ -62,7 +62,7 @@ async fn monitor_basic_stats(index: &mut ShardexImpl) -> Result<(), Box<dyn Erro
     // Add some data and monitor changes
     let postings = generate_test_postings(50, 256); // Use smaller batch size for WAL capacity
     index.add_postings(postings).await?;
-    
+
     let after_add_stats = index.stats().await?;
     print_basic_stats("After adding 50 postings", &after_add_stats);
 
@@ -100,7 +100,8 @@ async fn collect_performance_metrics(index: &mut ShardexImpl) -> Result<(), Box<
 
     // Measure indexing throughput
     println!("\nIndexing throughput measurements:");
-    for batch_size in [50, 100, 200] { // Reduced batch sizes to prevent WAL issues
+    for batch_size in [50, 100, 200] {
+        // Reduced batch sizes to prevent WAL issues
         println!("  Testing batch_size={}...", batch_size);
         let postings = generate_test_postings(batch_size, 256);
 

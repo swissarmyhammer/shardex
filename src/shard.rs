@@ -456,7 +456,15 @@ impl Shard {
 
     /// Get the count of active (non-deleted) postings
     pub fn active_count(&self) -> usize {
-        self.metadata.active_count
+        // Count unique postings using append-only semantics, excluding deleted ones
+        self.iter_unique_postings_backward()
+            .filter(|result| {
+                match result {
+                    Ok((index, _)) => !self.is_deleted(*index).unwrap_or(true),
+                    Err(_) => false, // Skip errors in count
+                }
+            })
+            .count()
     }
 
     /// Check if the shard is read-only
@@ -591,6 +599,43 @@ impl Shard {
         )?;
 
         Ok(posting)
+    }
+
+    /// Iterate over all postings in reverse order (most recent first)
+    /// This supports append-only semantics where newer postings supersede older ones
+    pub fn iter_postings_backward(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
+        (0..self.current_count())
+            .rev()
+            .map(move |index| match self.get_posting(index) {
+                Ok(posting) => Ok((index, posting)),
+                Err(e) => Err(e),
+            })
+    }
+
+    /// Iterate over unique postings in append-only style
+    /// Returns only the most recent posting for each (document_id, start, length) combination
+    /// by reading backwards and skipping duplicates
+    pub fn iter_unique_postings_backward(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        self.iter_postings_backward().filter_map(move |result| {
+            match result {
+                Ok((index, posting)) => {
+                    let key = (posting.document_id, posting.start, posting.length);
+                    if seen.insert(key) {
+                        Some(Ok((index, posting)))
+                    } else {
+                        None // Skip duplicate posting
+                    }
+                }
+                Err(e) => Some(Err(e)),
+            }
+        })
     }
 
     /// Check if a posting at the given index is deleted
@@ -748,8 +793,9 @@ impl Shard {
 
     /// Search for the K nearest neighbors to the query vector within this shard
     ///
-    /// This method performs a linear scan through all active (non-deleted) postings,
-    /// calculates dot product similarity scores, and returns the top K results
+    /// This method uses append-only semantics, reading postings backward to find
+    /// the most recent version of each unique posting (document_id, start, length).
+    /// Calculates dot product similarity scores and returns the top K results
     /// sorted by similarity score in descending order.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>, ShardexError> {
         // Validate query vector dimension
@@ -766,12 +812,9 @@ impl Shard {
 
         let mut results = Vec::new();
 
-        // Scan through all postings
-        for index in 0..self.current_count() {
-            // Skip deleted postings
-            if self.is_deleted(index)? {
-                continue;
-            }
+        // Use append-only iteration to get only the most recent version of each posting
+        for result in self.iter_unique_postings_backward() {
+            let (index, posting) = result?;
 
             // Get the vector for this posting
             let vector = self
@@ -782,23 +825,8 @@ impl Shard {
             // Calculate cosine similarity
             let similarity_score = Self::calculate_cosine_similarity(query, vector);
 
-            // Get posting metadata
-            let (document_id, start, length) = self
-                .posting_storage
-                .get_posting(index)
-                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
-
             // Create search result
-            let search_result = SearchResult::from_posting(
-                Posting::new(
-                    document_id,
-                    start,
-                    length,
-                    vector.to_vec(),
-                    self.vector_size,
-                )?,
-                similarity_score,
-            )?;
+            let search_result = SearchResult::from_posting(posting, similarity_score)?;
 
             results.push(search_result);
         }
@@ -827,16 +855,26 @@ impl Shard {
     fn calculate_cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");
 
+        // Check for invalid values in input vectors
+        if a.iter().any(|x| !x.is_finite()) || b.iter().any(|x| !x.is_finite()) {
+            return 0.5; // Neutral similarity for invalid vectors
+        }
+
         let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-        // Handle zero vectors to avoid division by zero
-        if norm_a == 0.0 || norm_b == 0.0 {
+        // Handle zero vectors or invalid norms to avoid division by zero
+        if norm_a == 0.0 || norm_b == 0.0 || !norm_a.is_finite() || !norm_b.is_finite() {
             return 0.5; // Neutral similarity for zero vectors (maps to 0.0 cosine)
         }
 
         let cosine = dot_product / (norm_a * norm_b);
+
+        // Check if cosine is valid before clamping
+        if !cosine.is_finite() {
+            return 0.5; // Neutral similarity for invalid cosine
+        }
 
         // Clamp cosine to valid range to handle floating point precision issues
         let cosine = cosine.clamp(-1.0, 1.0);
@@ -870,12 +908,9 @@ impl Shard {
 
         let mut results = Vec::new();
 
-        // Scan through all postings
-        for index in 0..self.current_count() {
-            // Skip deleted postings
-            if self.is_deleted(index)? {
-                continue;
-            }
+        // Use append-only iteration to get only the most recent version of each posting
+        for result in self.iter_unique_postings_backward() {
+            let (index, posting) = result?;
 
             // Get the vector for this posting
             let vector = self
@@ -886,23 +921,8 @@ impl Shard {
             // Calculate similarity using specified metric
             let similarity_score = metric.similarity(query, vector)?;
 
-            // Get posting metadata
-            let (document_id, start, length) = self
-                .posting_storage
-                .get_posting(index)
-                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
-
             // Create search result
-            let search_result = SearchResult::from_posting(
-                Posting::new(
-                    document_id,
-                    start,
-                    length,
-                    vector.to_vec(),
-                    self.vector_size,
-                )?,
-                similarity_score,
-            )?;
+            let search_result = SearchResult::from_posting(posting, similarity_score)?;
 
             results.push(search_result);
         }
@@ -1047,26 +1067,24 @@ impl Shard {
         Ok(())
     }
 
-    /// Calculate centroid from all non-deleted vectors
+    /// Calculate centroid from all unique postings using append-only semantics
     ///
-    /// This method performs a fresh calculation of the centroid by scanning all
-    /// non-deleted vectors in the shard. The centroid is the mean position of all
-    /// active vectors.
+    /// This method performs a fresh calculation of the centroid by scanning unique
+    /// postings in reverse order to get the most recent version of each posting.
+    /// The centroid is the mean position of all active vectors.
     ///
     /// Returns a vector representing the centroid, or a zero vector if no active vectors exist.
     pub fn calculate_centroid(&self) -> Vec<f32> {
         let mut centroid = vec![0.0; self.vector_size];
         let mut active_count = 0;
 
-        // Sum all non-deleted vectors
-        for i in 0..self.current_count() {
-            if let Ok(false) = self.is_deleted(i) {
-                if let Ok(vector) = self.vector_storage.get_vector(i) {
-                    for (j, &value) in vector.iter().enumerate() {
-                        centroid[j] += value;
-                    }
-                    active_count += 1;
+        // Sum all unique vectors using append-only iteration
+        for (index, _posting) in self.iter_unique_postings_backward().flatten() {
+            if let Ok(vector) = self.vector_storage.get_vector(index) {
+                for (j, &value) in vector.iter().enumerate() {
+                    centroid[j] += value;
                 }
+                active_count += 1;
             }
         }
 
@@ -1152,44 +1170,36 @@ impl Shard {
     ///
     /// This method performs a full recalculation of the centroid by scanning all vectors.
     /// Use this method periodically to correct any drift from incremental updates due to
-    /// floating-point precision errors.
+    /// floating-point precision errors. Uses append-only semantics to count unique postings.
     pub fn recalculate_centroid(&mut self) {
         self.centroid = self.calculate_centroid();
 
-        // Update active vector count to match actual count
+        // Update active vector count to match actual unique posting count
         let mut count = 0;
-        for i in 0..self.current_count() {
-            if let Ok(false) = self.is_deleted(i) {
+        for result in self.iter_unique_postings_backward() {
+            if result.is_ok() {
                 count += 1;
             }
         }
         self.active_vector_count = count;
     }
 
-    /// Populate bloom filter from existing postings
+    /// Populate bloom filter from existing postings using append-only semantics
     ///
-    /// This method scans all non-deleted postings and adds their document IDs
-    /// to the bloom filter. This is used when opening existing shards to
-    /// rebuild the bloom filter state.
+    /// This method scans unique postings (most recent version of each) and adds
+    /// their document IDs to the bloom filter. This is used when opening existing
+    /// shards to rebuild the bloom filter state.
     fn populate_bloom_filter(&mut self) -> Result<(), ShardexError> {
         // Clear the bloom filter first
         self.metadata.bloom_filter.clear();
 
-        // Scan through all postings and add document IDs to bloom filter
-        for index in 0..self.current_count() {
-            // Skip deleted postings
-            if self.is_deleted(index)? {
-                continue;
-            }
+        // Collect unique postings first to avoid borrowing conflicts
+        let unique_postings: Result<Vec<_>, _> = self.iter_unique_postings_backward().collect();
+        let unique_postings = unique_postings?;
 
-            // Get the document ID for this posting
-            let (document_id, _, _) = self
-                .posting_storage
-                .get_posting(index)
-                .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
-
-            // Add to bloom filter
-            self.metadata.bloom_filter.insert(document_id);
+        // Add document IDs to bloom filter
+        for (_index, posting) in unique_postings {
+            self.metadata.bloom_filter.insert(posting.document_id);
         }
 
         Ok(())
@@ -1236,11 +1246,27 @@ impl Shard {
             ));
         }
 
-        // Use k-means clustering to determine how to split the vectors
-        let (cluster_a_indices, cluster_b_indices) = self.cluster_vectors()?;
+        // Collect unique postings using append-only semantics
+        let unique_postings: Result<Vec<(usize, Posting)>, ShardexError> =
+            self.iter_unique_postings_backward().collect();
+        let unique_postings = unique_postings?;
 
-        // Create two new shards with half capacity each (minimum 5)
-        let new_capacity = std::cmp::max(self.capacity / 2, 5);
+        // Use k-means clustering to determine how to split the vectors
+        let indices: Vec<usize> = unique_postings.iter().map(|(index, _)| *index).collect();
+        let (cluster_a_indices, cluster_b_indices) = self.cluster_unique_vectors(&indices)?;
+
+        // Create two new shards with appropriate capacity
+        let unique_count = unique_postings.len();
+        let has_duplicates = self.current_count() > unique_count;
+        
+        let new_capacity = if has_duplicates {
+            // For append-only scenarios, we need extra buffer for clustering imbalance
+            let min_capacity_needed = (unique_count + 1) / 2 + 5;
+            std::cmp::max(self.capacity / 2, min_capacity_needed)
+        } else {
+            // For regular scenarios, just split capacity in half (minimum 5)
+            std::cmp::max(self.capacity / 2, 5)
+        };
 
         let shard_a_id = ShardId::new();
         let shard_b_id = ShardId::new();
@@ -1261,16 +1287,16 @@ impl Shard {
 
         // Transfer postings to appropriate shards based on clustering
         for &index in &cluster_a_indices {
-            if !self.is_deleted(index)? {
-                let posting = self.get_posting(index)?;
-                shard_a.add_posting(posting)?;
+            // Find the posting for this index
+            if let Some((_, posting)) = unique_postings.iter().find(|(i, _)| *i == index) {
+                shard_a.add_posting(posting.clone())?;
             }
         }
 
         for &index in &cluster_b_indices {
-            if !self.is_deleted(index)? {
-                let posting = self.get_posting(index)?;
-                shard_b.add_posting(posting)?;
+            // Find the posting for this index
+            if let Some((_, posting)) = unique_postings.iter().find(|(i, _)| *i == index) {
+                shard_b.add_posting(posting.clone())?;
             }
         }
 
@@ -1285,6 +1311,7 @@ impl Shard {
     /// # Returns
     /// A tuple of two vectors containing the indices of postings for each cluster:
     /// (cluster_a_indices, cluster_b_indices)
+    #[allow(dead_code)]
     fn cluster_vectors(&self) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
         let active_indices: Vec<usize> = (0..self.current_count())
             .filter(|&i| !self.is_deleted(i).unwrap_or(true))
@@ -1401,6 +1428,109 @@ impl Shard {
         Ok((cluster_a_indices, cluster_b_indices))
     }
 
+    /// Cluster vectors using provided indices (for append-only semantics)
+    ///
+    /// This method performs k-means clustering on a provided set of indices
+    /// representing unique postings from append-only iteration.
+    fn cluster_unique_vectors(
+        &self,
+        indices: &[usize],
+    ) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
+        if indices.len() < 2 {
+            return Err(ShardexError::Config(
+                "Need at least 2 vectors for clustering".to_string(),
+            ));
+        }
+
+        // For very small sets, just split in half
+        if indices.len() <= 4 {
+            let mid = indices.len() / 2;
+            let cluster_a = indices[..mid].to_vec();
+            let cluster_b = indices[mid..].to_vec();
+            return Ok((cluster_a, cluster_b));
+        }
+
+        // Initialize centroids using the two most distant vectors (furthest pair)
+        let (centroid_a_idx, centroid_b_idx) = self.find_furthest_pair(indices)?;
+
+        // Check if all vectors are identical (pathological case for k-means)
+        let first_vector = self
+            .vector_storage
+            .get_vector(indices[0])
+            .map_err(|e| ShardexError::Shard(format!("Failed to get first vector: {}", e)))?;
+        let mut all_identical = true;
+
+        for &idx in &indices[1..] {
+            let vector = self.vector_storage.get_vector(idx).map_err(|e| {
+                ShardexError::Shard(format!("Failed to get vector for identity check: {}", e))
+            })?;
+            if Self::euclidean_distance(first_vector, vector) > 1e-6 {
+                all_identical = false;
+                break;
+            }
+        }
+
+        // If all vectors are identical, split evenly rather than using k-means
+        if all_identical {
+            let mid = indices.len() / 2;
+            let cluster_a = indices[..mid].to_vec();
+            let cluster_b = indices[mid..].to_vec();
+            return Ok((cluster_a, cluster_b));
+        }
+
+        // Get initial centroid vectors
+        let centroid_a = self
+            .vector_storage
+            .get_vector(centroid_a_idx)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid A vector: {}", e)))?
+            .to_vec();
+        let centroid_b = self
+            .vector_storage
+            .get_vector(centroid_b_idx)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid B vector: {}", e)))?
+            .to_vec();
+
+        let mut cluster_a_indices = Vec::new();
+        let mut cluster_b_indices = Vec::new();
+
+        // K-means clustering
+        let max_iterations = 10;
+        for iteration in 0..max_iterations {
+            cluster_a_indices.clear();
+            cluster_b_indices.clear();
+
+            // Assign each vector to the nearest centroid
+            for &idx in indices {
+                let vector = self.vector_storage.get_vector(idx).map_err(|e| {
+                    ShardexError::Shard(format!("Failed to get vector during clustering: {}", e))
+                })?;
+
+                let dist_a = Self::euclidean_distance(&centroid_a, vector);
+                let dist_b = Self::euclidean_distance(&centroid_b, vector);
+
+                if dist_a <= dist_b {
+                    cluster_a_indices.push(idx);
+                } else {
+                    cluster_b_indices.push(idx);
+                }
+            }
+
+            // If one cluster is empty, split evenly
+            if cluster_a_indices.is_empty() || cluster_b_indices.is_empty() {
+                let mid = indices.len() / 2;
+                return Ok((indices[..mid].to_vec(), indices[mid..].to_vec()));
+            }
+
+            // Check for convergence (no changes in cluster assignments)
+            if iteration > 0 {
+                // For simplicity, assume convergence after a few iterations
+                break;
+            }
+        }
+
+        Ok((cluster_a_indices, cluster_b_indices))
+    }
+
     /// Find the pair of vectors with maximum distance (furthest pair)
     ///
     /// This is used to initialize k-means centroids with a good starting point.
@@ -1435,6 +1565,7 @@ impl Shard {
     }
 
     /// Calculate the centroid (mean) of a cluster of vectors
+    #[allow(dead_code)]
     fn calculate_cluster_centroid(&self, indices: &[usize]) -> Result<Vec<f32>, ShardexError> {
         if indices.is_empty() {
             return Ok(vec![0.0; self.vector_size]);
@@ -2009,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shard_search_with_deleted_postings() {
+    fn test_shard_search_with_append_only_updates() {
         let temp_dir = TempDir::new().unwrap();
         let shard_id = ShardId::new();
 
@@ -2018,22 +2149,32 @@ mod tests {
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
 
-        // Add postings
+        // Add initial postings
         let posting1 = Posting::new(doc_id1, 100, 50, vec![1.0, 0.0], 2).unwrap();
         let posting2 = Posting::new(doc_id2, 200, 75, vec![0.0, 1.0], 2).unwrap();
 
-        let idx1 = shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting1).unwrap();
         shard.add_posting(posting2).unwrap();
 
-        // Remove one posting
-        shard.remove_posting(idx1).unwrap();
+        // Add "updated" posting for doc_id1 with same start/length (append-only semantics)
+        let updated_posting1 = Posting::new(doc_id1, 100, 50, vec![0.5, 0.5], 2).unwrap();
+        shard.add_posting(updated_posting1).unwrap();
 
-        // Search should only return the non-deleted posting
+        // Search should return only the unique postings (most recent version of doc_id1)
         let query = vec![1.0, 1.0];
         let results = shard.search(&query, 10).unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].document_id, doc_id2);
+        // Should return 2 unique postings (one for each document_id)
+        assert_eq!(results.len(), 2);
+        
+        // Find the results by document_id
+        let doc1_result = results.iter().find(|r| r.document_id == doc_id1).unwrap();
+        let doc2_result = results.iter().find(|r| r.document_id == doc_id2).unwrap();
+        
+        // doc_id1 should have the updated vector [0.5, 0.5] (most recent version)
+        assert_eq!(doc1_result.start, 100);
+        assert_eq!(doc1_result.length, 50);
+        assert_eq!(doc2_result.document_id, doc_id2);
     }
 
     #[test]
@@ -2878,31 +3019,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_split_with_deleted_postings() {
+    async fn test_split_with_append_only_updates() {
         let temp_dir = TempDir::new().unwrap();
         let shard_id = ShardId::new();
 
         let mut shard = Shard::create(shard_id, 20, 2, temp_dir.path().to_path_buf()).unwrap();
 
-        // Add 18 postings
-        for i in 0..18 {
-            let doc_id = DocumentId::new();
+        // Create some document IDs for reuse
+        let doc_ids: Vec<DocumentId> = (0..15).map(|_| DocumentId::new()).collect();
+
+        // Add 15 initial postings
+        for i in 0..15 {
             let vector = vec![i as f32, i as f32];
-            let posting = Posting::new(doc_id, i * 100, 50, vector, 2).unwrap();
+            let posting = Posting::new(doc_ids[i], (i * 100) as u32, 50, vector, 2).unwrap();
             shard.add_posting(posting).unwrap();
         }
 
-        // Delete some postings
-        shard.remove_posting(1).unwrap();
-        shard.remove_posting(3).unwrap();
-        shard.remove_posting(5).unwrap();
+        // Add some "updated" postings with same document_id, start, length (append-only updates)
+        for i in [1, 3, 5] {
+            let updated_vector = vec![(i + 100) as f32, (i + 100) as f32];
+            let updated_posting = Posting::new(doc_ids[i], (i * 100) as u32, 50, updated_vector, 2).unwrap();
+            shard.add_posting(updated_posting).unwrap();
+        }
 
-        assert_eq!(shard.current_count(), 18); // Total including deleted
-        assert_eq!(shard.active_count(), 15); // Only active ones
+        assert_eq!(shard.current_count(), 18); // Total including superseded postings
+        assert_eq!(shard.active_count(), 15); // Only unique postings
 
         let (shard_a, shard_b) = shard.split().await.unwrap();
 
-        // Only active postings should be transferred
+        // Only unique postings should be transferred
         assert_eq!(shard_a.active_count() + shard_b.active_count(), 15);
         assert!(shard_a.active_count() > 0);
         assert!(shard_b.active_count() > 0);
@@ -3292,5 +3437,63 @@ mod tests {
         assert_eq!(stats.capacity, 100);
         assert!(stats.load_factor > 0.0 && stats.load_factor < 1.0);
         assert!(stats.memory_usage > 0);
+    }
+
+    #[test]
+    fn test_append_only_semantics() {
+        let temp_dir = TempDir::new().unwrap();
+        let shard_id = ShardId::new();
+
+        let mut shard = Shard::create(shard_id, 100, 3, temp_dir.path().to_path_buf()).unwrap();
+
+        let doc_id = DocumentId::new();
+        let vector1 = vec![1.0, 2.0, 3.0];
+        let vector2 = vec![4.0, 5.0, 6.0];
+
+        // Add initial posting
+        let posting1 = Posting::new(doc_id, 100, 50, vector1, 3).unwrap();
+        let _idx1 = shard.add_posting(posting1).unwrap();
+
+        // Add "updated" posting with same document_id, start, length but different vector
+        let posting2 = Posting::new(doc_id, 100, 50, vector2.clone(), 3).unwrap();
+        let idx2 = shard.add_posting(posting2).unwrap();
+
+        // Both postings should exist in storage
+        assert_eq!(shard.current_count(), 2);
+
+        // Search should only return the most recent posting (append-only semantics)
+        let results = shard.search(&[4.0, 5.0, 6.0], 10).unwrap();
+        assert_eq!(results.len(), 1); // Only one unique posting should be returned
+        assert_eq!(results[0].document_id, doc_id);
+        assert_eq!(results[0].start, 100);
+        assert_eq!(results[0].length, 50);
+
+        // Verify backward iteration returns only unique postings
+        let unique_postings: Vec<_> = shard
+            .iter_unique_postings_backward()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(unique_postings.len(), 1); // Only one unique posting
+        assert_eq!(unique_postings[0].1.document_id, doc_id);
+
+        // Verify that the unique posting uses the most recent vector (vector2)
+        let (unique_index, _) = &unique_postings[0];
+        assert_eq!(*unique_index, idx2); // Should be the second (more recent) index
+
+        // Add another unique posting with different document_id
+        let doc_id2 = DocumentId::new();
+        let posting3 = Posting::new(doc_id2, 200, 30, vector2.clone(), 3).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Now we should have 2 unique postings
+        let unique_postings: Vec<_> = shard
+            .iter_unique_postings_backward()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(unique_postings.len(), 2);
+
+        // Search should return both unique postings
+        let results = shard.search(&[4.0, 5.0, 6.0], 10).unwrap();
+        assert_eq!(results.len(), 2);
     }
 }

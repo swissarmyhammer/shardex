@@ -493,6 +493,43 @@ impl PostingStorage {
         })
     }
 
+    /// Iterate over all postings in reverse order (most recent first)
+    /// This supports append-only semantics where newer postings supersede older ones
+    pub fn iter_backward(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
+        (0..self.current_count())
+            .rev()
+            .map(move |index| match self.get_posting(index) {
+                Ok((doc_id, start, length)) => Ok((index, doc_id, start, length)),
+                Err(e) => Err(e),
+            })
+    }
+
+    /// Iterate over unique postings in append-only style
+    /// Returns only the most recent posting for each (document_id, start, length) combination
+    /// by reading backwards and skipping duplicates
+    pub fn iter_unique_backward(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        self.iter_backward().filter_map(move |result| {
+            match result {
+                Ok((index, doc_id, start, length)) => {
+                    let key = (doc_id, start, length);
+                    if seen.insert(key) {
+                        Some(Ok((index, doc_id, start, length)))
+                    } else {
+                        None // Skip duplicate posting
+                    }
+                }
+                Err(e) => Some(Err(e)),
+            }
+        })
+    }
+
     /// Synchronize the storage to disk
     pub fn sync(&mut self) -> Result<(), ShardexError> {
         if self.read_only {
