@@ -182,7 +182,7 @@ impl PersistedConfig {
         self.config.batch_write_interval_ms = other.config.batch_write_interval_ms;
         self.config.slop_factor_config = other.config.slop_factor_config.clone();
         self.config.bloom_filter_size = other.config.bloom_filter_size;
-        self.config.deduplication_policy = other.config.deduplication_policy.clone();
+        self.config.deduplication_policy = other.config.deduplication_policy;
 
         // Update modification timestamp
         self.modified_at = SystemTime::now();
@@ -481,7 +481,6 @@ mod tests {
         }
     }
 
-    // TODO: Implement backup functionality test - backup logic needs refinement
 
     #[tokio::test]
     async fn test_configuration_update() {
