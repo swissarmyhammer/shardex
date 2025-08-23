@@ -31,7 +31,9 @@ async fn test_replay_segment_integration() {
             length: 100,
             vector: vec![1.0, 2.0, 3.0],
         },
-        WalOperation::RemoveDocument { document_id: doc_id },
+        WalOperation::RemoveDocument {
+            document_id: doc_id,
+        },
     ];
 
     let transaction = WalTransaction::new(operations).unwrap();
@@ -43,7 +45,7 @@ async fn test_replay_segment_integration() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // Replay the segment
@@ -84,7 +86,7 @@ async fn test_replay_segment_idempotency() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // First replay
@@ -128,12 +130,12 @@ async fn test_replay_segment_with_corruption() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // Replay the segment - should handle corruption gracefully
     let transactions_processed = replayer.replay_segment(&segment).await.unwrap();
-    
+
     // Should process what it can
     assert_eq!(transactions_processed, 1);
     assert_eq!(replayer.recovery_stats().transactions_replayed, 1);
@@ -156,7 +158,7 @@ async fn test_replay_empty_segment() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // Replay the empty segment
@@ -196,7 +198,7 @@ async fn test_replay_all_segments() {
 
     // Create segment 2 with two transactions
     let segment2 = WalSegment::create(2, segment2_path, segment_capacity).unwrap();
-    
+
     let doc_id2 = DocumentId::new();
     let operations2a = vec![WalOperation::AddPosting {
         document_id: doc_id2,
@@ -206,9 +208,11 @@ async fn test_replay_all_segments() {
     }];
     let transaction2a = WalTransaction::new(operations2a).unwrap();
     segment2.append_transaction(&transaction2a).unwrap();
-    
+
     let doc_id3 = DocumentId::new();
-    let operations2b = vec![WalOperation::RemoveDocument { document_id: doc_id3 }];
+    let operations2b = vec![WalOperation::RemoveDocument {
+        document_id: doc_id3,
+    }];
     let transaction2b = WalTransaction::new(operations2b).unwrap();
     segment2.append_transaction(&transaction2b).unwrap();
     segment2.sync().unwrap();
@@ -218,7 +222,7 @@ async fn test_replay_all_segments() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // Replay all segments
@@ -246,7 +250,7 @@ async fn test_replay_all_segments_empty_directory() {
         .directory_path(temp_dir.path())
         .vector_size(3);
     let index = ShardexIndex::create(config).unwrap();
-    
+
     let mut replayer = WalReplayer::new(layout.wal_dir().to_path_buf(), index);
 
     // Replay all segments (should be no-op)

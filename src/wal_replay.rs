@@ -5,13 +5,16 @@
 //! with idempotent operation handling, and provides recovery validation.
 
 use crate::error::ShardexError;
-use crate::identifiers::TransactionId;
+use crate::identifiers::{ShardId, TransactionId};
 use crate::layout::{DirectoryLayout, FileDiscovery};
+use crate::shard::Shard;
 use crate::shardex_index::ShardexIndex;
+use crate::structures::Posting;
 use crate::transactions::{WalOperation, WalTransaction};
-use crate::wal::{WalSegment, WalRecordHeader};
+use crate::wal::{WalRecordHeader, WalSegment};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use tracing::{info, warn};
 
 /// Statistics and progress information for WAL replay operations
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -68,8 +71,7 @@ impl RecoveryStats {
 pub struct WalReplayer {
     /// Directory layout for finding WAL segments
     wal_directory: PathBuf,
-    /// Target index to apply operations to (TODO: will be used when actual index application is implemented)
-    #[allow(dead_code)]
+    /// Target index to apply operations to
     shardex_index: ShardexIndex,
     /// Set of transaction IDs that have been processed (for idempotency)
     processed_transactions: HashSet<TransactionId>,
@@ -105,24 +107,24 @@ impl WalReplayer {
         let parent_dir = self.wal_directory.parent().ok_or_else(|| {
             ShardexError::Wal("WAL directory has no parent directory".to_string())
         })?;
-        
+
         let layout = DirectoryLayout::new(parent_dir);
         let discovery = FileDiscovery::new(layout);
-        
+
         // Discover all WAL segments
         let wal_segments = discovery.discover_wal_segments()?;
-        
+
         if wal_segments.is_empty() {
             // No WAL segments found, nothing to replay
             return Ok(());
         }
-        
+
         // Replay segments in order (they're already sorted by segment number)
         let mut total_transactions = 0;
         for segment_info in &wal_segments {
             // Open the WAL segment
             let segment = WalSegment::open(segment_info.path.clone())?;
-            
+
             // Replay this segment
             match self.replay_segment(&segment).await {
                 Ok(transactions_processed) => {
@@ -138,16 +140,16 @@ impl WalReplayer {
                 }
             }
         }
-        
+
         // Log final statistics
         if total_transactions > 0 {
-            eprintln!(
-                "WAL replay completed: {} segments, {} transactions processed",
-                wal_segments.len(),
-                total_transactions
+            info!(
+                segments = wal_segments.len(),
+                transactions = total_transactions,
+                "WAL replay completed"
             );
         }
-        
+
         Ok(())
     }
 
@@ -155,7 +157,7 @@ impl WalReplayer {
     pub async fn replay_segment(&mut self, segment: &WalSegment) -> Result<usize, ShardexError> {
         let mut transactions_processed = 0;
         let initial_write_pos = crate::wal::initial_write_position();
-        
+
         // Get the memory-mapped segment data
         let segment_data = segment.read_segment_data()?;
 
@@ -172,10 +174,16 @@ impl WalReplayer {
             // Read the record header manually to avoid alignment issues
             let header_bytes = &segment_data[current_pos..current_pos + WalRecordHeader::SIZE];
             let data_length = u32::from_le_bytes([
-                header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]
+                header_bytes[0],
+                header_bytes[1],
+                header_bytes[2],
+                header_bytes[3],
             ]);
             let checksum = u32::from_le_bytes([
-                header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]
+                header_bytes[4],
+                header_bytes[5],
+                header_bytes[6],
+                header_bytes[7],
             ]);
 
             let data_length_usize = data_length as usize;
@@ -184,7 +192,8 @@ impl WalReplayer {
 
             // Check bounds and validate record
             if record_data_end > segment_data.len() || record_data_end > write_pointer {
-                self.recovery_stats.add_error(format!("Truncated record at position {}", current_pos));
+                self.recovery_stats
+                    .add_error(format!("Truncated record at position {}", current_pos));
                 break;
             }
 
@@ -193,7 +202,8 @@ impl WalReplayer {
             // Validate checksum
             let expected_checksum = crc32fast::hash(record_data);
             if checksum != expected_checksum {
-                self.recovery_stats.add_error(format!("Invalid checksum at position {}", current_pos));
+                self.recovery_stats
+                    .add_error(format!("Invalid checksum at position {}", current_pos));
                 current_pos = record_data_end;
                 continue;
             }
@@ -203,7 +213,7 @@ impl WalReplayer {
             match WalTransaction::deserialize(record_data) {
                 Ok(transaction) => {
                     transactions_processed += 1;
-                    
+
                     // Check if we've already processed this transaction (idempotency)
                     if self.is_transaction_processed(&transaction.id) {
                         self.recovery_stats.transactions_skipped += 1;
@@ -217,9 +227,8 @@ impl WalReplayer {
                             }
                             Err(e) => {
                                 self.recovery_stats.add_error(format!(
-                                    "Failed to apply transaction {}: {}", 
-                                    transaction.id, 
-                                    e
+                                    "Failed to apply transaction {}: {}",
+                                    transaction.id, e
                                 ));
                             }
                         }
@@ -227,9 +236,8 @@ impl WalReplayer {
                 }
                 Err(e) => {
                     self.recovery_stats.add_error(format!(
-                        "Failed to deserialize transaction at position {}: {}", 
-                        current_pos, 
-                        e
+                        "Failed to deserialize transaction at position {}: {}",
+                        current_pos, e
                     ));
                 }
             }
@@ -242,13 +250,16 @@ impl WalReplayer {
     }
 
     /// Apply a transaction's operations to the index
-    async fn apply_transaction(&mut self, transaction: &WalTransaction) -> Result<usize, ShardexError> {
+    async fn apply_transaction(
+        &mut self,
+        transaction: &WalTransaction,
+    ) -> Result<usize, ShardexError> {
         let mut operations_applied = 0;
 
         for operation in &transaction.operations {
             self.apply_operation(operation)?;
             operations_applied += 1;
-            
+
             // Update operation type counters
             match operation {
                 WalOperation::AddPosting { .. } => {
@@ -266,25 +277,92 @@ impl WalReplayer {
     /// Apply a single WAL operation to the index (idempotently)
     fn apply_operation(&mut self, op: &WalOperation) -> Result<(), ShardexError> {
         match op {
-            WalOperation::AddPosting { document_id: _, start: _, length, vector } => {
-                // For now, just validate the operation - actual index application would go here
+            WalOperation::AddPosting {
+                document_id,
+                start,
+                length,
+                vector,
+            } => {
+                // Validate the operation
                 if vector.is_empty() {
-                    return Err(ShardexError::Wal("Cannot add posting with empty vector".to_string()));
+                    return Err(ShardexError::Wal(
+                        "Cannot add posting with empty vector".to_string(),
+                    ));
                 }
                 if *length == 0 {
-                    return Err(ShardexError::Wal("Cannot add posting with zero length".to_string()));
+                    return Err(ShardexError::Wal(
+                        "Cannot add posting with zero length".to_string(),
+                    ));
                 }
-                
-                // TODO: Actually apply to the ShardexIndex
-                // For now we just validate - full integration would require modifying ShardexIndex
-                // to accept single posting additions
-                
-                Ok(())
+
+                // Create a posting from the operation
+                let posting = Posting {
+                    document_id: *document_id,
+                    start: *start,
+                    length: *length,
+                    vector: vector.clone(),
+                };
+
+                // Find the nearest shard for this posting's vector
+                let shard_id = match self.shardex_index.find_nearest_shard(&posting.vector)? {
+                    Some(shard_id) => shard_id,
+                    None => {
+                        // No shards available - create a default shard for recovery
+                        info!("No shards found during WAL replay - creating default shard for recovery");
+                        self.create_default_shard_for_recovery(&posting.vector)?
+                    }
+                };
+
+                // Get mutable reference to the shard and add the posting
+                let shard = self.shardex_index.get_shard_mut(shard_id)?;
+                match shard.add_posting(posting) {
+                    Ok(_) => {
+                        // Successfully added posting
+                        Ok(())
+                    }
+                    Err(e) => {
+                        warn!(
+                            document_id = %document_id,
+                            shard_id = %shard_id,
+                            error = %e,
+                            "Failed to add posting to shard during WAL replay"
+                        );
+                        Err(e)
+                    }
+                }
             }
-            WalOperation::RemoveDocument { document_id: _ } => {
-                // TODO: Actually remove from the ShardexIndex
-                // For now we just validate the operation
-                
+            WalOperation::RemoveDocument { document_id } => {
+                // Remove the document from all shards that might contain it
+                // We need to check all shards since we don't know which ones contain this document
+                let mut total_removed = 0;
+                let shard_ids = self.shardex_index.shard_ids();
+
+                for shard_id in shard_ids {
+                    let shard = self.shardex_index.get_shard_mut(shard_id)?;
+                    match shard.remove_document(*document_id) {
+                        Ok(removed_count) => {
+                            total_removed += removed_count;
+                        }
+                        Err(e) => {
+                            warn!(
+                                document_id = %document_id,
+                                shard_id = %shard_id,
+                                error = %e,
+                                "Failed to remove document from shard during WAL replay"
+                            );
+                            // Continue with other shards even if one fails
+                        }
+                    }
+                }
+
+                // Log if no postings were found to remove (might be expected in some cases)
+                if total_removed == 0 {
+                    warn!(
+                        document_id = %document_id,
+                        "No postings found to remove for document during WAL replay"
+                    );
+                }
+
                 Ok(())
             }
         }
@@ -304,6 +382,42 @@ impl WalReplayer {
     pub fn processed_transaction_count(&self) -> usize {
         self.processed_transactions.len()
     }
+
+    /// Create a default shard for recovery when no shards exist
+    /// This is a recovery scenario where we need to replay operations but the index is empty
+    fn create_default_shard_for_recovery(
+        &mut self,
+        sample_vector: &[f32],
+    ) -> Result<ShardId, ShardexError> {
+        let shard_id = ShardId::new();
+        let vector_size = sample_vector.len();
+        let default_capacity = 1000; // Default capacity for recovery shard
+
+        // Create the shard in the same directory as the index
+        let shard = Shard::create(
+            shard_id,
+            default_capacity,
+            vector_size,
+            self.wal_directory
+                .parent()
+                .ok_or_else(|| {
+                    ShardexError::Wal("WAL directory has no parent for shard creation".to_string())
+                })?
+                .to_path_buf(),
+        )?;
+
+        // Add the shard to the index
+        self.shardex_index.add_shard(shard)?;
+
+        info!(
+            shard_id = %shard_id,
+            vector_size = vector_size,
+            capacity = default_capacity,
+            "Created default shard for WAL replay recovery"
+        );
+
+        Ok(shard_id)
+    }
 }
 
 #[cfg(test)]
@@ -312,11 +426,10 @@ mod tests {
     use crate::config::ShardexConfig;
     use crate::test_utils::TestEnvironment;
 
-
     #[test]
     fn test_recovery_stats_basic() {
         let mut stats = RecoveryStats::new();
-        
+
         assert_eq!(stats.segments_processed, 0);
         assert_eq!(stats.transactions_replayed, 0);
         assert_eq!(stats.transactions_skipped, 0);
@@ -324,7 +437,7 @@ mod tests {
         assert!(stats.errors_encountered.is_empty());
         assert!(!stats.has_errors());
         assert_eq!(stats.success_rate(), 100.0);
-        
+
         // Add an error
         stats.add_error("Test error");
         assert!(stats.has_errors());
@@ -334,11 +447,11 @@ mod tests {
     #[test]
     fn test_recovery_stats_success_rate() {
         let mut stats = RecoveryStats::new();
-        
+
         stats.transactions_replayed = 8;
         stats.transactions_skipped = 2;
         assert_eq!(stats.success_rate(), 80.0);
-        
+
         stats.transactions_replayed = 10;
         stats.transactions_skipped = 0;
         assert_eq!(stats.success_rate(), 100.0);
@@ -353,9 +466,9 @@ mod tests {
 
         let index = ShardexIndex::create(config).unwrap();
         let wal_directory = _test_env.path().join("wal");
-        
+
         let replayer = WalReplayer::new(wal_directory.clone(), index);
-        
+
         assert_eq!(replayer.wal_directory, wal_directory);
         assert_eq!(replayer.processed_transaction_count(), 0);
         assert!(!replayer.recovery_stats().has_errors());
@@ -371,20 +484,18 @@ mod tests {
         let index = ShardexIndex::create(config).unwrap();
         let wal_directory = _test_env.path().join("wal");
         let mut replayer = WalReplayer::new(wal_directory, index);
-        
+
         let transaction_id = TransactionId::new();
-        
+
         // Initially not processed
         assert!(!replayer.is_transaction_processed(&transaction_id));
         assert_eq!(replayer.processed_transaction_count(), 0);
-        
+
         // Mark as processed
         replayer.mark_transaction_processed(transaction_id);
-        
+
         // Should now be processed
         assert!(replayer.is_transaction_processed(&transaction_id));
         assert_eq!(replayer.processed_transaction_count(), 1);
     }
-
-
 }

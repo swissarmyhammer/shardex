@@ -332,15 +332,17 @@ impl WalSegment {
         let memory_map = self.memory_map.lock().map_err(|_| {
             ShardexError::Wal("Failed to acquire memory map lock for reading".to_string())
         })?;
-        
+
         let data_slice = memory_map.as_slice();
         if start + length > data_slice.len() {
             return Err(ShardexError::Wal(format!(
                 "Read range out of bounds: start={}, length={}, segment_size={}",
-                start, length, data_slice.len()
+                start,
+                length,
+                data_slice.len()
             )));
         }
-        
+
         Ok(data_slice[start..start + length].to_vec())
     }
 
