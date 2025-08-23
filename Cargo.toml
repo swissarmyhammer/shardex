@@ -22,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytemuck = "1.14"
 ulid = "1.1"
+uuid = { version = "1.0", features = ["v4"] }
 toml = "0.8"
 tracing = "0.1"
 crc32fast = "1.4"
