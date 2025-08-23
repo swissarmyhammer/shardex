@@ -2470,9 +2470,9 @@ mod tests {
 
         // Add postings with predictable vectors
         let vectors = [
-            [1.0, 0.0, 0.0], // Same direction as query
+            [1.0, 0.0, 0.0],  // Same direction as query
             [-1.0, 0.0, 0.0], // Opposite direction
-            [0.0, 1.0, 0.0], // Orthogonal
+            [0.0, 1.0, 0.0],  // Orthogonal
         ];
 
         for (i, vector) in vectors.iter().enumerate() {
@@ -2482,7 +2482,9 @@ mod tests {
         }
 
         let query = vec![1.0, 0.0, 0.0];
-        let results = shard.search_with_metric(&query, 3, DistanceMetric::Cosine).unwrap();
+        let results = shard
+            .search_with_metric(&query, 3, DistanceMetric::Cosine)
+            .unwrap();
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].similarity_score, 1.0); // Same direction
@@ -2510,21 +2512,23 @@ mod tests {
         }
 
         let query = vec![0.0, 0.0];
-        let results = shard.search_with_metric(&query, 3, DistanceMetric::Euclidean).unwrap();
+        let results = shard
+            .search_with_metric(&query, 3, DistanceMetric::Euclidean)
+            .unwrap();
 
         assert_eq!(results.len(), 3);
-        
+
         // Results should be sorted by similarity (descending)
         assert!(results[0].similarity_score > results[1].similarity_score);
         assert!(results[1].similarity_score > results[2].similarity_score);
-        
+
         // Check that closer points have higher similarity
         assert_eq!(results[0].similarity_score, 1.0); // Same point: 1/(1+0) = 1.0
         assert!((results[1].similarity_score - 0.5).abs() < 1e-6); // Distance 1: 1/(1+1) = 0.5
-        assert!((results[2].similarity_score - 1.0/6.0).abs() < 1e-6); // Distance 5: 1/(1+5) ≈ 0.167
+        assert!((results[2].similarity_score - 1.0 / 6.0).abs() < 1e-6); // Distance 5: 1/(1+5) ≈ 0.167
     }
 
-    #[test] 
+    #[test]
     fn test_shard_search_with_metric_dot_product() {
         let temp_dir = TempDir::new().unwrap();
         let shard_id = ShardId::new();
@@ -2532,8 +2536,8 @@ mod tests {
 
         // Add postings with different dot products
         let vectors = [
-            [2.0, 0.0], // Dot product with query [1,0] = 2.0 (positive)
-            [0.0, 1.0], // Dot product = 0.0 (orthogonal)
+            [2.0, 0.0],  // Dot product with query [1,0] = 2.0 (positive)
+            [0.0, 1.0],  // Dot product = 0.0 (orthogonal)
             [-1.0, 0.0], // Dot product = -1.0 (negative)
         ];
 
@@ -2544,14 +2548,16 @@ mod tests {
         }
 
         let query = vec![1.0, 0.0];
-        let results = shard.search_with_metric(&query, 3, DistanceMetric::DotProduct).unwrap();
+        let results = shard
+            .search_with_metric(&query, 3, DistanceMetric::DotProduct)
+            .unwrap();
 
         assert_eq!(results.len(), 3);
-        
+
         // Results should be sorted by similarity (higher dot product = higher similarity)
         assert!(results[0].similarity_score > results[1].similarity_score);
         assert!(results[1].similarity_score > results[2].similarity_score);
-        
+
         // Positive dot product should give high similarity, negative should give low
         assert!(results[0].similarity_score > 0.8); // Dot product = 2.0
         assert!((results[1].similarity_score - 0.5).abs() < 0.1); // Dot product = 0.0
@@ -2571,10 +2577,17 @@ mod tests {
 
         // Test with wrong dimension query
         let wrong_query = vec![1.0, 2.0]; // 2D instead of 3D
-        for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean, DistanceMetric::DotProduct] {
+        for metric in [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+        ] {
             let result = shard.search_with_metric(&wrong_query, 5, metric);
             assert!(result.is_err());
-            assert!(matches!(result.unwrap_err(), ShardexError::InvalidDimension { .. }));
+            assert!(matches!(
+                result.unwrap_err(),
+                ShardexError::InvalidDimension { .. }
+            ));
         }
     }
 
@@ -2590,26 +2603,26 @@ mod tests {
         shard.add_posting(posting).unwrap();
 
         let query = vec![1.0, 0.0, 0.0];
-        
+
         // Search with k=0 should return empty results for all metrics
-        for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean, DistanceMetric::DotProduct] {
+        for metric in [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+        ] {
             let results = shard.search_with_metric(&query, 0, metric).unwrap();
             assert!(results.is_empty());
         }
     }
 
-    #[test] 
+    #[test]
     fn test_search_with_metric_vs_regular_search() {
         let temp_dir = TempDir::new().unwrap();
         let shard_id = ShardId::new();
         let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
 
         // Add postings
-        let vectors = [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0], 
-            [-1.0, 0.0, 0.0],
-        ];
+        let vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]];
 
         for (i, vector) in vectors.iter().enumerate() {
             let doc_id = DocumentId::new();
@@ -2618,13 +2631,15 @@ mod tests {
         }
 
         let query = vec![1.0, 0.0, 0.0];
-        
+
         // Compare regular search (which uses cosine) with explicit cosine search
         let regular_results = shard.search(&query, 3).unwrap();
-        let cosine_results = shard.search_with_metric(&query, 3, DistanceMetric::Cosine).unwrap();
+        let cosine_results = shard
+            .search_with_metric(&query, 3, DistanceMetric::Cosine)
+            .unwrap();
 
         assert_eq!(regular_results.len(), cosine_results.len());
-        
+
         // Results should be identical (same order, same similarity scores)
         for (regular, cosine) in regular_results.iter().zip(cosine_results.iter()) {
             assert_eq!(regular.document_id, cosine.document_id);

@@ -97,7 +97,8 @@ impl ShardexImpl {
         match metric {
             DistanceMetric::Cosine => {
                 // Use existing parallel_search which uses cosine similarity
-                self.index.parallel_search(query_vector, &candidate_shards, k)
+                self.index
+                    .parallel_search(query_vector, &candidate_shards, k)
             }
             _ => {
                 // For other metrics, we need to implement a new parallel_search_with_metric
@@ -158,7 +159,9 @@ impl Shardex for ShardexImpl {
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         // TODO: Implement flushing of WAL and pending operations
-        Err(ShardexError::Search("flush not yet implemented".to_string()))
+        Err(ShardexError::Search(
+            "flush not yet implemented".to_string(),
+        ))
     }
 
     async fn stats(&self) -> Result<IndexStats, Self::Error> {
@@ -195,10 +198,9 @@ mod tests {
 
         // This should work since cosine is supported
         let results = shardex.search(&query, 10, None).await;
-        match results {
-            Ok(results) => assert!(results.is_empty()), // Empty index should return no results
-            Err(_) => {} // May error due to empty index, that's OK for now
-        }
+        if let Ok(results) = results {
+            assert!(results.is_empty()); // Empty index should return no results
+        } // May error due to empty index, that's OK for now
     }
 
     #[tokio::test]
@@ -244,10 +246,9 @@ mod tests {
         let query = vec![1.0; 128];
 
         let results = shardex.search_impl(&query, 10, DistanceMetric::Cosine, None);
-        match results {
-            Ok(results) => assert!(results.is_empty()), // Empty index
-            Err(_) => {} // May error due to empty index
-        }
+        if let Ok(results) = results {
+            assert!(results.is_empty()); // Empty index
+        } // May error due to empty index
     }
 
     #[test]
@@ -281,7 +282,7 @@ mod tests {
         assert!((cosine_opposite - 0.0).abs() < 1e-6); // Opposite vectors
         assert!((cosine_orthogonal - 0.5).abs() < 1e-6); // Orthogonal vectors
 
-        // Test euclidean similarity  
+        // Test euclidean similarity
         let euclidean_identical = DistanceMetric::Euclidean.similarity(&a, &b).unwrap();
         let euclidean_different = DistanceMetric::Euclidean.similarity(&a, &c).unwrap();
 
@@ -293,7 +294,8 @@ mod tests {
         let dot_negative = DistanceMetric::DotProduct.similarity(&a, &c).unwrap();
         let dot_zero = DistanceMetric::DotProduct.similarity(&a, &d).unwrap();
 
-        assert!(dot_positive > 0.8); // Positive correlation
+        // The sigmoid transformation for dot product = 1.0 gives ~0.731, so adjust test expectation
+        assert!(dot_positive > 0.7); // Positive correlation - adjusted for sigmoid behavior
         assert!(dot_negative < 0.4); // Negative correlation
         assert!((dot_zero - 0.5).abs() < 0.1); // Zero correlation
     }
@@ -301,35 +303,33 @@ mod tests {
     #[test]
     fn test_knn_search_edge_cases() {
         let _env = TestEnvironment::new("test_knn_search_edge_cases");
-        
-        // Test empty query validation  
+
+        // Test empty query validation
         let config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
 
         let mut shardex = ShardexImpl::new(config).unwrap();
-        
+
         // Test with empty vector (k=0)
         let query = vec![1.0; 128];
         let results = shardex.search_impl(&query, 0, DistanceMetric::Cosine, None);
-        match results {
-            Ok(results) => assert!(results.is_empty()), // Should return empty results
-            Err(_) => {} // Empty index might error, that's OK
-        }
-        
+        if let Ok(results) = results {
+            assert!(results.is_empty()); // Should return empty results
+        } // Empty index might error, that's OK
+
         // Test with large k value (more than possible results)
         let results = shardex.search_impl(&query, 1000, DistanceMetric::Cosine, None);
-        match results {
-            Ok(results) => assert!(results.len() <= 1000), // Should not exceed k
-            Err(_) => {} // Empty index might error, that's OK
-        }
-        
+        if let Ok(results) = results {
+            assert!(results.len() <= 1000); // Should not exceed k
+        } // Empty index might error, that's OK
+
         // Test dimension validation
         let wrong_query = vec![1.0; 64]; // Wrong dimension
         let results = shardex.search_impl(&wrong_query, 10, DistanceMetric::Cosine, None);
         // Should either error due to dimension mismatch or handle empty index gracefully
         match results {
-            Ok(_) => {}, // Empty index case
+            Ok(_) => {} // Empty index case
             Err(e) => {
                 let error_str = e.to_string();
                 // Should be either dimension error or empty index error
