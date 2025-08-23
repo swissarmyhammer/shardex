@@ -129,7 +129,7 @@ impl SlopFactorConfig {
         // More shards available allows for higher selectivity
         let size_factor = ((vector_size as f64).log2() / 10.0).max(0.1) as usize;
         let shard_factor = (shard_count as f64 / 10.0).sqrt().max(1.0) as usize;
-        
+
         let calculated = self.default_factor + size_factor + shard_factor;
         calculated.clamp(self.min_factor, self.max_factor)
     }
@@ -520,7 +520,7 @@ mod tests {
     }
 
     // Tests for SlopFactorConfig
-    
+
     #[test]
     fn test_slop_factor_config_default() {
         let config = SlopFactorConfig::default();
@@ -601,7 +601,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Minimum slop factor cannot be greater than maximum slop factor");
+            assert_eq!(
+                msg,
+                "Minimum slop factor cannot be greater than maximum slop factor"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -609,7 +612,10 @@ mod tests {
 
     #[test]
     fn test_slop_factor_config_default_out_of_range_validation() {
-        let config = SlopFactorConfig::new().default_factor(10).min_factor(1).max_factor(5);
+        let config = SlopFactorConfig::new()
+            .default_factor(10)
+            .min_factor(1)
+            .max_factor(5);
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
@@ -645,7 +651,9 @@ mod tests {
 
     #[test]
     fn test_calculate_optimal_slop_adaptive_disabled() {
-        let config = SlopFactorConfig::new().default_factor(5).adaptive_enabled(false);
+        let config = SlopFactorConfig::new()
+            .default_factor(5)
+            .adaptive_enabled(false);
         let result = config.calculate_optimal_slop(384, 10);
         assert_eq!(result, 5);
     }
@@ -657,11 +665,11 @@ mod tests {
             .min_factor(1)
             .max_factor(10)
             .adaptive_enabled(true);
-        
+
         let result = config.calculate_optimal_slop(384, 10);
         // Should be clamped within min/max range
         assert!(result >= 1 && result <= 10);
-        
+
         // Larger vector size should generally result in higher slop
         let result_large = config.calculate_optimal_slop(1024, 10);
         assert!(result_large >= result);
@@ -674,7 +682,7 @@ mod tests {
             .min_factor(40)
             .max_factor(60)
             .adaptive_enabled(true);
-        
+
         let result = config.calculate_optimal_slop(128, 5);
         assert!(result >= 40 && result <= 60);
     }
@@ -684,7 +692,7 @@ mod tests {
         let slop_config = SlopFactorConfig::new()
             .default_factor(5)
             .adaptive_enabled(true);
-            
+
         let config = ShardexConfig::new().slop_factor_config(slop_config);
         assert_eq!(config.slop_factor_config.default_factor, 5);
         assert!(config.slop_factor_config.adaptive_enabled);

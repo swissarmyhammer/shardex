@@ -83,6 +83,40 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+/// Parameters for recording a search operation
+#[derive(Debug, Clone)]
+pub struct SearchRecordParams {
+    pub latency: Duration,
+    pub result_count: usize,
+    pub shards_searched: usize,
+    pub success: bool,
+    pub timed_out: bool,
+    pub cancelled: bool,
+    pub slop_factor: usize,
+}
+
+impl SearchRecordParams {
+    pub fn new(
+        latency: Duration,
+        result_count: usize,
+        shards_searched: usize,
+        success: bool,
+        timed_out: bool,
+        cancelled: bool,
+        slop_factor: usize,
+    ) -> Self {
+        Self {
+            latency,
+            result_count,
+            shards_searched,
+            success,
+            timed_out,
+            cancelled,
+            slop_factor,
+        }
+    }
+}
+
 /// Performance metrics for search operations
 #[derive(Debug, Clone, Default)]
 pub struct SearchMetrics {
@@ -109,67 +143,59 @@ impl SearchMetrics {
     }
 
     /// Update metrics with a completed search
-    pub fn record_search(
-        &mut self,
-        latency: Duration,
-        result_count: usize,
-        shards_searched: usize,
-        success: bool,
-        timed_out: bool,
-        cancelled: bool,
-        slop_factor: usize,
-    ) {
+    pub fn record_search(&mut self, params: SearchRecordParams) {
         self.total_searches += 1;
 
-        if success {
+        if params.success {
             self.successful_searches += 1;
         }
 
-        if timed_out {
+        if params.timed_out {
             self.timed_out_searches += 1;
         }
 
-        if cancelled {
+        if params.cancelled {
             self.cancelled_searches += 1;
         }
 
         // Update running averages
-        let latency_ms = latency.as_millis() as f64;
+        let latency_ms = params.latency.as_millis() as f64;
         self.average_latency_ms = (self.average_latency_ms * (self.total_searches - 1) as f64
             + latency_ms)
             / self.total_searches as f64;
 
         self.average_results_per_search = (self.average_results_per_search
             * (self.total_searches - 1) as f64
-            + result_count as f64)
+            + params.result_count as f64)
             / self.total_searches as f64;
 
-        self.total_shards_searched += shards_searched as u64;
+        self.total_shards_searched += params.shards_searched as u64;
         self.average_shards_per_search =
             self.total_shards_searched as f64 / self.total_searches as f64;
 
         // Update slop factor statistics
         self.average_slop_factor = (self.average_slop_factor * (self.total_searches - 1) as f64
-            + slop_factor as f64)
+            + params.slop_factor as f64)
             / self.total_searches as f64;
 
         if self.total_searches == 1 {
-            self.min_slop_factor_used = slop_factor;
-            self.max_slop_factor_used = slop_factor;
+            self.min_slop_factor_used = params.slop_factor;
+            self.max_slop_factor_used = params.slop_factor;
         } else {
-            self.min_slop_factor_used = self.min_slop_factor_used.min(slop_factor);
-            self.max_slop_factor_used = self.max_slop_factor_used.max(slop_factor);
+            self.min_slop_factor_used = self.min_slop_factor_used.min(params.slop_factor);
+            self.max_slop_factor_used = self.max_slop_factor_used.max(params.slop_factor);
         }
 
         // Simple correlation calculation between slop factor and latency
         // This is a basic implementation and can be enhanced with proper statistical correlation
         if self.total_searches > 1 {
-            let slop_factor_deviation = slop_factor as f64 - self.average_slop_factor;
+            let slop_factor_deviation = params.slop_factor as f64 - self.average_slop_factor;
             let latency_deviation = latency_ms - self.average_latency_ms;
             let correlation_update = slop_factor_deviation * latency_deviation;
-            
-            self.slop_factor_performance_correlation = (self.slop_factor_performance_correlation 
-                * (self.total_searches - 1) as f64 + correlation_update)
+
+            self.slop_factor_performance_correlation = (self.slop_factor_performance_correlation
+                * (self.total_searches - 1) as f64
+                + correlation_update)
                 / self.total_searches as f64;
         }
     }
@@ -192,30 +218,13 @@ impl PerformanceMonitor {
     }
 
     /// Record a search operation
-    pub async fn record_search(
-        &self,
-        latency: Duration,
-        result_count: usize,
-        shards_searched: usize,
-        success: bool,
-        timed_out: bool,
-        cancelled: bool,
-        slop_factor: usize,
-    ) {
+    pub async fn record_search(&self, params: SearchRecordParams) {
         if !self.enabled {
             return;
         }
 
         let mut metrics = self.metrics.write().await;
-        metrics.record_search(
-            latency,
-            result_count,
-            shards_searched,
-            success,
-            timed_out,
-            cancelled,
-            slop_factor,
-        );
+        metrics.record_search(params);
     }
 
     /// Get current metrics snapshot
@@ -479,17 +488,16 @@ impl SearchCoordinator {
             }
         };
 
-        self.performance_monitor
-            .record_search(
-                elapsed,
-                result_count,
-                shards_searched,
-                success,
-                timed_out,
-                cancelled,
-                slop_factor,
-            )
-            .await;
+        let params = SearchRecordParams::new(
+            elapsed,
+            result_count,
+            shards_searched,
+            success,
+            timed_out,
+            cancelled,
+            slop_factor,
+        );
+        self.performance_monitor.record_search(params).await;
 
         result.map(|(results, _)| results)
     }
@@ -554,10 +562,10 @@ impl SearchCoordinator {
     pub async fn calculate_adaptive_slop_factor(&self, vector_size: usize) -> usize {
         let index = self.index.lock().await;
         let shard_count = index.get_shard_count();
-        
+
         // Get base recommendation from index characteristics
         let base_slop = index.calculate_optimal_slop(vector_size, shard_count);
-        
+
         // Adjust based on performance metrics if available
         let metrics = self.get_performance_metrics().await;
         if metrics.total_searches > 10 {
@@ -597,7 +605,8 @@ impl SearchCoordinator {
         timeout: Option<Duration>,
     ) -> Result<Vec<SearchResult>, ShardexError> {
         let adaptive_slop = self.calculate_adaptive_slop_factor(query.len()).await;
-        self.coordinate_search(query, k, adaptive_slop, timeout).await
+        self.coordinate_search(query, k, adaptive_slop, timeout)
+            .await
     }
 
     /// Get slop factor impact analysis report
@@ -609,7 +618,7 @@ impl SearchCoordinator {
     /// Analysis report with performance insights
     pub async fn get_slop_factor_analysis(&self) -> SlopFactorAnalysis {
         let metrics = self.get_performance_metrics().await;
-        
+
         SlopFactorAnalysis {
             total_searches_analyzed: metrics.total_searches,
             average_slop_factor: metrics.average_slop_factor,
@@ -787,43 +796,22 @@ mod tests {
     #[tokio::test]
     async fn test_search_metrics_with_slop_factor() {
         let mut metrics = SearchMetrics::new();
-        
+
         // Record a few searches with different slop factors
-        metrics.record_search(
-            Duration::from_millis(100),
-            10,
-            3,
-            true,
-            false,
-            false,
-            3,
-        );
-        
-        metrics.record_search(
-            Duration::from_millis(150),
-            8,
-            5,
-            true,
-            false,
-            false,
-            5,
-        );
-        
-        metrics.record_search(
-            Duration::from_millis(80),
-            12,
-            2,
-            true,
-            false,
-            false,
-            2,
-        );
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        metrics.record_search(params1);
+
+        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        metrics.record_search(params2);
+
+        let params3 = SearchRecordParams::new(Duration::from_millis(80), 12, 2, true, false, false, 2);
+        metrics.record_search(params3);
 
         assert_eq!(metrics.total_searches, 3);
         assert_eq!(metrics.successful_searches, 3);
         assert_eq!(metrics.min_slop_factor_used, 2);
         assert_eq!(metrics.max_slop_factor_used, 5);
-        
+
         // Average slop factor should be (3 + 5 + 2) / 3 = 3.33...
         assert!((metrics.average_slop_factor - 3.333).abs() < 0.01);
     }
@@ -843,7 +831,7 @@ mod tests {
 
         // Test adaptive slop factor calculation
         let adaptive_slop = coordinator.calculate_adaptive_slop_factor(384).await;
-        
+
         // Should return a reasonable slop factor
         assert!(adaptive_slop > 0);
         assert!(adaptive_slop <= 100);
@@ -863,7 +851,9 @@ mod tests {
             .unwrap();
 
         let query = vec![1.0; 128];
-        let results = coordinator.coordinate_search_adaptive(&query, 10, None).await;
+        let results = coordinator
+            .coordinate_search_adaptive(&query, 10, None)
+            .await;
 
         // Should handle adaptive search without errors
         // Results may be empty for an empty index, but shouldn't error
@@ -888,7 +878,7 @@ mod tests {
 
         // Get initial analysis (should work with no searches)
         let analysis = coordinator.get_slop_factor_analysis().await;
-        
+
         assert_eq!(analysis.total_searches_analyzed, 0);
         assert_eq!(analysis.average_slop_factor, 0.0);
         assert_eq!(analysis.slop_factor_range, (0, 0));
@@ -898,30 +888,16 @@ mod tests {
     #[tokio::test]
     async fn test_performance_monitor_with_slop_factor() {
         let monitor = PerformanceMonitor::new(true);
-        
+
         // Record some searches with slop factor tracking
-        monitor.record_search(
-            Duration::from_millis(100),
-            10,
-            3,
-            true,
-            false,
-            false,
-            3,
-        ).await;
-        
-        monitor.record_search(
-            Duration::from_millis(200),
-            5,
-            6,
-            true,
-            false,
-            false,
-            6,
-        ).await;
-        
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        monitor.record_search(params1).await;
+
+        let params2 = SearchRecordParams::new(Duration::from_millis(200), 5, 6, true, false, false, 6);
+        monitor.record_search(params2).await;
+
         let metrics = monitor.get_metrics().await;
-        
+
         assert_eq!(metrics.total_searches, 2);
         assert_eq!(metrics.successful_searches, 2);
         assert_eq!(metrics.min_slop_factor_used, 3);
@@ -943,28 +919,14 @@ mod tests {
             .unwrap();
 
         // Simulate some searches by directly recording metrics
-        coordinator.performance_monitor.record_search(
-            Duration::from_millis(100),
-            10,
-            3,
-            true,
-            false,
-            false,
-            3,
-        ).await;
-        
-        coordinator.performance_monitor.record_search(
-            Duration::from_millis(150),
-            8,
-            5,
-            true,
-            false,
-            false,
-            5,
-        ).await;
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        coordinator.performance_monitor.record_search(params1).await;
+
+        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        coordinator.performance_monitor.record_search(params2).await;
 
         let analysis = coordinator.get_slop_factor_analysis().await;
-        
+
         assert_eq!(analysis.total_searches_analyzed, 2);
         assert_eq!(analysis.average_slop_factor, 4.0);
         assert_eq!(analysis.slop_factor_range, (3, 5));
