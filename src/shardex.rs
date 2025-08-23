@@ -42,7 +42,7 @@ pub trait Shardex {
 
     /// Search for K nearest neighbors using default distance metric (cosine)
     async fn search(
-        &mut self,
+        &self,
         query_vector: &[f32],
         k: usize,
         slop_factor: Option<usize>,
@@ -50,7 +50,7 @@ pub trait Shardex {
 
     /// Search for K nearest neighbors using specified distance metric
     async fn search_with_metric(
-        &mut self,
+        &self,
         query_vector: &[f32],
         k: usize,
         metric: DistanceMetric,
@@ -316,7 +316,7 @@ impl ShardexImpl {
 
     /// Search using the existing parallel_search infrastructure
     pub fn search_impl(
-        &mut self,
+        &self,
         query_vector: &[f32],
         k: usize,
         metric: DistanceMetric,
@@ -896,7 +896,7 @@ impl Shardex for ShardexImpl {
     }
 
     async fn search(
-        &mut self,
+        &self,
         query_vector: &[f32],
         k: usize,
         slop_factor: Option<usize>,
@@ -905,7 +905,7 @@ impl Shardex for ShardexImpl {
     }
 
     async fn search_with_metric(
-        &mut self,
+        &self,
         query_vector: &[f32],
         k: usize,
         metric: DistanceMetric,
@@ -1022,7 +1022,7 @@ mod tests {
             .directory_path(_env.path())
             .vector_size(128);
 
-        let mut shardex = ShardexImpl::create(config).await.unwrap();
+        let shardex = ShardexImpl::create(config).await.unwrap();
         let query = vec![1.0; 128];
 
         // This should work since cosine is supported
@@ -1039,7 +1039,7 @@ mod tests {
             .directory_path(_env.path())
             .vector_size(128);
 
-        let mut shardex = ShardexImpl::create(config).await.unwrap();
+        let shardex = ShardexImpl::create(config).await.unwrap();
         let query = vec![1.0; 128];
 
         // Euclidean metric is now supported
@@ -1069,7 +1069,7 @@ mod tests {
             .directory_path(_env.path())
             .vector_size(128);
 
-        let mut shardex = ShardexImpl::new(config).unwrap();
+        let shardex = ShardexImpl::new(config).unwrap();
         let query = vec![1.0; 128];
 
         let results = shardex.search_impl(&query, 10, DistanceMetric::Cosine, None);
@@ -1085,7 +1085,7 @@ mod tests {
             .directory_path(_env.path())
             .vector_size(128);
 
-        let mut shardex = ShardexImpl::new(config).unwrap();
+        let shardex = ShardexImpl::new(config).unwrap();
         let query = vec![1.0; 128];
 
         let result = shardex.search_impl(&query, 10, DistanceMetric::Euclidean, None);
@@ -1138,7 +1138,7 @@ mod tests {
             .directory_path(_env.path())
             .vector_size(128);
 
-        let mut shardex = ShardexImpl::new(config).unwrap();
+        let shardex = ShardexImpl::new(config).unwrap();
 
         // Test with empty vector (k=0)
         let query = vec![1.0; 128];
