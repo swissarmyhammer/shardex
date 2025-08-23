@@ -74,38 +74,50 @@ impl SlopFactorConfig {
     /// Validate the slop factor configuration
     pub fn validate(&self) -> Result<(), ShardexError> {
         if self.default_factor == 0 {
-            return Err(ShardexError::Config(
-                "Default slop factor must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config.default_factor",
+                "must be greater than 0",
+                "Set default_factor to a positive integer (recommended: 3-10 for most use cases)"
             ));
         }
 
         if self.min_factor == 0 {
-            return Err(ShardexError::Config(
-                "Minimum slop factor must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config.min_factor",
+                "must be greater than 0",
+                "Set min_factor to at least 1 (minimum valid slop factor)"
             ));
         }
 
         if self.max_factor == 0 {
-            return Err(ShardexError::Config(
-                "Maximum slop factor must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config.max_factor",
+                "must be greater than 0",
+                "Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)"
             ));
         }
 
         if self.min_factor > self.max_factor {
-            return Err(ShardexError::Config(
-                "Minimum slop factor cannot be greater than maximum slop factor".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config",
+                format!("min_factor ({}) cannot be greater than max_factor ({})", self.min_factor, self.max_factor),
+                "Ensure min_factor <= max_factor. For example: min_factor=1, max_factor=10"
             ));
         }
 
         if self.default_factor < self.min_factor || self.default_factor > self.max_factor {
-            return Err(ShardexError::Config(
-                "Default slop factor must be within min and max range".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config.default_factor",
+                format!("value {} is outside the allowed range [{}, {}]", self.default_factor, self.min_factor, self.max_factor),
+                format!("Set default_factor to a value between {} and {}", self.min_factor, self.max_factor)
             ));
         }
 
         if self.performance_threshold_ms == 0 {
-            return Err(ShardexError::Config(
-                "Performance threshold must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "slop_factor_config.performance_threshold_ms",
+                "must be greater than 0",
+                "Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)"
             ));
         }
 
@@ -243,38 +255,74 @@ impl ShardexConfig {
     /// Validate the configuration parameters
     pub fn validate(&self) -> Result<(), ShardexError> {
         if self.vector_size == 0 {
-            return Err(ShardexError::Config(
-                "Vector size must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "vector_size",
+                "must be greater than 0",
+                "Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)"
+            ));
+        }
+
+        if self.vector_size > 10000 {
+            return Err(ShardexError::config_error(
+                "vector_size",
+                format!("value {} is unusually large and may cause performance issues", self.vector_size),
+                "Most embedding models use 384-1536 dimensions. Verify this matches your model's output size."
             ));
         }
 
         if self.shard_size == 0 {
-            return Err(ShardexError::Config(
-                "Shard size must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "shard_size",
+                "must be greater than 0",
+                "Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)"
+            ));
+        }
+
+        if self.shard_size > 1_000_000 {
+            return Err(ShardexError::config_error(
+                "shard_size",
+                format!("value {} may cause excessive memory usage", self.shard_size),
+                "Consider reducing shard_size to 100000 or less to avoid memory issues"
             ));
         }
 
         if self.shardex_segment_size == 0 {
-            return Err(ShardexError::Config(
-                "Shardex segment size must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "shardex_segment_size",
+                "must be greater than 0",
+                "Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)"
             ));
         }
 
         if self.wal_segment_size < 1024 {
-            return Err(ShardexError::Config(
-                "WAL segment size must be at least 1024 bytes".to_string(),
+            return Err(ShardexError::config_error(
+                "wal_segment_size",
+                format!("value {} bytes is too small for efficient WAL operations", self.wal_segment_size),
+                "Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)"
             ));
         }
 
         if self.wal_segment_size > 1024 * 1024 * 1024 {
-            return Err(ShardexError::Config(
-                "WAL segment size must not exceed 1GB".to_string(),
+            return Err(ShardexError::config_error(
+                "wal_segment_size",
+                format!("value {} bytes exceeds 1GB limit", self.wal_segment_size),
+                "Set wal_segment_size to 1GB or less to avoid memory and disk space issues"
             ));
         }
 
         if self.batch_write_interval_ms == 0 {
-            return Err(ShardexError::Config(
-                "Batch write interval must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "batch_write_interval_ms",
+                "must be greater than 0",
+                "Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)"
+            ));
+        }
+
+        if self.batch_write_interval_ms > 30000 {
+            return Err(ShardexError::config_error(
+                "batch_write_interval_ms",
+                format!("value {} ms is too large and may cause data loss on crashes", self.batch_write_interval_ms),
+                "Set batch_write_interval_ms to 30 seconds or less to limit potential data loss"
             ));
         }
 
@@ -282,8 +330,10 @@ impl ShardexConfig {
         self.slop_factor_config.validate()?;
 
         if self.bloom_filter_size == 0 {
-            return Err(ShardexError::Config(
-                "Bloom filter size must be greater than 0".to_string(),
+            return Err(ShardexError::config_error(
+                "bloom_filter_size",
+                "must be greater than 0",
+                "Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)"
             ));
         }
 
@@ -370,7 +420,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Vector size must be greater than 0");
+            assert_eq!(msg, "vector_size - must be greater than 0: Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)");
         } else {
             panic!("Expected Config error");
         }
@@ -382,7 +432,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Shard size must be greater than 0");
+            assert_eq!(msg, "shard_size - must be greater than 0: Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)");
         } else {
             panic!("Expected Config error");
         }
@@ -394,7 +444,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Shardex segment size must be greater than 0");
+            assert_eq!(msg, "shardex_segment_size - must be greater than 0: Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)");
         } else {
             panic!("Expected Config error");
         }
@@ -406,7 +456,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "WAL segment size must be at least 1024 bytes");
+            assert_eq!(msg, "wal_segment_size - value 512 bytes is too small for efficient WAL operations: Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)");
         } else {
             panic!("Expected Config error");
         }
@@ -418,7 +468,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "WAL segment size must not exceed 1GB");
+            assert_eq!(msg, "wal_segment_size - value 2147483648 bytes exceeds 1GB limit: Set wal_segment_size to 1GB or less to avoid memory and disk space issues");
         } else {
             panic!("Expected Config error");
         }
@@ -430,7 +480,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Batch write interval must be greater than 0");
+            assert_eq!(msg, "batch_write_interval_ms - must be greater than 0: Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)");
         } else {
             panic!("Expected Config error");
         }
@@ -442,7 +492,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Default slop factor must be greater than 0");
+            assert_eq!(msg, "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)");
         } else {
             panic!("Expected Config error");
         }
@@ -454,7 +504,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Bloom filter size must be greater than 0");
+            assert_eq!(msg, "bloom_filter_size - must be greater than 0: Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)");
         } else {
             panic!("Expected Config error");
         }
@@ -565,7 +615,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Default slop factor must be greater than 0");
+            assert_eq!(msg, "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)");
         } else {
             panic!("Expected Config error");
         }
@@ -577,7 +627,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Minimum slop factor must be greater than 0");
+            assert_eq!(msg, "slop_factor_config.min_factor - must be greater than 0: Set min_factor to at least 1 (minimum valid slop factor)");
         } else {
             panic!("Expected Config error");
         }
@@ -589,7 +639,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Maximum slop factor must be greater than 0");
+            assert_eq!(msg, "slop_factor_config.max_factor - must be greater than 0: Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)");
         } else {
             panic!("Expected Config error");
         }
@@ -603,7 +653,7 @@ mod tests {
         if let Err(ShardexError::Config(msg)) = result {
             assert_eq!(
                 msg,
-                "Minimum slop factor cannot be greater than maximum slop factor"
+                "slop_factor_config - min_factor (10) cannot be greater than max_factor (5): Ensure min_factor <= max_factor. For example: min_factor=1, max_factor=10"
             );
         } else {
             panic!("Expected Config error");
@@ -619,7 +669,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Default slop factor must be within min and max range");
+            assert_eq!(msg, "slop_factor_config.default_factor - value 10 is outside the allowed range [1, 5]: Set default_factor to a value between 1 and 5");
         } else {
             panic!("Expected Config error");
         }
@@ -631,7 +681,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "Performance threshold must be greater than 0");
+            assert_eq!(msg, "slop_factor_config.performance_threshold_ms - must be greater than 0: Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)");
         } else {
             panic!("Expected Config error");
         }

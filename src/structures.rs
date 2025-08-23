@@ -266,10 +266,11 @@ impl Posting {
     /// Validate that this posting has the expected vector dimension
     pub fn validate_dimension(&self, expected_dimension: usize) -> Result<(), ShardexError> {
         if self.vector.len() != expected_dimension {
-            return Err(ShardexError::InvalidDimension {
-                expected: expected_dimension,
-                actual: self.vector.len(),
-            });
+            return Err(ShardexError::invalid_dimension_with_context(
+                expected_dimension, 
+                self.vector.len(), 
+                "posting_vector"
+            ));
         }
         Ok(())
     }
@@ -286,16 +287,15 @@ impl SearchResult {
         expected_dimension: usize,
     ) -> Result<Self, ShardexError> {
         if vector.len() != expected_dimension {
-            return Err(ShardexError::InvalidDimension {
-                expected: expected_dimension,
-                actual: vector.len(),
-            });
+            return Err(ShardexError::invalid_dimension_with_context(
+                expected_dimension,
+                vector.len(),
+                "search_result"
+            ));
         }
 
         if !(0.0..=1.0).contains(&similarity_score) || similarity_score.is_nan() {
-            return Err(ShardexError::InvalidSimilarityScore {
-                score: similarity_score,
-            });
+            return Err(ShardexError::invalid_similarity_score_with_suggestion(similarity_score));
         }
 
         Ok(Self {
@@ -344,10 +344,11 @@ impl SearchResult {
     /// Validate that this result has the expected vector dimension
     pub fn validate_dimension(&self, expected_dimension: usize) -> Result<(), ShardexError> {
         if self.vector.len() != expected_dimension {
-            return Err(ShardexError::InvalidDimension {
-                expected: expected_dimension,
-                actual: self.vector.len(),
-            });
+            return Err(ShardexError::invalid_dimension_with_context(
+                expected_dimension,
+                self.vector.len(),
+                "search_result"
+            ));
         }
         Ok(())
     }
@@ -760,18 +761,18 @@ mod tests {
         // Invalid similarity scores should fail
         let result = SearchResult::new(doc_id, 0, 10, vector.clone(), -0.1, 3);
         assert!(
-            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == -0.1)
+            matches!(result.unwrap_err(), ShardexError::InvalidInput { field, reason, .. } if field == "similarity_score" && reason.contains("Negative similarity scores"))
         );
 
         let result = SearchResult::new(doc_id, 0, 10, vector.clone(), 1.5, 3);
         assert!(
-            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == 1.5)
+            matches!(result.unwrap_err(), ShardexError::InvalidInput { field, reason, .. } if field == "similarity_score" && reason.contains("Similarity score too large"))
         );
 
         let result = SearchResult::new(doc_id, 0, 10, vector.clone(), f32::NAN, 3);
         assert!(matches!(
             result.unwrap_err(),
-            ShardexError::InvalidSimilarityScore { .. }
+            ShardexError::InvalidInput { field, reason, .. } if field == "similarity_score" && reason.contains("NaN values are not allowed")
         ));
 
         // Test from_posting validation
