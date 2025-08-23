@@ -530,10 +530,10 @@ mod tests {
         let results = coordinator.coordinate_search(&query, 10, 3, None).await;
 
         // Empty index should return empty results or error gracefully
-        match results {
-            Ok(results) => assert!(results.is_empty()),
-            Err(_) => {} // Empty index errors are acceptable
+        if let Ok(results) = results {
+            assert!(results.is_empty());
         }
+        // Empty index errors are acceptable
     }
 
     #[tokio::test]
