@@ -16,7 +16,8 @@ use crate::wal_replay::WalReplayer;
 use async_trait::async_trait;
 use std::path::Path;
 use std::time::Duration;
-use tracing::{debug, info};
+
+use tracing::{debug, info, warn};
 
 /// Main trait for Shardex vector search engine
 #[async_trait]
@@ -69,6 +70,8 @@ pub struct ShardexImpl {
     config: ShardexConfig,
     batch_processor: Option<BatchProcessor>,
     layout: DirectoryLayout,
+    /// Operations waiting to be applied to shards after WAL commit
+    pending_shard_operations: Vec<WalOperation>,
 }
 
 impl ShardexImpl {
@@ -81,20 +84,24 @@ impl ShardexImpl {
             config,
             batch_processor: None,
             layout,
+            pending_shard_operations: Vec::new(),
         })
     }
 
     /// Open an existing Shardex instance
     pub fn open_sync<P: AsRef<Path>>(directory_path: P) -> Result<Self, ShardexError> {
         let index = ShardexIndex::open(&directory_path)?;
-        // TODO: Read config from metadata
-        let config = ShardexConfig::new().directory_path(directory_path.as_ref());
         let layout = DirectoryLayout::new(directory_path.as_ref());
+        
+        // Load configuration from metadata file
+        let metadata = crate::layout::IndexMetadata::load(layout.metadata_path())?;
+        let config = metadata.config;
         Ok(Self {
             index,
             config,
             batch_processor: None,
             layout,
+            pending_shard_operations: Vec::new(),
         })
     }
 
@@ -181,24 +188,123 @@ impl ShardexImpl {
         let candidate_shards = self.index.find_nearest_shards(query_vector, slop)?;
 
         // Use parallel search with the specified metric
-        // TODO: The parallel_search method currently uses cosine similarity hardcoded
-        // We need to extend it to support different metrics
-        match metric {
-            DistanceMetric::Cosine => {
-                // Use existing parallel_search which uses cosine similarity
-                self.index
-                    .parallel_search(query_vector, &candidate_shards, k)
+        // Use parallel_search_with_metric for all distance metrics
+        self.index
+            .parallel_search_with_metric(query_vector, &candidate_shards, k, metric)
+    }
+
+    /// Apply pending operations to shards after they've been committed to WAL
+    async fn apply_pending_operations_to_shards(&mut self) -> Result<(), ShardexError> {
+        if self.pending_shard_operations.is_empty() {
+            return Ok(());
+        }
+
+        debug!("Applying {} pending operations to shards", self.pending_shard_operations.len());
+
+        let operations = std::mem::take(&mut self.pending_shard_operations);
+        
+        for operation in &operations {
+            if let Err(e) = self.apply_operation_to_shards(operation).await {
+                // On error, we need to decide whether to retry or log and continue
+                // Since the operation is already committed in WAL, we should try to continue
+                // with other operations rather than fail completely
+                warn!(
+                    operation = ?operation,
+                    error = %e,
+                    "Failed to apply operation to shards, continuing with next operation"
+                );
             }
-            _ => {
-                // For other metrics, we need to implement a new parallel_search_with_metric
-                // For now, return an error indicating this is not yet implemented
-                Err(ShardexError::Search(format!(
-                    "Distance metric {:?} not yet supported in parallel search. Only Cosine is currently supported.",
-                    metric
-                )))
+        }
+
+        debug!("Completed applying operations to shards");
+        Ok(())
+    }
+
+    /// Apply a single operation to the appropriate shards
+    async fn apply_operation_to_shards(&mut self, operation: &WalOperation) -> Result<(), ShardexError> {
+        match operation {
+            WalOperation::AddPosting {
+                document_id,
+                start,
+                length,
+                vector,
+            } => {
+                // Validate the operation
+                if vector.is_empty() {
+                    return Err(ShardexError::Wal(
+                        "Cannot add posting with empty vector".to_string(),
+                    ));
+                }
+                if *length == 0 {
+                    return Err(ShardexError::Wal(
+                        "Cannot add posting with zero length".to_string(),
+                    ));
+                }
+
+                // Create a posting from the operation
+                let posting = Posting {
+                    document_id: *document_id,
+                    start: *start,
+                    length: *length,
+                    vector: vector.clone(),
+                };
+
+                // Find the nearest shard for this posting's vector
+                let shard_id = match self.index.find_nearest_shard(&posting.vector)? {
+                    Some(shard_id) => shard_id,
+                    None => {
+                        // No shards available - this should not happen in normal operation
+                        // but could occur during recovery or if shards were deleted
+                        return Err(ShardexError::Search(
+                            "No shards available for posting insertion".to_string(),
+                        ));
+                    }
+                };
+
+                // Get mutable reference to the shard and add the posting
+                let shard = self.index.get_shard_mut(shard_id)?;
+                shard.add_posting(posting)?;
+
+                debug!(
+                    document_id = %document_id,
+                    shard_id = %shard_id,
+                    "Successfully added posting to shard"
+                );
+                Ok(())
+            }
+            WalOperation::RemoveDocument { document_id } => {
+                // Remove the document from all shards that might contain it
+                let mut total_removed = 0;
+                let shard_ids = self.index.shard_ids();
+
+                for shard_id in shard_ids {
+                    let shard = self.index.get_shard_mut(shard_id)?;
+                    match shard.remove_document(*document_id) {
+                        Ok(removed_count) => {
+                            total_removed += removed_count;
+                        }
+                        Err(e) => {
+                            warn!(
+                                document_id = %document_id,
+                                shard_id = %shard_id,
+                                error = %e,
+                                "Failed to remove document from shard"
+                            );
+                            // Continue with other shards even if one fails
+                        }
+                    }
+                }
+
+                debug!(
+                    document_id = %document_id,
+                    removed_count = total_removed,
+                    "Completed document removal from shards"
+                );
+                Ok(())
             }
         }
     }
+
 }
 
 #[async_trait]
@@ -277,11 +383,10 @@ impl Shardex for ShardexImpl {
             })
             .collect();
 
-        // Add operations to batch processor
-        // The batch processor will handle WAL recording and eventual application to shards
+        // Add operations to batch processor for WAL recording
         if let Some(ref mut processor) = self.batch_processor {
-            for operation in operations {
-                processor.add_operation(operation).await?;
+            for operation in &operations {
+                processor.add_operation(operation.clone()).await?;
             }
         } else {
             return Err(ShardexError::Wal(
@@ -289,15 +394,52 @@ impl Shardex for ShardexImpl {
             ));
         }
 
+        // Keep track of operations for shard application after WAL commit
+        self.pending_shard_operations.extend(operations);
+
         debug!("Successfully added postings to WAL batch for processing");
         Ok(())
     }
 
-    async fn remove_documents(&mut self, _document_ids: Vec<u128>) -> Result<(), Self::Error> {
-        // TODO: Implement using WAL and batch processor
-        Err(ShardexError::Search(
-            "remove_documents not yet implemented".to_string(),
-        ))
+    async fn remove_documents(&mut self, document_ids: Vec<u128>) -> Result<(), Self::Error> {
+        if document_ids.is_empty() {
+            return Ok(());
+        }
+
+        debug!(
+            "Removing {} documents from index with WAL transaction support",
+            document_ids.len()
+        );
+
+        // Ensure batch processor is initialized
+        if self.batch_processor.is_none() {
+            self.initialize_batch_processor().await?;
+        }
+
+        // Convert document IDs to WAL operations
+        let operations: Vec<WalOperation> = document_ids
+            .into_iter()
+            .map(|doc_id| WalOperation::RemoveDocument { 
+                document_id: crate::identifiers::DocumentId::from_raw(doc_id)
+            })
+            .collect();
+
+        // Add operations to batch processor for WAL recording
+        if let Some(ref mut processor) = self.batch_processor {
+            for operation in &operations {
+                processor.add_operation(operation.clone()).await?;
+            }
+        } else {
+            return Err(ShardexError::Wal(
+                "Batch processor not initialized".to_string(),
+            ));
+        }
+
+        // Keep track of operations for shard application after WAL commit
+        self.pending_shard_operations.extend(operations);
+
+        debug!("Successfully added document removal operations to WAL batch for processing");
+        Ok(())
     }
 
     async fn search(
@@ -325,14 +467,74 @@ impl Shardex for ShardexImpl {
         if let Some(ref mut processor) = self.batch_processor {
             processor.flush_now().await?;
             debug!("WAL batch flush completed");
+
+            // Apply pending operations to shards after successful WAL flush
+            self.apply_pending_operations_to_shards().await?;
         }
 
         Ok(())
     }
 
     async fn stats(&self) -> Result<IndexStats, Self::Error> {
-        // TODO: Implement stats collection from index
-        Ok(IndexStats::new())
+        // Collect statistics from the index using read-only metadata
+        let metadata_slice = self.index.all_shard_metadata();
+        let total_shards = metadata_slice.len();
+        
+        let mut total_postings = 0;
+        let mut active_postings = 0;
+        let mut deleted_postings = 0;
+        let mut memory_usage = 0;
+        let mut disk_usage = 0;
+        let mut shard_utilizations = Vec::new();
+        
+        // Iterate through all shard metadata to collect statistics
+        for metadata in metadata_slice {
+            // Use posting_count as total postings for this shard
+            total_postings += metadata.posting_count;
+            
+            // Estimate active postings based on utilization and capacity
+            let estimated_active = (metadata.utilization * metadata.capacity as f32) as usize;
+            active_postings += estimated_active;
+            deleted_postings += metadata.posting_count.saturating_sub(estimated_active);
+            
+            // Use existing memory usage from metadata
+            memory_usage += metadata.memory_usage;
+            
+            // Estimate disk usage based on shard directory if accessible
+            // For now, use a simple estimation since we don't have directory access in metadata
+            // This could be enhanced by storing directory paths in metadata if needed
+            let estimated_disk_usage = metadata.posting_count * (self.config.vector_size * 4 + 64);
+            disk_usage += estimated_disk_usage;
+            
+            // Use existing utilization from metadata
+            shard_utilizations.push(metadata.utilization);
+        }
+        
+        // Calculate average shard utilization
+        let average_shard_utilization = if !shard_utilizations.is_empty() {
+            shard_utilizations.iter().sum::<f32>() / shard_utilizations.len() as f32
+        } else {
+            0.0
+        };
+        
+        // Count pending operations in WAL batch processor
+        let pending_operations = if let Some(ref processor) = self.batch_processor {
+            processor.pending_operation_count()
+        } else {
+            0
+        } + self.pending_shard_operations.len();
+        
+        Ok(IndexStats {
+            total_shards,
+            total_postings,
+            pending_operations,
+            memory_usage,
+            active_postings,
+            deleted_postings,
+            average_shard_utilization,
+            vector_dimension: self.config.vector_size,
+            disk_usage,
+        })
     }
 }
 
