@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .vector_size(768) // Larger vectors (e.g., BERT embeddings)
         .shard_size(50000) // Larger shards for fewer splits
         .shardex_segment_size(5000) // More centroids per segment
-        .wal_segment_size(4 * 1024 * 1024) // 4MB WAL segments
+        .wal_segment_size(16 * 1024 * 1024) // 16MB WAL segments
         .batch_write_interval_ms(50) // Faster batching
         .default_slop_factor(5) // Broader search for accuracy
         .bloom_filter_size(4096); // Larger bloom filters
@@ -63,10 +63,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n4. Testing High-Performance Configuration");
     println!("=========================================");
 
+    println!("DEBUG: About to create ShardexImpl");
     let mut index = ShardexImpl::create(high_perf_config.clone()).await?;
+    println!("DEBUG: ShardexImpl created successfully");
 
     // Generate test data with larger vectors
-    let test_data = generate_test_data(1000, 768); // 1000 documents, 768 dimensions
+    let test_data = generate_test_data(100, 768); // 100 documents, 768 dimensions
     println!(
         "Generated {} test documents with {}-dimensional vectors",
         test_data.len(),
@@ -75,8 +77,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Measure indexing performance
     let start_time = Instant::now();
+    println!("DEBUG: About to call add_postings");
     index.add_postings(test_data).await?;
+    println!("DEBUG: add_postings completed, about to call flush");
     index.flush().await?;
+    println!("DEBUG: flush completed");
     let indexing_time = start_time.elapsed();
 
     println!("Indexing completed in {:?}", indexing_time);
