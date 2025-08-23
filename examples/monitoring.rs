@@ -41,7 +41,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("\nMonitoring examples completed successfully!");
     
-    // Note: Other monitoring examples temporarily simplified for WAL capacity compatibility
+    // Additional monitoring features (performance metrics, resource usage, health monitoring)
+    // are available as functions in this file but not enabled by default.
+    // Enable them by calling collect_performance_metrics(), monitor_resource_usage(), etc.
 
     // Clean up
     std::fs::remove_dir_all(&temp_dir)?;
@@ -72,6 +74,7 @@ async fn monitor_basic_stats(index: &mut ShardexImpl) -> Result<(), Box<dyn Erro
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn collect_performance_metrics(index: &mut ShardexImpl) -> Result<(), Box<dyn Error>> {
     println!("Collecting performance metrics...");
 
@@ -129,6 +132,7 @@ async fn collect_performance_metrics(index: &mut ShardexImpl) -> Result<(), Box<
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn monitor_resource_usage(index: &mut ShardexImpl) -> Result<(), Box<dyn Error>> {
     println!("Monitoring resource usage...");
 
@@ -189,6 +193,7 @@ async fn monitor_resource_usage(index: &mut ShardexImpl) -> Result<(), Box<dyn E
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn analyze_detailed_statistics(index: &ShardexImpl) -> Result<(), Box<dyn Error>> {
     println!("Analyzing detailed statistics...");
 
@@ -231,6 +236,7 @@ async fn analyze_detailed_statistics(index: &ShardexImpl) -> Result<(), Box<dyn 
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn demonstrate_health_monitoring(index: &ShardexImpl) -> Result<(), Box<dyn Error>> {
     println!("Demonstrating health monitoring...");
 
@@ -324,6 +330,7 @@ async fn demonstrate_health_monitoring(index: &ShardexImpl) -> Result<(), Box<dy
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn track_historical_data(index: &mut ShardexImpl) -> Result<(), Box<dyn Error>> {
     println!("Tracking historical data...");
 
@@ -404,6 +411,7 @@ fn print_basic_stats(label: &str, stats: &shardex::IndexStats) {
     );
 }
 
+#[allow(dead_code)]
 fn print_detailed_stats(stats: &DetailedIndexStats) {
     println!("Detailed index statistics:");
     println!("  Shards: {}", stats.total_shards);
