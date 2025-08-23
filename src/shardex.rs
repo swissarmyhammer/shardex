@@ -5,6 +5,7 @@
 
 use crate::batch_processor::BatchProcessor;
 use crate::config::ShardexConfig;
+use crate::config_persistence::{ConfigurationManager, PersistedConfig};
 use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
 use crate::layout::{DirectoryLayout, IndexMetadata};
@@ -76,6 +77,7 @@ pub struct ShardexImpl {
     config: ShardexConfig,
     batch_processor: Option<BatchProcessor>,
     layout: DirectoryLayout,
+    config_manager: ConfigurationManager,
     /// Operations waiting to be applied to shards after WAL commit
     pending_shard_operations: Vec<WalOperation>,
 }
@@ -85,6 +87,7 @@ impl ShardexImpl {
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
         let index = ShardexIndex::create(config.clone())?;
         let layout = DirectoryLayout::new(&config.directory_path);
+        let config_manager = ConfigurationManager::new(&config.directory_path);
 
         // Create and save layout metadata (this must happen after ShardexIndex::create
         // which overwrites the metadata file with JSON format)
@@ -117,6 +120,7 @@ impl ShardexImpl {
             config,
             batch_processor: None,
             layout,
+            config_manager,
             pending_shard_operations: Vec::new(),
         })
     }
@@ -125,6 +129,7 @@ impl ShardexImpl {
     pub fn open_sync<P: AsRef<Path>>(directory_path: P) -> Result<Self, ShardexError> {
         let directory_path = directory_path.as_ref();
         let layout = DirectoryLayout::new(directory_path);
+        let config_manager = ConfigurationManager::new(directory_path);
 
         // Load metadata and configuration
         let metadata = IndexMetadata::load(layout.metadata_path())?;
@@ -138,6 +143,7 @@ impl ShardexImpl {
             config,
             batch_processor: None,
             layout,
+            config_manager,
             pending_shard_operations: Vec::new(),
         })
     }
@@ -214,6 +220,35 @@ impl ShardexImpl {
         self.batch_processor = Some(processor);
 
         debug!("WAL batch processor initialized successfully");
+        Ok(())
+    }
+
+    /// Update configuration with new compatible settings
+    pub async fn update_config(&mut self, new_config: ShardexConfig) -> Result<(), ShardexError> {
+        // Validate new configuration
+        new_config.validate()?;
+        
+        // Update persisted configuration with compatibility checking
+        self.config_manager.update_config(&new_config).await?;
+        
+        // Update in-memory configuration
+        self.config = new_config;
+        
+        debug!("Successfully updated configuration");
+        Ok(())
+    }
+
+    /// Get the current persisted configuration
+    pub async fn get_persisted_config(&self) -> Result<PersistedConfig, ShardexError> {
+        self.config_manager.load_config().await
+    }
+
+    /// Restore configuration from backup
+    pub async fn restore_config_from_backup(&mut self) -> Result<(), ShardexError> {
+        let restored_config = self.config_manager.restore_from_backup().await?;
+        self.config = restored_config.config;
+        
+        debug!("Successfully restored configuration from backup");
         Ok(())
     }
 
@@ -612,19 +647,31 @@ impl Shardex for ShardexImpl {
             ShardexError::Config(format!("Failed to save initial metadata: {}", e))
         })?;
 
-        // 5. Create instance using new() which handles ShardexIndex creation
+        // 5. Save persisted configuration
+        let config_manager = ConfigurationManager::new(&config.directory_path);
+        
+        // Use futures::executor::block_on for synchronous context
+        futures::executor::block_on(async {
+            config_manager.save_config(&config).await
+        }).map_err(|e| {
+            // Clean up on config save failure
+            let _ = std::fs::remove_dir_all(&config.directory_path);
+            ShardexError::Config(format!("Failed to save persisted configuration: {}", e))
+        })?;
+
+        // 6. Create instance using new() which handles ShardexIndex creation
         let instance = Self::new(config.clone()).map_err(|e| {
             // Clean up on instance creation failure
             let _ = std::fs::remove_dir_all(&config.directory_path);
             ShardexError::Config(format!("Failed to create Shardex instance: {}", e))
         })?;
 
-        // 6. Mark metadata as cleanly initialized
+        // 7. Mark metadata as cleanly initialized
         let mut final_metadata = IndexMetadata::load(layout.metadata_path())?;
         final_metadata.mark_inactive(); // Mark as cleanly initialized
         final_metadata.save(layout.metadata_path())?;
 
-        // 7. No WAL recovery needed for new index - it starts clean
+        // 8. No WAL recovery needed for new index - it starts clean
         debug!(
             "Successfully created new Shardex index at {}",
             config.directory_path.display()
@@ -669,8 +716,24 @@ impl Shardex for ShardexImpl {
             )));
         }
 
-        // 4. Create a temporary config to validate compatibility
-        let existing_config = metadata.config.clone();
+        // 4. Load persisted configuration if available
+        let config_manager = ConfigurationManager::new(directory_path);
+        let existing_config = if config_manager.config_exists() {
+            // Load from persisted configuration
+            let persisted_config = futures::executor::block_on(async {
+                config_manager.load_config().await
+            }).map_err(|e| {
+                ShardexError::Config(format!(
+                    "Failed to load persisted configuration: {}. You may need to restore from backup.",
+                    e
+                ))
+            })?;
+            
+            persisted_config.config
+        } else {
+            // Fall back to metadata config for backward compatibility
+            metadata.config.clone()
+        };
 
         // Validate the existing configuration is still valid
         existing_config.validate().map_err(|e| {
