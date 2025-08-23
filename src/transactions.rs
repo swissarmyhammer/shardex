@@ -328,7 +328,7 @@ impl WalTransaction {
 
         // Read header
         let header_bytes = &data[0..std::mem::size_of::<WalTransactionHeader>()];
-        let header: WalTransactionHeader = *bytemuck::from_bytes(header_bytes);
+        let header: WalTransactionHeader = bytemuck::pod_read_unaligned(header_bytes);
 
         // Validate header consistency
         let expected_total_size =

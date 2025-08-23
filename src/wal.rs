@@ -33,7 +33,7 @@ pub struct WalRecordHeader {
 }
 
 impl WalRecordHeader {
-    const SIZE: usize = std::mem::size_of::<Self>();
+    pub const SIZE: usize = std::mem::size_of::<Self>();
 
     pub fn new(data: &[u8]) -> Self {
         let checksum = crc32fast::hash(data);
@@ -317,6 +317,33 @@ impl WalSegment {
             ShardexError::Wal("Failed to acquire memory map lock for sync".to_string())
         })?;
         memory_map.sync()
+    }
+
+    /// Get a copy of the segment data for reading (used during replay)
+    pub fn read_segment_data(&self) -> Result<Vec<u8>, ShardexError> {
+        let memory_map = self.memory_map.lock().map_err(|_| {
+            ShardexError::Wal("Failed to acquire memory map lock for reading".to_string())
+        })?;
+        Ok(memory_map.as_slice().to_vec())
+    }
+
+    /// Read a specific range of data from the segment
+    pub fn read_range(&self, start: usize, length: usize) -> Result<Vec<u8>, ShardexError> {
+        let memory_map = self.memory_map.lock().map_err(|_| {
+            ShardexError::Wal("Failed to acquire memory map lock for reading".to_string())
+        })?;
+
+        let data_slice = memory_map.as_slice();
+        if start + length > data_slice.len() {
+            return Err(ShardexError::Wal(format!(
+                "Read range out of bounds: start={}, length={}, segment_size={}",
+                start,
+                length,
+                data_slice.len()
+            )));
+        }
+
+        Ok(data_slice[start..start + length].to_vec())
     }
 
     /// Validate segment integrity

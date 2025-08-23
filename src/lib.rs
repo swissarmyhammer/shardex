@@ -18,6 +18,7 @@ pub mod structures;
 pub mod transactions;
 pub mod vector_storage;
 pub mod wal;
+pub mod wal_replay;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -39,6 +40,7 @@ pub use transactions::{
 };
 pub use vector_storage::VectorStorage;
 pub use wal::{WalManager, WalSegment};
+pub use wal_replay::{RecoveryStats, WalReplayer};
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;
