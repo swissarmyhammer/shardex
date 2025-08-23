@@ -1538,6 +1538,56 @@ impl ShardexIndex {
 
         Ok(())
     }
+
+    /// Validate index metadata consistency
+    ///
+    /// This method performs basic metadata validation to ensure the index
+    /// is in a consistent state. It's a simpler version of validate_index
+    /// focused on essential metadata checks.
+    pub fn validate_metadata(&self) -> Result<(), ShardexError> {
+        // Check if index directory exists
+        if !self.directory.exists() {
+            return Err(ShardexError::Corruption(
+                "Index directory does not exist".to_string(),
+            ));
+        }
+
+        // Check if metadata file exists
+        let metadata_path = self.directory.join("shardex.meta");
+        if !metadata_path.exists() {
+            return Err(ShardexError::Corruption(
+                "Index metadata file is missing".to_string(),
+            ));
+        }
+
+        // Validate that metadata file is not empty
+        match std::fs::metadata(&metadata_path) {
+            Ok(meta) => {
+                if meta.len() == 0 {
+                    return Err(ShardexError::Corruption(
+                        "Index metadata file is empty".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(ShardexError::Corruption(format!(
+                    "Cannot access metadata file: {}",
+                    e
+                )));
+            }
+        }
+
+        // Try to read and parse the metadata file
+        let metadata_content = std::fs::read_to_string(&metadata_path)
+            .map_err(|e| ShardexError::Corruption(format!("Cannot read metadata file: {}", e)))?;
+
+        let _metadata: IndexMetadata = serde_json::from_str(&metadata_content).map_err(|e| {
+            ShardexError::Corruption(format!("Invalid metadata file format: {}", e))
+        })?;
+
+        // Basic structural validation passed
+        Ok(())
+    }
 }
 
 /// Index metadata stored in the shardex.meta file
