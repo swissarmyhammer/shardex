@@ -86,15 +86,15 @@ impl ShardexImpl {
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
         let index = ShardexIndex::create(config.clone())?;
         let layout = DirectoryLayout::new(&config.directory_path);
-        
-        // Create and save layout metadata (this must happen after ShardexIndex::create 
+
+        // Create and save layout metadata (this must happen after ShardexIndex::create
         // which overwrites the metadata file with JSON format)
         use std::time::{SystemTime, UNIX_EPOCH};
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| ShardexError::Config(format!("System time error: {}", e)))?
             .as_secs();
-            
+
         let mut metadata = crate::layout::IndexMetadata {
             layout_version: crate::layout::LAYOUT_VERSION,
             config: config.clone(),
@@ -109,10 +109,10 @@ impl ShardexImpl {
                 clean_shutdown: false,
             },
         };
-        
+
         // Save the metadata (overwrites the JSON metadata from ShardexIndex::create)
         metadata.save(layout.metadata_path())?;
-        
+
         Ok(Self {
             index,
             config,
@@ -126,7 +126,7 @@ impl ShardexImpl {
     pub fn open_sync<P: AsRef<Path>>(directory_path: P) -> Result<Self, ShardexError> {
         let index = ShardexIndex::open(&directory_path)?;
         let layout = DirectoryLayout::new(directory_path.as_ref());
-        
+
         // Load configuration from metadata file
         let metadata = crate::layout::IndexMetadata::load(layout.metadata_path())?;
         let config = metadata.config;
@@ -187,12 +187,17 @@ impl ShardexImpl {
         // WalReplayer takes ownership of the index, so we need to temporarily take it out
         // IMPORTANT: Create the temporary replacement in a temporary directory to avoid
         // overwriting the real metadata file during recovery
-        let temp_dir = std::env::temp_dir().join(format!("shardex_recovery_{}", 
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "shardex_recovery_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let mut temp_config = self.config.clone();
         temp_config.directory_path = temp_dir;
         let temp_replacement = ShardexIndex::create(temp_config)?;
-        
+
         let index = std::mem::replace(&mut self.index, temp_replacement);
 
         let wal_directory = self.layout.wal_dir().to_path_buf();
@@ -211,13 +216,16 @@ impl ShardexImpl {
 
         // Get the index back from the replayer
         self.index = replayer.into_index();
-        
+
         // Update metadata for all shards after WAL recovery to reflect the recovered postings
         let shard_ids: Vec<_> = self.index.shard_ids();
         for shard_id in shard_ids {
             // Update the metadata for this shard from disk to reflect recovered postings
             if let Err(e) = self.index.update_shard_metadata_from_disk(shard_id) {
-                warn!("Failed to update metadata for shard {} after WAL recovery: {}", shard_id, e);
+                warn!(
+                    "Failed to update metadata for shard {} after WAL recovery: {}",
+                    shard_id, e
+                );
             }
         }
 
@@ -250,10 +258,13 @@ impl ShardexImpl {
             return Ok(());
         }
 
-        debug!("Applying {} pending operations to shards", self.pending_shard_operations.len());
+        debug!(
+            "Applying {} pending operations to shards",
+            self.pending_shard_operations.len()
+        );
 
         let operations = std::mem::take(&mut self.pending_shard_operations);
-        
+
         for operation in &operations {
             if let Err(e) = self.apply_operation_to_shards(operation).await {
                 // On error, we need to decide whether to retry or log and continue
@@ -275,9 +286,9 @@ impl ShardexImpl {
     async fn flush_internal(&mut self) -> Result<FlushStats, ShardexError> {
         let start_time = std::time::Instant::now();
         let mut stats = FlushStats::new();
-        
+
         debug!("Starting comprehensive flush operation with durability guarantees");
-        
+
         // 1. Process pending WAL batches (existing logic)
         let wal_start = std::time::Instant::now();
         if let Some(ref mut processor) = self.batch_processor {
@@ -285,18 +296,17 @@ impl ShardexImpl {
             debug!("WAL batch flush completed");
         }
         stats.wal_flush_duration = wal_start.elapsed();
-        
-        // 2. Apply pending operations to shards (existing logic)  
+
+        // 2. Apply pending operations to shards (existing logic)
         let apply_start = std::time::Instant::now();
         stats.operations_applied = self.pending_shard_operations.len();
         self.apply_pending_operations_to_shards().await?;
         stats.shard_apply_duration = apply_start.elapsed();
         debug!("Applied {} operations to shards", stats.operations_applied);
-        
+
         // 3. Sync all shard data to disk (NEW - durability guarantee)
         let sync_start = std::time::Instant::now();
         let shard_ids = self.index.shard_ids();
-        println!("DEBUG: flush_internal found {} shards to sync", shard_ids.len());
         for shard_id in &shard_ids {
             let shard = self.index.get_shard_mut(*shard_id)?;
             shard.sync()?;
@@ -307,15 +317,15 @@ impl ShardexImpl {
         stats.shards_synced = shard_ids.len();
         stats.shard_sync_duration = sync_start.elapsed();
         debug!("Synchronized {} shards to disk", stats.shards_synced);
-        
+
         // 4. Validate consistency (NEW)
         let validation_start = std::time::Instant::now();
         self.validate_consistency().await?;
         stats.validation_duration = validation_start.elapsed();
         debug!("Consistency validation completed");
-        
+
         stats.total_duration = start_time.elapsed();
-        
+
         info!(
             "Flush operation completed: total={}ms, wal={}ms, apply={}ms, sync={}ms, validation={}ms, shards={}, ops={}",
             stats.total_duration_ms(),
@@ -326,20 +336,20 @@ impl ShardexImpl {
             stats.shards_synced,
             stats.operations_applied
         );
-        
+
         Ok(stats)
     }
-    
+
     /// Validate consistency across WAL, shards, and index
     async fn validate_consistency(&mut self) -> Result<(), ShardexError> {
         debug!("Starting consistency validation");
-        
+
         // 1. Validate shard metadata matches storage state
         let shard_ids = self.index.shard_ids();
         for shard_id in &shard_ids {
             let shard = self.index.get_shard(*shard_id)?;
             let metadata = shard.metadata();
-            
+
             // Validate active count consistency
             let actual_active = shard.active_count();
             if actual_active != metadata.active_count {
@@ -351,7 +361,7 @@ impl ShardexImpl {
                 );
                 // Note: This could be a warning rather than error since counts can be estimates
             }
-            
+
             // Validate capacity consistency
             let actual_capacity = shard.capacity();
             let expected_capacity = self.config.shard_size;
@@ -361,7 +371,7 @@ impl ShardexImpl {
                     shard_id, expected_capacity, actual_capacity
                 )));
             }
-            
+
             // Validate vector dimension consistency
             let actual_vector_size = shard.vector_size();
             if actual_vector_size != self.config.vector_size {
@@ -371,7 +381,7 @@ impl ShardexImpl {
                 });
             }
         }
-        
+
         // 2. Validate that we have no pending operations after flush
         if !self.pending_shard_operations.is_empty() {
             return Err(ShardexError::Wal(format!(
@@ -379,23 +389,30 @@ impl ShardexImpl {
                 self.pending_shard_operations.len()
             )));
         }
-        
+
         // 3. Validate index segment consistency
         let metadata_slice = self.index.all_shard_metadata();
         let expected_shard_count = shard_ids.len();
         if metadata_slice.len() != expected_shard_count {
             return Err(ShardexError::Shard(format!(
                 "Index metadata inconsistency: {} shards exist but {} metadata entries found",
-                expected_shard_count, metadata_slice.len()
+                expected_shard_count,
+                metadata_slice.len()
             )));
         }
-        
-        debug!("Consistency validation passed for {} shards", shard_ids.len());
+
+        debug!(
+            "Consistency validation passed for {} shards",
+            shard_ids.len()
+        );
         Ok(())
     }
 
     /// Apply a single operation to the appropriate shards
-    async fn apply_operation_to_shards(&mut self, operation: &WalOperation) -> Result<(), ShardexError> {
+    async fn apply_operation_to_shards(
+        &mut self,
+        operation: &WalOperation,
+    ) -> Result<(), ShardexError> {
         match operation {
             WalOperation::AddPosting {
                 document_id,
@@ -485,7 +502,6 @@ impl ShardexImpl {
             }
         }
     }
-
 }
 
 #[async_trait]
@@ -600,8 +616,8 @@ impl Shardex for ShardexImpl {
         // Convert document IDs to WAL operations
         let operations: Vec<WalOperation> = document_ids
             .into_iter()
-            .map(|doc_id| WalOperation::RemoveDocument { 
-                document_id: crate::identifiers::DocumentId::from_raw(doc_id)
+            .map(|doc_id| WalOperation::RemoveDocument {
+                document_id: crate::identifiers::DocumentId::from_raw(doc_id),
             })
             .collect();
 
@@ -644,7 +660,7 @@ impl Shardex for ShardexImpl {
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         let stats = self.flush_internal().await?;
-        
+
         if stats.is_slow_flush() {
             warn!(
                 "Slow flush detected: {}ms total ({})",
@@ -668,51 +684,51 @@ impl Shardex for ShardexImpl {
         // Collect statistics from the index using read-only metadata
         let metadata_slice = self.index.all_shard_metadata();
         let total_shards = metadata_slice.len();
-        
+
         let mut total_postings = 0;
         let mut active_postings = 0;
         let mut deleted_postings = 0;
         let mut memory_usage = 0;
         let mut disk_usage = 0;
         let mut shard_utilizations = Vec::new();
-        
+
         // Iterate through all shard metadata to collect statistics
         for metadata in metadata_slice {
             // Use posting_count as total postings for this shard
             total_postings += metadata.posting_count;
-            
+
             // Estimate active postings based on utilization and capacity
             let estimated_active = (metadata.utilization * metadata.capacity as f32) as usize;
             active_postings += estimated_active;
             deleted_postings += metadata.posting_count.saturating_sub(estimated_active);
-            
+
             // Use existing memory usage from metadata
             memory_usage += metadata.memory_usage;
-            
+
             // Estimate disk usage based on shard directory if accessible
             // For now, use a simple estimation since we don't have directory access in metadata
             // This could be enhanced by storing directory paths in metadata if needed
             let estimated_disk_usage = metadata.posting_count * (self.config.vector_size * 4 + 64);
             disk_usage += estimated_disk_usage;
-            
+
             // Use existing utilization from metadata
             shard_utilizations.push(metadata.utilization);
         }
-        
+
         // Calculate average shard utilization
         let average_shard_utilization = if !shard_utilizations.is_empty() {
             shard_utilizations.iter().sum::<f32>() / shard_utilizations.len() as f32
         } else {
             0.0
         };
-        
+
         // Count pending operations in WAL batch processor
         let pending_operations = if let Some(ref processor) = self.batch_processor {
             processor.pending_operation_count()
         } else {
             0
         } + self.pending_shard_operations.len();
-        
+
         Ok(IndexStats {
             total_shards,
             total_postings,
@@ -1156,9 +1172,7 @@ mod tests {
             vector: vec![1.0, 2.0, 3.0],
         }];
 
-        eprintln!("DEBUG: About to add postings");
         shardex.add_postings(postings).await.unwrap();
-        eprintln!("DEBUG: Added postings successfully");
 
         // Should now be initialized
         assert!(shardex.batch_processor.is_some());
@@ -1223,7 +1237,7 @@ mod tests {
         // First add some documents
         let doc_id1 = crate::identifiers::DocumentId::new();
         let doc_id2 = crate::identifiers::DocumentId::new();
-        
+
         let postings = vec![
             Posting {
                 document_id: doc_id1,
@@ -1248,11 +1262,19 @@ mod tests {
         // Now remove one document
         let doc_ids_to_remove = vec![doc_id1.raw()];
         let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
-        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
+        assert!(
+            remove_result.is_ok(),
+            "Failed to remove documents: {:?}",
+            remove_result
+        );
 
         // Flush to ensure removal is committed
         let flush_result = shardex.flush().await;
-        assert!(flush_result.is_ok(), "Failed to flush removals: {:?}", flush_result);
+        assert!(
+            flush_result.is_ok(),
+            "Failed to flush removals: {:?}",
+            flush_result
+        );
 
         // Verify stats show the change
         let _stats = shardex.stats().await.unwrap();
@@ -1289,7 +1311,7 @@ mod tests {
         // Add multiple documents first
         let mut doc_ids = Vec::new();
         let mut postings = Vec::new();
-        
+
         for i in 0..10 {
             let doc_id = crate::identifiers::DocumentId::new();
             doc_ids.push(doc_id);
@@ -1303,13 +1325,21 @@ mod tests {
 
         // Add all postings
         let add_result = shardex.add_postings(postings).await;
-        assert!(add_result.is_ok(), "Failed to add postings: {:?}", add_result);
+        assert!(
+            add_result.is_ok(),
+            "Failed to add postings: {:?}",
+            add_result
+        );
         shardex.flush().await.unwrap();
 
         // Remove multiple documents
         let doc_ids_to_remove: Vec<u128> = doc_ids.iter().take(5).map(|id| id.raw()).collect();
         let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
-        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
+        assert!(
+            remove_result.is_ok(),
+            "Failed to remove documents: {:?}",
+            remove_result
+        );
 
         // Wait a bit for batch processing
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1431,7 +1461,10 @@ mod tests {
         ];
 
         let remove_result = shardex.remove_documents(nonexistent_doc_ids).await;
-        assert!(remove_result.is_ok(), "Removing nonexistent documents should succeed silently");
+        assert!(
+            remove_result.is_ok(),
+            "Removing nonexistent documents should succeed silently"
+        );
 
         // Flush should also succeed
         let flush_result = shardex.flush().await;
@@ -1597,8 +1630,6 @@ mod tests {
         // Test flush with stats
         let stats = shardex.flush_with_stats().await.unwrap();
 
-        eprintln!("DEBUG: Got stats shards_synced={}", stats.shards_synced);
-
         // Verify stats are populated
         assert!(stats.total_duration > std::time::Duration::ZERO);
         assert!(stats.wal_flush_duration >= std::time::Duration::ZERO);
@@ -1656,11 +1687,11 @@ mod tests {
         // Second instance: verify data persisted
         {
             let mut shardex = ShardexImpl::open(config.directory_path).await.unwrap();
-            
+
             // Check that data is available after restart
             let stats = shardex.stats().await.unwrap();
             assert!(stats.total_postings > 0);
-            
+
             // Try to search for the data to verify it's accessible
             let query_vector = vec![1.0, 2.0, 3.0];
             let results = shardex.search(&query_vector, 10, None).await;
@@ -1696,7 +1727,7 @@ mod tests {
 
         // Flush and validate consistency
         let stats = shardex.flush_with_stats().await.unwrap();
-        
+
         // Consistency validation should have passed (no errors thrown)
         assert!(stats.validation_duration >= std::time::Duration::ZERO);
         assert_eq!(stats.operations_applied, 10);
@@ -1733,24 +1764,24 @@ mod tests {
 
         // Test flush stats and performance methods
         let stats = shardex.flush_with_stats().await.unwrap();
-        
+
         // Test performance calculations
         assert!(stats.total_duration_ms() >= stats.wal_flush_duration_ms());
         assert!(stats.total_duration_ms() >= stats.shard_sync_duration_ms());
-        
+
         // Test performance classification
         let is_fast = stats.is_fast_flush();
         let is_slow = stats.is_slow_flush();
         assert!(!(is_fast && is_slow)); // Can't be both fast and slow
-        
+
         // Test slowest phase identification
         let slowest_phase = stats.slowest_phase();
         assert!(["wal_flush", "shard_apply", "shard_sync", "validation"].contains(&slowest_phase));
-        
+
         // Test operations per second calculation
         let ops_per_sec = stats.operations_per_second();
         assert!(ops_per_sec >= 0.0);
-        
+
         // Test sync throughput calculation
         let throughput = stats.sync_throughput_mbps();
         assert!(throughput >= 0.0);
@@ -1800,7 +1831,7 @@ mod tests {
 
         // Flush with mixed operations
         let stats = shardex.flush_with_stats().await.unwrap();
-        
+
         // Should have processed both add and remove operations
         assert_eq!(stats.operations_applied, 4); // 3 adds + 1 remove
         assert!(stats.shards_synced > 0);
@@ -1820,7 +1851,7 @@ mod tests {
 
         // Flush with no operations
         let stats = shardex.flush_with_stats().await.unwrap();
-        
+
         // Should still complete successfully with zero operations
         assert_eq!(stats.operations_applied, 0);
         assert!(stats.total_duration >= std::time::Duration::ZERO);
@@ -1850,7 +1881,7 @@ mod tests {
         shardex.add_postings(postings).await.unwrap();
 
         let stats = shardex.flush_with_stats().await.unwrap();
-        
+
         // Test display formatting
         let display_str = format!("{}", stats);
         assert!(display_str.contains("FlushStats"));
@@ -1885,7 +1916,7 @@ mod tests {
         // Normal flush should succeed
         let stats = shardex.flush_with_stats().await.unwrap();
         assert!(stats.validation_duration >= std::time::Duration::ZERO);
-        
+
         // Test that system is still functional after successful consistency validation
         let _index_stats = shardex.stats().await.unwrap();
         // total_postings is always non-negative (usize)

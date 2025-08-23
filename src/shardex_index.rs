@@ -713,7 +713,7 @@ impl ShardexIndex {
     }
 
     /// Parallel search across multiple shards with configurable distance metric
-    /// 
+    ///
     /// Similar to parallel_search but allows specifying the distance metric to use
     /// for similarity calculations.
     pub fn parallel_search_with_metric(
@@ -756,9 +756,11 @@ impl ShardexIndex {
                 })?;
 
                 // Perform search on this shard with the specified metric
-                let mut results = shard.search_with_metric(query, per_shard_limit, metric).map_err(|e| {
-                    ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
-                })?;
+                let mut results = shard
+                    .search_with_metric(query, per_shard_limit, metric)
+                    .map_err(|e| {
+                        ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
+                    })?;
 
                 // Sort results by similarity score (highest first) for early termination potential
                 results.sort_by(|a, b| {
@@ -1508,7 +1510,10 @@ impl ShardexIndex {
     ///
     /// # Arguments
     /// * `shard_id` - ID of the shard that was modified
-    pub fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
+    pub fn update_shard_metadata_from_disk(
+        &mut self,
+        shard_id: ShardId,
+    ) -> Result<(), ShardexError> {
         // Load the shard to get updated metadata
         let shard = Shard::open_read_only(shard_id, &self.directory)?;
 

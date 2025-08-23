@@ -47,7 +47,9 @@ pub use search_coordinator::{
 pub use shard::{Shard, ShardMetadata};
 pub use shardex::{Shardex, ShardexImpl};
 pub use shardex_index::{IndexStatistics, ShardexIndex, ShardexMetadata};
-pub use structures::{FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
+pub use structures::{
+    FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader,
+};
 pub use transactions::{
     BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction,
     WalTransactionHeader,
