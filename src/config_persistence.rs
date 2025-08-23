@@ -53,7 +53,7 @@ impl PersistedConfig {
 
         // Calculate checksum
         persisted.update_checksum()?;
-        
+
         Ok(persisted)
     }
 
@@ -61,7 +61,7 @@ impl PersistedConfig {
     pub async fn save(&mut self, path: &Path) -> Result<()> {
         // Update modification timestamp
         self.modified_at = SystemTime::now();
-        
+
         // Recalculate checksum
         self.update_checksum()?;
 
@@ -69,15 +69,20 @@ impl PersistedConfig {
         self.create_backup(path).await?;
 
         // Serialize to JSON with pretty printing for readability
-        let json_content = serde_json::to_string_pretty(self)
-            .map_err(|e| ShardexError::Config(format!("Failed to serialize configuration: {}", e)))?;
+        let json_content = serde_json::to_string_pretty(self).map_err(|e| {
+            ShardexError::Config(format!("Failed to serialize configuration: {}", e))
+        })?;
 
         // Write atomically using temporary file
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, json_content).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
                 e.kind(),
-                format!("Failed to write configuration to {}: {}", temp_path.display(), e),
+                format!(
+                    "Failed to write configuration to {}: {}",
+                    temp_path.display(),
+                    e
+                ),
             ))
         })?;
 
@@ -104,7 +109,11 @@ impl PersistedConfig {
         let content = fs::read_to_string(path).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
                 e.kind(),
-                format!("Failed to read configuration file {}: {}", path.display(), e),
+                format!(
+                    "Failed to read configuration file {}: {}",
+                    path.display(),
+                    e
+                ),
             ))
         })?;
 
@@ -119,7 +128,7 @@ impl PersistedConfig {
         // Verify checksum
         let stored_checksum = config.checksum;
         config.update_checksum()?;
-        
+
         if stored_checksum != config.checksum {
             return Err(ShardexError::Corruption(format!(
                 "Configuration file checksum mismatch: expected {}, got {}",
@@ -199,7 +208,8 @@ impl PersistedConfig {
             return Ok(()); // No backup needed if original doesn't exist
         }
 
-        let backup_path = config_path.parent()
+        let backup_path = config_path
+            .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(CONFIG_BACKUP_FILE);
 
@@ -220,7 +230,8 @@ impl PersistedConfig {
 
     /// Restore configuration from backup file
     pub async fn restore_from_backup(config_path: &Path) -> Result<Self> {
-        let backup_path = config_path.parent()
+        let backup_path = config_path
+            .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(CONFIG_BACKUP_FILE);
 
@@ -232,7 +243,7 @@ impl PersistedConfig {
         }
 
         let backup_config = Self::load(&backup_path).await?;
-        
+
         // Copy backup to main config location
         fs::copy(&backup_path, config_path).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
@@ -256,8 +267,9 @@ impl PersistedConfig {
         self.checksum = 0;
 
         // Serialize configuration for checksum calculation
-        let config_bytes = serde_json::to_vec(&self.config)
-            .map_err(|e| ShardexError::Config(format!("Failed to serialize config for checksum: {}", e)))?;
+        let config_bytes = serde_json::to_vec(&self.config).map_err(|e| {
+            ShardexError::Config(format!("Failed to serialize config for checksum: {}", e))
+        })?;
 
         // Calculate CRC32 checksum
         self.checksum = crc32fast::hash(&config_bytes);
@@ -340,13 +352,13 @@ impl ConfigurationManager {
 
         // Load existing configuration
         let mut existing = self.load_config().await?;
-        
+
         // Create new persisted config for compatibility checking
         let new_persisted = PersistedConfig::new(new_config.clone())?;
-        
+
         // Merge compatible changes
         existing.merge_compatible_changes(&new_persisted)?;
-        
+
         // Save updated configuration
         existing.save(&self.config_path).await
     }
@@ -386,9 +398,9 @@ mod tests {
         let _env = TestEnvironment::new("test_persisted_config_save_load");
         let config_path = _env.path().join(CONFIG_FILE);
         let config = create_test_config();
-        
+
         let mut persisted = PersistedConfig::new(config.clone()).unwrap();
-        
+
         // Save configuration
         persisted.save(&config_path).await.unwrap();
         assert!(config_path.exists());
@@ -461,7 +473,7 @@ mod tests {
         let _env = TestEnvironment::new("test_checksum_validation");
         let config_path = _env.path().join(CONFIG_FILE);
         let config = create_test_config();
-        
+
         let mut persisted = PersistedConfig::new(config.clone()).unwrap();
         persisted.save(&config_path).await.unwrap();
 
@@ -481,12 +493,11 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn test_configuration_update() {
         let _env = TestEnvironment::new("test_configuration_update");
         let manager = ConfigurationManager::new(_env.path());
-        
+
         let original_config = create_test_config();
         manager.save_config(&original_config).await.unwrap();
 
@@ -530,12 +541,12 @@ mod tests {
     async fn test_configuration_timestamps() {
         let config = create_test_config();
         let persisted1 = PersistedConfig::new(config.clone()).unwrap();
-        
+
         // Wait a bit to ensure different timestamps
         sleep(Duration::from_millis(10)).await;
-        
+
         let persisted2 = PersistedConfig::new(config).unwrap();
-        
+
         assert!(persisted2.created_at > persisted1.created_at);
         assert!(persisted1.age().unwrap() > Duration::ZERO);
         assert!(persisted1.time_since_modified().unwrap() >= Duration::ZERO);
@@ -546,10 +557,10 @@ mod tests {
         // This test simulates loading an older version config
         let config = create_test_config();
         let mut persisted = PersistedConfig::new(config).unwrap();
-        
+
         // Simulate older version
         persisted.version = 0;
-        
+
         let migrated = persisted.migrate_to_current_version().unwrap();
         assert_eq!(migrated.version, CONFIG_VERSION);
     }
@@ -559,10 +570,10 @@ mod tests {
         let _env = TestEnvironment::new("test_future_version");
         let config_path = _env.path().join(CONFIG_FILE);
         let config = create_test_config();
-        
+
         let mut persisted = PersistedConfig::new(config).unwrap();
         persisted.version = CONFIG_VERSION + 1; // Future version
-        
+
         // Manually save with future version
         persisted.update_checksum().unwrap();
         let content = serde_json::to_string_pretty(&persisted).unwrap();
