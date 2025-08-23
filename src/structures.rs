@@ -125,6 +125,22 @@ use std::fmt::{self, Display, Formatter};
 /// The vector field requires special handling for memory mapping since `Vec<f32>` is not
 /// Pod-compatible. For memory mapping, vectors are stored separately and referenced by
 /// pointer and length.
+///
+/// # Example
+///
+/// ```rust
+/// use shardex::{Posting, DocumentId};
+///
+/// let posting = Posting {
+///     document_id: DocumentId::from_raw(1),
+///     start: 0,
+///     length: 100,
+///     vector: vec![0.1, 0.2, 0.3],
+/// };
+///
+/// assert_eq!(posting.document_id.raw(), 1);
+/// assert_eq!(posting.vector.len(), 3);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Posting {
     /// Unique identifier for the document this posting belongs to
