@@ -528,12 +528,13 @@ impl SearchCoordinator {
             return Ok(Box::pin(stream::iter(results)));
         }
 
-        // TODO: Implement true streaming search for large k values
-        // This would involve:
-        // 1. Searching shards in batches
-        // 2. Streaming partial results as they come in
-        // 3. Maintaining a running top-k heap
-        // 4. Yielding results as soon as they're confirmed in top-k
+        // FUTURE: Implement true streaming search for large k values
+        // This performance optimization would involve:
+        // 1. Searching shards in batches to avoid memory pressure
+        // 2. Streaming partial results as they become available
+        // 3. Maintaining a running top-k heap across shard results
+        // 4. Yielding confirmed top-k results incrementally
+        // Currently using batch search with buffer size limit as fallback
 
         // For now, fall back to regular search but with increased buffer size
         let buffer_k = k.min(self.config.max_result_buffer_size);

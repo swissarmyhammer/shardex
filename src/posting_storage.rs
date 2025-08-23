@@ -231,7 +231,7 @@ impl PostingStorageHeader {
         let document_ids_size = capacity * 16; // 16 bytes per DocumentId
         let starts_size = capacity * 4; // 4 bytes per u32
         let lengths_size = capacity * 4; // 4 bytes per u32
-        let deleted_flags_size = capacity.div_ceil(8); // Bits to bytes
+        let deleted_flags_size = (capacity + 7) / 8; // Bits to bytes
 
         Self::SIZE + document_ids_size + starts_size + lengths_size + deleted_flags_size
     }

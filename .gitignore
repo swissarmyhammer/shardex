@@ -8,6 +8,9 @@ target/
 # Rust
 *.pdb
 
+# Test artifacts
+test_index/
+
 # Editor files
 .vscode/
 .idea/

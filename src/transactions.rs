@@ -999,8 +999,112 @@ mod tests {
         assert_eq!(header, header_restored);
     }
 
-    // TODO: Add back comprehensive invalid transaction data tests
-    // Currently disabled due to test framework issues
+    #[tokio::test]
+    async fn test_invalid_transaction_data() {
+        // Test invalid transaction ID
+        let invalid_header = WalTransactionHeader {
+            id: TransactionId::from_bytes([0xFF; 16]),
+            timestamp_micros: 0,
+            operation_count: 1,
+            operations_data_size: 100,
+            checksum: 0,
+            reserved: [0; 4],
+        };
+
+        let bytes = bytemuck::bytes_of(&invalid_header);
+        let result: Result<WalTransactionHeader, _> = bytemuck::try_pod_read_unaligned(bytes);
+        assert!(result.is_ok()); // bytemuck doesn't validate values, just structure
+
+        // Test extreme timestamp values
+        let timestamp_header = WalTransactionHeader {
+            id: TransactionId::new(),
+            timestamp_micros: u64::MAX,
+            operation_count: 1,
+            operations_data_size: 100,
+            checksum: 0,
+            reserved: [0; 4],
+        };
+
+        let bytes = bytemuck::bytes_of(&timestamp_header);
+        let header: WalTransactionHeader = bytemuck::pod_read_unaligned(bytes);
+        assert_eq!(header.timestamp_micros, u64::MAX);
+
+        // Test operation count overflow
+        let overflow_header = WalTransactionHeader {
+            id: TransactionId::new(),
+            timestamp_micros: 1234567890,
+            operation_count: u32::MAX,
+            operations_data_size: 100,
+            checksum: 0,
+            reserved: [0; 4],
+        };
+
+        let bytes = bytemuck::bytes_of(&overflow_header);
+        let header: WalTransactionHeader = bytemuck::pod_read_unaligned(bytes);
+        assert_eq!(header.operation_count, u32::MAX);
+
+        // Test size mismatch scenarios
+        let size_mismatch_header = WalTransactionHeader {
+            id: TransactionId::new(),
+            timestamp_micros: 1234567890,
+            operation_count: 1,
+            operations_data_size: u32::MAX,
+            checksum: 0,
+            reserved: [0; 4],
+        };
+
+        let bytes = bytemuck::bytes_of(&size_mismatch_header);
+        let header: WalTransactionHeader = bytemuck::pod_read_unaligned(bytes);
+        assert_eq!(header.operations_data_size, u32::MAX);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_batch_operations() {
+        let config = BatchConfig::default();
+        let mut manager = WalBatchManager::new(config, None); // No dimension constraint for testing edge cases
+
+        // Test with zero-length vector (edge case)
+        let operation = WalOperation::AddPosting {
+            document_id: DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![], // Empty vector
+        };
+
+        let result = manager.add_operation(operation);
+        assert!(result.is_err()); // Empty vectors should be invalid
+
+        // Test with extremely large vector
+        let large_vector = vec![1.0; 1_000_000]; // 1M elements
+        let operation = WalOperation::AddPosting {
+            document_id: DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: large_vector,
+        };
+
+        let result = manager.add_operation(operation);
+        assert!(result.is_ok()); // Large vectors should be valid
+
+        // Test extreme start/length combinations
+        let operation = WalOperation::AddPosting {
+            document_id: DocumentId::new(),
+            start: u32::MAX,
+            length: u32::MAX,
+            vector: vec![1.0, 2.0, 3.0],
+        };
+
+        let result = manager.add_operation(operation);
+        assert!(result.is_err()); // start + length would overflow u32
+
+        // Test document removal operation
+        let operation = WalOperation::RemoveDocument {
+            document_id: DocumentId::new(),
+        };
+
+        let result = manager.add_operation(operation);
+        assert!(result.is_ok());
+    }
 
     #[tokio::test]
     async fn test_batch_manager_basic_operations() {

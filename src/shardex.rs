@@ -1385,11 +1385,12 @@ impl Shardex for ShardexImpl {
         })?;
 
         // 7. Open the index using existing sync method
-        let mut instance = Self::open_sync(directory_path).inspect_err(|_e| {
+        let mut instance = Self::open_sync(directory_path).map_err(|e| {
             // Restore inactive state on failure
             let mut restore_metadata = metadata.clone();
             restore_metadata.mark_inactive();
             let _ = restore_metadata.save(layout.metadata_path());
+            e
         })?;
 
         // 8. Perform WAL recovery if needed

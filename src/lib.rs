@@ -3,6 +3,41 @@
 //! Shardex is a memory mapped vector search engine implemented in Rust that supports
 //! incremental updating of index entries and document postings. Indexes are arranged
 //! in shards, each consisting of embedding vectors and postings data structures.
+//!
+//! # Quick Start
+//!
+//! ```rust
+//! use shardex::{ShardexConfig, Posting, DocumentId};
+//!
+//! // Create configuration
+//! let config = ShardexConfig::new()
+//!     .directory_path("./my_index")
+//!     .vector_size(384)
+//!     .shard_size(10000);
+//!
+//! // Create a posting
+//! let posting = Posting {
+//!     document_id: DocumentId::from_raw(1),
+//!     start: 0,
+//!     length: 100,
+//!     vector: vec![0.1; 384], // 384-dimensional vector
+//! };
+//!
+//! assert_eq!(posting.document_id.raw(), 1);
+//! assert_eq!(posting.vector.len(), 384);
+//! assert_eq!(config.vector_size, 384);
+//! ```
+//!
+//! # Features
+//!
+//! - **Memory-mapped storage** for zero-copy operations and fast startup
+//! - **ACID transactions** via write-ahead logging (WAL)
+//! - **Incremental updates** without full index rebuilds
+//! - **Dynamic shard management** with automatic splitting
+//! - **Concurrent reads** during write operations
+//! - **Configurable vector dimensions** and index parameters
+//! - **Bloom filter optimization** for efficient document deletion
+//! - **Crash recovery** from unexpected shutdowns
 
 pub mod batch_processor;
 pub mod bloom_filter;

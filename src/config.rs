@@ -157,6 +157,22 @@ impl SlopFactorConfig {
 }
 
 /// Configuration for a Shardex index
+///
+/// # Example
+///
+/// ```rust
+/// use shardex::ShardexConfig;
+///
+/// // Create default configuration
+/// let config = ShardexConfig::new()
+///     .directory_path("./my_index")
+///     .vector_size(768)
+///     .shard_size(50000)
+///     .batch_write_interval_ms(50);
+///
+/// assert_eq!(config.vector_size, 768);
+/// assert_eq!(config.shard_size, 50000);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShardexConfig {
     /// Directory path where the index will be stored
