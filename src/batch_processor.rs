@@ -5,14 +5,16 @@
 //! to provide a high-level interface for automatic and manual batch processing.
 
 use crate::error::ShardexError;
-use crate::transactions::{BatchConfig, WalBatchManager, WalOperation};
+use crate::layout::DirectoryLayout;
+use crate::transactions::{BatchConfig, WalBatchManager, WalOperation, WalTransaction};
+use crate::wal::WalManager;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tracing::{debug, warn};
+use tracing::{debug, warn, error};
 
 /// High-level batch processor for timer-based WAL operations
 ///
@@ -33,6 +35,8 @@ pub struct BatchProcessor {
     expected_vector_dimension: Option<usize>,
     /// Command channel for communicating with the background task
     command_sender: Option<mpsc::Sender<BatchProcessorCommand>>,
+    /// Directory layout for WAL operations
+    layout: DirectoryLayout,
 }
 
 /// Commands for communicating with the batch processor background task
@@ -41,23 +45,11 @@ enum BatchProcessorCommand {
     /// Add an operation to the current batch
     AddOperation(WalOperation),
     /// Force immediate flush of current batch
-    FlushNow,
+    FlushNow(oneshot::Sender<Result<(), ShardexError>>),
     /// Shutdown the processor
     Shutdown,
 }
 
-/// Response from batch processor commands
-#[derive(Debug)]
-enum BatchProcessorResponse {
-    /// Operation added successfully
-    OperationAdded,
-    /// Batch flushed successfully
-    BatchFlushed,
-    /// Error occurred
-    Error(ShardexError),
-    /// Shutdown complete
-    ShutdownComplete,
-}
 
 impl BatchProcessor {
     /// Create a new batch processor with the given configuration
@@ -65,6 +57,7 @@ impl BatchProcessor {
         batch_interval: Duration,
         batch_config: BatchConfig,
         expected_vector_dimension: Option<usize>,
+        layout: DirectoryLayout,
     ) -> Self {
         let shutdown_signal = Arc::new(AtomicBool::new(true)); // Start in shutdown state
 
@@ -76,6 +69,7 @@ impl BatchProcessor {
             batch_config,
             expected_vector_dimension,
             command_sender: None,
+            layout,
         }
     }
 
@@ -89,13 +83,17 @@ impl BatchProcessor {
 
         // Create communication channels
         let (command_sender, mut command_receiver) = mpsc::channel::<BatchProcessorCommand>(1000);
-        let (response_sender, _response_receiver) = mpsc::channel::<BatchProcessorResponse>(1000);
 
         self.command_sender = Some(command_sender);
 
-        // Create batch manager
-        let _batch_manager =
+        // Create batch manager and WAL manager
+        let mut batch_manager =
             WalBatchManager::new(self.batch_config.clone(), self.expected_vector_dimension);
+        let mut wal_manager = WalManager::new(self.layout.clone(), 8192); // 8KB segments
+        wal_manager.initialize()?;
+
+        // Transfer pending operations to the background task
+        let pending_ops = std::mem::take(&mut self.pending_operations);
 
         // Clone necessary data for the background task
         let batch_interval = self.batch_interval;
@@ -105,14 +103,37 @@ impl BatchProcessor {
         let handle = tokio::spawn(async move {
             let mut timer = interval(batch_interval);
 
+            // Add any pending operations to batch manager
+            for operation in pending_ops {
+                match batch_manager.add_operation(operation) {
+                    Ok(should_flush) => {
+                        if should_flush {
+                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                                error!("Failed to flush batch from pending operations: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to add pending operation to batch: {}", e);
+                    }
+                }
+            }
+
             loop {
                 tokio::select! {
                     // Handle timer ticks
                     _ = timer.tick() => {
-                        // For now, just check shutdown signal
                         if shutdown_signal.load(Ordering::SeqCst) {
                             debug!("Timer task shutting down due to shutdown signal");
                             break;
+                        }
+
+                        // Flush batch if it contains operations
+                        if !batch_manager.batch_stats().is_empty {
+                            debug!("Timer triggered batch flush");
+                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                                error!("Timer-triggered batch flush failed: {}", e);
+                            }
                         }
                     }
 
@@ -121,16 +142,37 @@ impl BatchProcessor {
                         match command {
                             Some(BatchProcessorCommand::Shutdown) => {
                                 debug!("Timer task received shutdown command");
-                                let _ = response_sender.send(BatchProcessorResponse::ShutdownComplete).await;
+                                // Flush any remaining operations
+                                if !batch_manager.batch_stats().is_empty {
+                                    if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                                        error!("Shutdown batch flush failed: {}", e);
+                                    }
+                                }
                                 break;
                             }
-                            Some(BatchProcessorCommand::FlushNow) => {
+                            Some(BatchProcessorCommand::FlushNow(response_tx)) => {
                                 debug!("Timer task received flush command");
-                                let _ = response_sender.send(BatchProcessorResponse::BatchFlushed).await;
+                                let result = if batch_manager.batch_stats().is_empty {
+                                    Ok(()) // Nothing to flush
+                                } else {
+                                    Self::flush_batch(&mut batch_manager, &mut wal_manager).await
+                                };
+                                let _ = response_tx.send(result);
                             }
-                            Some(BatchProcessorCommand::AddOperation(_op)) => {
+                            Some(BatchProcessorCommand::AddOperation(operation)) => {
                                 debug!("Timer task received add operation command");
-                                let _ = response_sender.send(BatchProcessorResponse::OperationAdded).await;
+                                match batch_manager.add_operation(operation) {
+                                    Ok(should_flush) => {
+                                        if should_flush {
+                                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
+                                                error!("Batch size-triggered flush failed: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to add operation to batch: {}", e);
+                                    }
+                                }
                             }
                             None => {
                                 debug!("Command channel closed, shutting down timer task");
@@ -155,12 +197,19 @@ impl BatchProcessor {
     /// Force immediate flush of current batch
     pub async fn flush_now(&mut self) -> Result<(), ShardexError> {
         if let Some(ref command_sender) = self.command_sender {
+            let (response_tx, response_rx) = oneshot::channel();
             command_sender
-                .send(BatchProcessorCommand::FlushNow)
+                .send(BatchProcessorCommand::FlushNow(response_tx))
                 .await
                 .map_err(|_| ShardexError::Wal("Failed to send flush command".to_string()))?;
+            
+            // Wait for the flush to complete
+            response_rx
+                .await
+                .map_err(|_| ShardexError::Wal("Failed to receive flush response".to_string()))?
+        } else {
+            Ok(()) // Not started yet, nothing to flush
         }
-        Ok(())
     }
 
     /// Shutdown the batch processor gracefully
@@ -217,6 +266,42 @@ impl BatchProcessor {
     pub fn pending_operation_count(&self) -> usize {
         self.pending_operations.len()
     }
+
+    /// Helper method to flush a batch using the WAL manager
+    async fn flush_batch(
+        batch_manager: &mut WalBatchManager,
+        wal_manager: &mut WalManager,
+    ) -> Result<(), ShardexError> {
+        // Get or create a current segment
+        let current_segment = wal_manager.current_segment()?;
+        
+        // Define the write function that will be used by batch_manager
+        let write_result = batch_manager.flush_batch(|transaction: &WalTransaction| {
+            // Serialize the transaction
+            let serialized_data = transaction.serialize()?;
+            
+            // Write to the WAL segment
+            current_segment.append(&serialized_data)?;
+            
+            debug!("Successfully wrote transaction {} to WAL segment", transaction.id);
+            Ok(())
+        }).await;
+
+        match write_result {
+            Ok(Some(transaction_id)) => {
+                debug!("Batch flush completed, transaction ID: {}", transaction_id);
+                Ok(())
+            }
+            Ok(None) => {
+                debug!("Batch flush completed, no operations to flush");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Batch flush failed: {}", e);
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -230,9 +315,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_processor_creation() {
+        let _test_env = TestEnvironment::new("test_batch_processor_creation");
+        let layout = DirectoryLayout::new(_test_env.path());
+        layout.create_directories().unwrap();
+        
         let batch_interval = Duration::from_millis(100);
         let batch_config = BatchConfig::default();
-        let processor = BatchProcessor::new(batch_interval, batch_config, Some(128));
+        let processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
 
         assert_eq!(processor.batch_interval(), batch_interval);
         assert!(!processor.is_running());
@@ -241,9 +330,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_processor_start() {
+        let _test_env = TestEnvironment::new("test_batch_processor_start");
+        let layout = DirectoryLayout::new(_test_env.path());
+        layout.create_directories().unwrap();
+        
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128));
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
 
         // Should start successfully
         let result = processor.start().await;
@@ -274,7 +367,7 @@ mod tests {
             max_batch_size_bytes: 1024,
         };
         let batch_interval = Duration::from_millis(50);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3));
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone());
 
         // Start the processor
         processor.start().await.unwrap();
@@ -313,6 +406,9 @@ mod tests {
     async fn test_batch_processor_timer_based_flushing() {
         let _test_env = TestEnvironment::new("test_batch_processor_timer_based_flushing");
 
+        let layout = DirectoryLayout::new(_test_env.path());
+        layout.create_directories().unwrap();
+
         // Create batch processor with very short interval for testing
         let batch_config = BatchConfig {
             batch_write_interval_ms: 20,   // Very short for testing
@@ -320,7 +416,7 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(20);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3));
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout);
 
         processor.start().await.unwrap();
 
@@ -345,6 +441,8 @@ mod tests {
     async fn test_batch_processor_graceful_shutdown_with_pending_operations() {
         let _test_env =
             TestEnvironment::new("test_batch_processor_graceful_shutdown_with_pending_operations");
+        let layout = DirectoryLayout::new(_test_env.path());
+        layout.create_directories().unwrap();
 
         let batch_config = BatchConfig {
             batch_write_interval_ms: 1000, // Long interval
@@ -352,7 +450,7 @@ mod tests {
             max_batch_size_bytes: 10000,
         };
         let batch_interval = Duration::from_millis(1000);
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3));
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout);
 
         processor.start().await.unwrap();
 
@@ -375,9 +473,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_processor_basic_lifecycle() {
+        let _test_env = TestEnvironment::new("test_batch_processor_basic_lifecycle");
+        let layout = DirectoryLayout::new(_test_env.path());
+        layout.create_directories().unwrap();
+        
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128));
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout);
 
         // Start processor
         processor.start().await.unwrap();
