@@ -211,6 +211,16 @@ pub struct IndexStats {
     pub vector_dimension: usize,
     /// Total disk space used in bytes
     pub disk_usage: usize,
+    /// 50th percentile search latency
+    pub search_latency_p50: std::time::Duration,
+    /// 95th percentile search latency
+    pub search_latency_p95: std::time::Duration,
+    /// 99th percentile search latency
+    pub search_latency_p99: std::time::Duration,
+    /// Write operations per second
+    pub write_throughput: f64,
+    /// Bloom filter hit rate (0.0 to 1.0)
+    pub bloom_filter_hit_rate: f64,
 }
 
 // SAFETY: PostingHeader contains only Pod types and has repr(C) layout
@@ -267,9 +277,9 @@ impl Posting {
     pub fn validate_dimension(&self, expected_dimension: usize) -> Result<(), ShardexError> {
         if self.vector.len() != expected_dimension {
             return Err(ShardexError::invalid_dimension_with_context(
-                expected_dimension, 
-                self.vector.len(), 
-                "posting_vector"
+                expected_dimension,
+                self.vector.len(),
+                "posting_vector",
             ));
         }
         Ok(())
@@ -290,12 +300,14 @@ impl SearchResult {
             return Err(ShardexError::invalid_dimension_with_context(
                 expected_dimension,
                 vector.len(),
-                "search_result"
+                "search_result",
             ));
         }
 
         if !(0.0..=1.0).contains(&similarity_score) || similarity_score.is_nan() {
-            return Err(ShardexError::invalid_similarity_score_with_suggestion(similarity_score));
+            return Err(ShardexError::invalid_similarity_score_with_suggestion(
+                similarity_score,
+            ));
         }
 
         Ok(Self {
@@ -347,7 +359,7 @@ impl SearchResult {
             return Err(ShardexError::invalid_dimension_with_context(
                 expected_dimension,
                 self.vector.len(),
-                "search_result"
+                "search_result",
             ));
         }
         Ok(())
@@ -430,6 +442,11 @@ impl IndexStats {
             average_shard_utilization: 0.0,
             vector_dimension: 0,
             disk_usage: 0,
+            search_latency_p50: std::time::Duration::ZERO,
+            search_latency_p95: std::time::Duration::ZERO,
+            search_latency_p99: std::time::Duration::ZERO,
+            write_throughput: 0.0,
+            bloom_filter_hit_rate: 0.0,
         }
     }
 
@@ -460,6 +477,43 @@ impl IndexStats {
     /// Get disk usage in human-readable format
     pub fn disk_usage_mb(&self) -> f32 {
         self.disk_usage as f32 / (1024.0 * 1024.0)
+    }
+
+    /// Get search latency P50 in milliseconds
+    pub fn search_latency_p50_ms(&self) -> u64 {
+        self.search_latency_p50.as_millis() as u64
+    }
+
+    /// Get search latency P95 in milliseconds
+    pub fn search_latency_p95_ms(&self) -> u64 {
+        self.search_latency_p95.as_millis() as u64
+    }
+
+    /// Get search latency P99 in milliseconds
+    pub fn search_latency_p99_ms(&self) -> u64 {
+        self.search_latency_p99.as_millis() as u64
+    }
+
+    /// Get write throughput operations per second
+    pub fn write_ops_per_second(&self) -> f64 {
+        self.write_throughput
+    }
+
+    /// Get bloom filter hit rate as percentage
+    pub fn bloom_filter_hit_rate_percent(&self) -> f32 {
+        (self.bloom_filter_hit_rate * 100.0) as f32
+    }
+
+    /// Check if performance metrics indicate healthy operation
+    pub fn is_performance_healthy(&self) -> bool {
+        // P95 latency should be under 1 second
+        let latency_healthy = self.search_latency_p95 < std::time::Duration::from_millis(1000);
+
+        // For empty indexes (no operations), consider bloom filter and throughput as healthy
+        let bloom_healthy = self.bloom_filter_hit_rate == 0.0 || self.bloom_filter_hit_rate > 0.7;
+        let throughput_healthy = self.write_throughput == 0.0 || self.write_throughput > 10.0;
+
+        latency_healthy && bloom_healthy && throughput_healthy
     }
 
     /// Builder method to set total shards
@@ -516,6 +570,36 @@ impl IndexStats {
         self
     }
 
+    /// Builder method to set search latency percentiles
+    pub fn with_search_latency_p50(mut self, latency: std::time::Duration) -> Self {
+        self.search_latency_p50 = latency;
+        self
+    }
+
+    /// Builder method to set search latency p95
+    pub fn with_search_latency_p95(mut self, latency: std::time::Duration) -> Self {
+        self.search_latency_p95 = latency;
+        self
+    }
+
+    /// Builder method to set search latency p99
+    pub fn with_search_latency_p99(mut self, latency: std::time::Duration) -> Self {
+        self.search_latency_p99 = latency;
+        self
+    }
+
+    /// Builder method to set write throughput
+    pub fn with_write_throughput(mut self, throughput: f64) -> Self {
+        self.write_throughput = throughput;
+        self
+    }
+
+    /// Builder method to set bloom filter hit rate
+    pub fn with_bloom_filter_hit_rate(mut self, hit_rate: f64) -> Self {
+        self.bloom_filter_hit_rate = hit_rate;
+        self
+    }
+
     /// Convenience builder for creating test stats with common values
     pub fn for_test() -> Self {
         Self::new()
@@ -528,6 +612,11 @@ impl IndexStats {
             .with_disk_usage(2 * 1024 * 1024) // 2MB
             .with_average_shard_utilization(0.75)
             .with_pending_operations(10)
+            .with_search_latency_p50(std::time::Duration::from_millis(50))
+            .with_search_latency_p95(std::time::Duration::from_millis(150))
+            .with_search_latency_p99(std::time::Duration::from_millis(300))
+            .with_write_throughput(100.0)
+            .with_bloom_filter_hit_rate(0.85)
     }
 }
 
@@ -542,7 +631,9 @@ impl Display for IndexStats {
         write!(
             f,
             "IndexStats {{ shards: {}, postings: {} (active: {}, deleted: {}), \
-             pending: {}, memory: {:.2}MB, disk: {:.2}MB, utilization: {:.1}% }}",
+             pending: {}, memory: {:.2}MB, disk: {:.2}MB, utilization: {:.1}%, \
+             latency: p50={}ms/p95={}ms/p99={}ms, write_throughput: {:.1}ops/s, \
+             bloom_hit_rate: {:.1}% }}",
             self.total_shards,
             self.total_postings,
             self.active_postings,
@@ -550,7 +641,12 @@ impl Display for IndexStats {
             self.pending_operations,
             self.memory_usage_mb(),
             self.disk_usage_mb(),
-            self.shard_utilization_percent()
+            self.shard_utilization_percent(),
+            self.search_latency_p50.as_millis(),
+            self.search_latency_p95.as_millis(),
+            self.search_latency_p99.as_millis(),
+            self.write_throughput,
+            self.bloom_filter_hit_rate * 100.0
         )
     }
 }

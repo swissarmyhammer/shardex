@@ -1243,6 +1243,11 @@ impl ShardexIndex {
             average_shard_utilization: stats.average_utilization,
             vector_dimension: stats.vector_dimension,
             disk_usage: stats.total_memory_usage, // Approximate disk usage
+            search_latency_p50: std::time::Duration::ZERO, // No performance data available here
+            search_latency_p95: std::time::Duration::ZERO, // No performance data available here
+            search_latency_p99: std::time::Duration::ZERO, // No performance data available here
+            write_throughput: 0.0,                // No performance data available here
+            bloom_filter_hit_rate: 0.0,           // No performance data available here
         })
     }
 
