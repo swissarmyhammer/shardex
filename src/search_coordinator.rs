@@ -798,13 +798,16 @@ mod tests {
         let mut metrics = SearchMetrics::new();
 
         // Record a few searches with different slop factors
-        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 =
+            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         metrics.record_search(params1);
 
-        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        let params2 =
+            SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
         metrics.record_search(params2);
 
-        let params3 = SearchRecordParams::new(Duration::from_millis(80), 12, 2, true, false, false, 2);
+        let params3 =
+            SearchRecordParams::new(Duration::from_millis(80), 12, 2, true, false, false, 2);
         metrics.record_search(params3);
 
         assert_eq!(metrics.total_searches, 3);
@@ -890,10 +893,12 @@ mod tests {
         let monitor = PerformanceMonitor::new(true);
 
         // Record some searches with slop factor tracking
-        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 =
+            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         monitor.record_search(params1).await;
 
-        let params2 = SearchRecordParams::new(Duration::from_millis(200), 5, 6, true, false, false, 6);
+        let params2 =
+            SearchRecordParams::new(Duration::from_millis(200), 5, 6, true, false, false, 6);
         monitor.record_search(params2).await;
 
         let metrics = monitor.get_metrics().await;
@@ -919,10 +924,12 @@ mod tests {
             .unwrap();
 
         // Simulate some searches by directly recording metrics
-        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 =
+            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         coordinator.performance_monitor.record_search(params1).await;
 
-        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        let params2 =
+            SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
         coordinator.performance_monitor.record_search(params2).await;
 
         let analysis = coordinator.get_slop_factor_analysis().await;

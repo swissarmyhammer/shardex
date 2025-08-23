@@ -1519,16 +1519,6 @@ mod tests {
     use crate::test_utils::TestEnvironment;
     use tempfile::TempDir;
 
-    /// Helper function to create a test posting
-    fn create_test_posting(_id: u128, vector: Vec<f32>) -> Posting {
-        Posting {
-            document_id: DocumentId::new(),
-            start: 0,
-            length: 100,
-            vector,
-        }
-    }
-
     #[test]
     fn test_create_shardex_index() {
         let temp_dir = TempDir::new().unwrap();

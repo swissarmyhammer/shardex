@@ -668,7 +668,7 @@ mod tests {
 
         let result = config.calculate_optimal_slop(384, 10);
         // Should be clamped within min/max range
-        assert!(result >= 1 && result <= 10);
+        assert!((1..=10).contains(&result));
 
         // Larger vector size should generally result in higher slop
         let result_large = config.calculate_optimal_slop(1024, 10);
@@ -684,7 +684,7 @@ mod tests {
             .adaptive_enabled(true);
 
         let result = config.calculate_optimal_slop(128, 5);
-        assert!(result >= 40 && result <= 60);
+        assert!((40..=60).contains(&result));
     }
 
     #[test]

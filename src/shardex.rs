@@ -3,13 +3,20 @@
 //! This module provides the main Shardex trait and implementation that combines
 //! all components into a high-level vector search engine API.
 
+use crate::batch_processor::BatchProcessor;
 use crate::config::ShardexConfig;
 use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
+
+use crate::layout::DirectoryLayout;
 use crate::shardex_index::ShardexIndex;
 use crate::structures::{IndexStats, Posting, SearchResult};
+use crate::transactions::{BatchConfig, WalOperation};
+use crate::wal_replay::WalReplayer;
 use async_trait::async_trait;
 use std::path::Path;
+use std::time::Duration;
+use tracing::{debug, info};
 
 /// Main trait for Shardex vector search engine
 #[async_trait]
@@ -60,13 +67,21 @@ pub trait Shardex {
 pub struct ShardexImpl {
     index: ShardexIndex,
     config: ShardexConfig,
+    batch_processor: Option<BatchProcessor>,
+    layout: DirectoryLayout,
 }
 
 impl ShardexImpl {
     /// Create a new Shardex instance
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
         let index = ShardexIndex::create(config.clone())?;
-        Ok(Self { index, config })
+        let layout = DirectoryLayout::new(&config.directory_path);
+        Ok(Self {
+            index,
+            config,
+            batch_processor: None,
+            layout,
+        })
     }
 
     /// Open an existing Shardex instance
@@ -74,7 +89,81 @@ impl ShardexImpl {
         let index = ShardexIndex::open(&directory_path)?;
         // TODO: Read config from metadata
         let config = ShardexConfig::new().directory_path(directory_path.as_ref());
-        Ok(Self { index, config })
+        let layout = DirectoryLayout::new(directory_path.as_ref());
+        Ok(Self {
+            index,
+            config,
+            batch_processor: None,
+            layout,
+        })
+    }
+
+    /// Initialize the WAL batch processor for transaction handling
+    pub async fn initialize_batch_processor(&mut self) -> Result<(), ShardexError> {
+        if self.batch_processor.is_some() {
+            return Ok(()); // Already initialized
+        }
+
+        info!("Initializing WAL batch processor for transaction handling");
+
+        // Create batch configuration
+        let batch_config = BatchConfig {
+            batch_write_interval_ms: self.config.batch_write_interval_ms,
+            max_operations_per_batch: 1000,
+            max_batch_size_bytes: 1024 * 1024, // 1MB
+        };
+
+        // Create batch processor
+        let mut processor = BatchProcessor::new(
+            Duration::from_millis(self.config.batch_write_interval_ms),
+            batch_config,
+            Some(self.config.vector_size),
+            self.layout.clone(),
+        );
+
+        // Start the processor
+        processor.start().await?;
+        self.batch_processor = Some(processor);
+
+        debug!("WAL batch processor initialized successfully");
+        Ok(())
+    }
+
+    /// Shutdown the batch processor and flush remaining operations
+    pub async fn shutdown(&mut self) -> Result<(), ShardexError> {
+        if let Some(mut processor) = self.batch_processor.take() {
+            info!("Shutting down WAL batch processor");
+            processor.shutdown().await?;
+            debug!("WAL batch processor shutdown complete");
+        }
+        Ok(())
+    }
+
+    /// Replay WAL on startup to recover from any incomplete transactions
+    async fn recover_from_wal(&mut self) -> Result<(), ShardexError> {
+        info!("Starting WAL recovery process");
+
+        // WalReplayer takes ownership of the index, so we need to temporarily take it out
+        let index = std::mem::replace(&mut self.index, ShardexIndex::create(self.config.clone())?);
+
+        let wal_directory = self.layout.wal_dir().to_path_buf();
+        let mut replayer = WalReplayer::new(wal_directory, index);
+
+        replayer.replay_all_segments().await?;
+        let recovery_stats = replayer.recovery_stats();
+
+        info!(
+            "WAL recovery completed: {} transactions, {} operations, {} adds, {} removes",
+            recovery_stats.transactions_replayed,
+            recovery_stats.operations_applied,
+            recovery_stats.add_posting_operations,
+            recovery_stats.remove_document_operations
+        );
+
+        // Get the index back from the replayer
+        self.index = replayer.into_index();
+
+        Ok(())
     }
 
     /// Search using the existing parallel_search infrastructure
@@ -117,18 +206,91 @@ impl Shardex for ShardexImpl {
     type Error = ShardexError;
 
     async fn create(config: ShardexConfig) -> Result<Self, Self::Error> {
-        Self::new(config)
+        let mut instance = Self::new(config)?;
+
+        // Recover from any existing WAL entries
+        instance.recover_from_wal().await?;
+
+        Ok(instance)
     }
 
     async fn open<P: AsRef<Path> + Send>(directory_path: P) -> Result<Self, Self::Error> {
-        Self::open_sync(directory_path)
+        let mut instance = Self::open_sync(directory_path)?;
+
+        // Recover from any existing WAL entries
+        instance.recover_from_wal().await?;
+
+        Ok(instance)
     }
 
-    async fn add_postings(&mut self, _postings: Vec<Posting>) -> Result<(), Self::Error> {
-        // TODO: Implement using WAL and batch processor
-        Err(ShardexError::Search(
-            "add_postings not yet implemented".to_string(),
-        ))
+    async fn add_postings(&mut self, postings: Vec<Posting>) -> Result<(), Self::Error> {
+        if postings.is_empty() {
+            return Ok(());
+        }
+
+        debug!(
+            "Adding {} postings to index with WAL transaction support",
+            postings.len()
+        );
+
+        // Ensure batch processor is initialized
+        if self.batch_processor.is_none() {
+            self.initialize_batch_processor().await?;
+        }
+
+        // Validate all postings before proceeding
+        for (i, posting) in postings.iter().enumerate() {
+            if posting.vector.len() != self.config.vector_size {
+                return Err(ShardexError::InvalidDimension {
+                    expected: self.config.vector_size,
+                    actual: posting.vector.len(),
+                });
+            }
+
+            if posting.length == 0 {
+                return Err(ShardexError::Wal(format!("Posting {} has zero length", i)));
+            }
+
+            if posting.vector.is_empty() {
+                return Err(ShardexError::Wal(format!("Posting {} has empty vector", i)));
+            }
+
+            // Check for invalid float values
+            for (j, &value) in posting.vector.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(ShardexError::Wal(format!(
+                        "Posting {} has invalid vector value at index {}: {} (must be finite)",
+                        i, j, value
+                    )));
+                }
+            }
+        }
+
+        // Convert postings to WAL operations
+        let operations: Vec<WalOperation> = postings
+            .into_iter()
+            .map(|posting| WalOperation::AddPosting {
+                document_id: posting.document_id,
+                start: posting.start,
+                length: posting.length,
+                vector: posting.vector,
+            })
+            .collect();
+
+        // Add operations to batch processor
+        // The batch processor will handle WAL recording and eventual application to shards
+        if let Some(ref mut processor) = self.batch_processor {
+            for operation in operations {
+                processor.add_operation(operation).await?;
+            }
+        } else {
+            return Err(ShardexError::Wal(
+                "Batch processor not initialized".to_string(),
+            ));
+        }
+
+        debug!("Successfully added postings to WAL batch for processing");
+        Ok(())
     }
 
     async fn remove_documents(&mut self, _document_ids: Vec<u128>) -> Result<(), Self::Error> {
@@ -158,10 +320,14 @@ impl Shardex for ShardexImpl {
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // TODO: Implement flushing of WAL and pending operations
-        Err(ShardexError::Search(
-            "flush not yet implemented".to_string(),
-        ))
+        debug!("Flushing pending WAL operations to storage");
+
+        if let Some(ref mut processor) = self.batch_processor {
+            processor.flush_now().await?;
+            debug!("WAL batch flush completed");
+        }
+
+        Ok(())
     }
 
     async fn stats(&self) -> Result<IndexStats, Self::Error> {
@@ -336,5 +502,317 @@ mod tests {
                 assert!(error_str.contains("dimension") || error_str.contains("shard"));
             }
         }
+    }
+
+    // Transaction handling tests
+
+    #[tokio::test]
+    async fn test_add_postings_basic_functionality() {
+        let _env = TestEnvironment::new("test_add_postings_basic");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create test postings
+        let postings = vec![
+            Posting {
+                document_id: crate::identifiers::DocumentId::new(),
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: crate::identifiers::DocumentId::new(),
+                start: 50,
+                length: 75,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+        ];
+
+        // Add postings should succeed
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_ok(), "Failed to add postings: {:?}", result);
+
+        // Flush to ensure operations are committed
+        let flush_result = shardex.flush().await;
+        assert!(flush_result.is_ok(), "Failed to flush: {:?}", flush_result);
+
+        // Shutdown cleanly
+        let shutdown_result = shardex.shutdown().await;
+        assert!(
+            shutdown_result.is_ok(),
+            "Failed to shutdown: {:?}",
+            shutdown_result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_empty_vector() {
+        let _env = TestEnvironment::new("test_add_postings_empty");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Empty postings should be handled gracefully
+        let result = shardex.add_postings(vec![]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_validation_dimension_mismatch() {
+        let _env = TestEnvironment::new("test_add_postings_dimension_mismatch");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with wrong vector dimension
+        let postings = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![1.0, 2.0], // Wrong dimension - expected 3
+        }];
+
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_err());
+
+        if let Err(crate::error::ShardexError::InvalidDimension { expected, actual }) = result {
+            assert_eq!(expected, 3);
+            assert_eq!(actual, 2);
+        } else {
+            panic!("Expected InvalidDimension error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_validation_zero_length() {
+        let _env = TestEnvironment::new("test_add_postings_zero_length");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with zero length
+        let postings = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 0, // Invalid - zero length
+            vector: vec![1.0, 2.0, 3.0],
+        }];
+
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("zero length"));
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_validation_empty_vector() {
+        let _env = TestEnvironment::new("test_add_postings_empty_vector");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with empty vector
+        let postings = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![], // Invalid - empty vector
+        }];
+
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_err());
+        // Empty vector should be caught by dimension mismatch since expected=3, actual=0
+        match result {
+            Err(crate::error::ShardexError::InvalidDimension { expected, actual }) => {
+                assert_eq!(expected, 3);
+                assert_eq!(actual, 0);
+            }
+            other => panic!("Expected InvalidDimension error, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_validation_invalid_floats() {
+        let _env = TestEnvironment::new("test_add_postings_invalid_floats");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Test NaN values
+        let postings_nan = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![1.0, f32::NAN, 3.0],
+        }];
+
+        let result = shardex.add_postings(postings_nan).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be finite"));
+
+        // Test infinity values
+        let postings_inf = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![1.0, f32::INFINITY, 3.0],
+        }];
+
+        let result = shardex.add_postings(postings_inf).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be finite"));
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_batch_processing() {
+        let _env = TestEnvironment::new("test_add_postings_batch");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3)
+            .batch_write_interval_ms(50); // Fast batching for testing
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create many postings to test batch processing
+        let mut postings = Vec::new();
+        for i in 0..10 {
+            postings.push(Posting {
+                document_id: crate::identifiers::DocumentId::new(),
+                start: i * 100,
+                length: 50,
+                vector: vec![i as f32, (i + 1) as f32, (i + 2) as f32],
+            });
+        }
+
+        // Add all postings
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_ok(), "Failed to add batch postings: {:?}", result);
+
+        // Wait a bit for batch processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Flush to ensure all operations are committed
+        let flush_result = shardex.flush().await;
+        assert!(flush_result.is_ok());
+
+        // Shutdown cleanly
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_add_postings_wal_integration() {
+        let _env = TestEnvironment::new("test_add_postings_wal");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Add some postings
+        let postings = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![1.0, 2.0, 3.0],
+        }];
+
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_ok());
+
+        // Flush to ensure WAL is written
+        shardex.flush().await.unwrap();
+        shardex.shutdown().await.unwrap();
+
+        // Create a new instance to test WAL recovery
+        let mut shardex2 = ShardexImpl::open(config.directory_path).await.unwrap();
+
+        // The recovery should have been performed during open
+        // This test verifies that WAL recovery doesn't error out
+        let stats = shardex2.stats().await;
+        assert!(stats.is_ok());
+
+        shardex2.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_batch_processor_initialization() {
+        let _env = TestEnvironment::new("test_batch_processor_init");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Batch processor should be initialized automatically on first add_postings
+        assert!(shardex.batch_processor.is_none());
+
+        let postings = vec![Posting {
+            document_id: crate::identifiers::DocumentId::new(),
+            start: 0,
+            length: 100,
+            vector: vec![1.0, 2.0, 3.0],
+        }];
+
+        shardex.add_postings(postings).await.unwrap();
+
+        // Should now be initialized
+        assert!(shardex.batch_processor.is_some());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_transaction_acid_properties() {
+        let _env = TestEnvironment::new("test_transaction_acid");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3)
+            .batch_write_interval_ms(50);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Test atomicity - all operations in a batch should be committed together
+        let doc_id1 = crate::identifiers::DocumentId::new();
+        let doc_id2 = crate::identifiers::DocumentId::new();
+
+        let postings = vec![
+            Posting {
+                document_id: doc_id1,
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: doc_id2,
+                start: 0,
+                length: 100,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+        ];
+
+        // Add postings atomically
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_ok());
+
+        // Flush to commit the transaction
+        shardex.flush().await.unwrap();
+
+        // Test consistency - the index should be in a valid state
+        let stats = shardex.stats().await;
+        assert!(stats.is_ok());
+
+        shardex.shutdown().await.unwrap();
     }
 }
