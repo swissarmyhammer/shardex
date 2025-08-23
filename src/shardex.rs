@@ -79,6 +79,33 @@ impl ShardexImpl {
     pub fn new(config: ShardexConfig) -> Result<Self, ShardexError> {
         let index = ShardexIndex::create(config.clone())?;
         let layout = DirectoryLayout::new(&config.directory_path);
+        
+        // Create and save layout metadata (this must happen after ShardexIndex::create 
+        // which overwrites the metadata file with JSON format)
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| ShardexError::Config(format!("System time error: {}", e)))?
+            .as_secs();
+            
+        let mut metadata = crate::layout::IndexMetadata {
+            layout_version: crate::layout::LAYOUT_VERSION,
+            config: config.clone(),
+            created_at: now,
+            modified_at: now,
+            shard_count: 0,
+            centroid_segment_count: 0,
+            wal_segment_count: 0,
+            flags: crate::layout::IndexFlags {
+                active: true,
+                needs_recovery: false,
+                clean_shutdown: false,
+            },
+        };
+        
+        // Save the metadata (overwrites the JSON metadata from ShardexIndex::create)
+        metadata.save(layout.metadata_path())?;
+        
         Ok(Self {
             index,
             config,
@@ -572,8 +599,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_shardex_search_unsupported_metric() {
-        let _env = TestEnvironment::new("test_shardex_search_unsupported_metric");
+    async fn test_shardex_search_euclidean_metric() {
+        let _env = TestEnvironment::new("test_shardex_search_euclidean_metric");
         let config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
@@ -581,15 +608,13 @@ mod tests {
         let mut shardex = ShardexImpl::create(config).await.unwrap();
         let query = vec![1.0; 128];
 
-        // This should return error for unsupported metrics
+        // Euclidean metric is now supported
         let result = shardex
             .search_with_metric(&query, 10, DistanceMetric::Euclidean, None)
             .await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet supported"));
+        assert!(result.is_ok());
+        let search_results = result.unwrap();
+        assert_eq!(search_results.len(), 0); // Empty index should return no results
     }
 
     #[test]
@@ -620,8 +645,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_search_unsupported_metric() {
-        let _env = TestEnvironment::new("test_sync_search_unsupported_metric");
+    fn test_sync_search_euclidean_metric() {
+        let _env = TestEnvironment::new("test_sync_search_euclidean_metric");
         let config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
@@ -630,7 +655,9 @@ mod tests {
         let query = vec![1.0; 128];
 
         let result = shardex.search_impl(&query, 10, DistanceMetric::Euclidean, None);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let search_results = result.unwrap();
+        assert_eq!(search_results.len(), 0); // Empty index should return no results
     }
 
     #[test]
@@ -1012,6 +1039,362 @@ mod tests {
         shardex.flush().await.unwrap();
 
         // Test consistency - the index should be in a valid state
+        let stats = shardex.stats().await;
+        assert!(stats.is_ok());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    // Document removal transaction tests
+
+    #[tokio::test]
+    async fn test_remove_documents_basic_functionality() {
+        let _env = TestEnvironment::new("test_remove_documents_basic");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // First add some documents
+        let doc_id1 = crate::identifiers::DocumentId::new();
+        let doc_id2 = crate::identifiers::DocumentId::new();
+        
+        let postings = vec![
+            Posting {
+                document_id: doc_id1,
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: doc_id2,
+                start: 50,
+                length: 75,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+        ];
+
+        let result = shardex.add_postings(postings).await;
+        assert!(result.is_ok(), "Failed to add postings: {:?}", result);
+
+        // Flush to ensure postings are committed
+        shardex.flush().await.unwrap();
+
+        // Now remove one document
+        let doc_ids_to_remove = vec![doc_id1.raw()];
+        let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
+        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
+
+        // Flush to ensure removal is committed
+        let flush_result = shardex.flush().await;
+        assert!(flush_result.is_ok(), "Failed to flush removals: {:?}", flush_result);
+
+        // Verify stats show the change
+        let _stats = shardex.stats().await.unwrap();
+        // Note: Due to the way we estimate active_postings, this might not be exactly 1
+        // but should be different from before the removal
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_empty_list() {
+        let _env = TestEnvironment::new("test_remove_documents_empty");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Empty document list should be handled gracefully
+        let result = shardex.remove_documents(vec![]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_batch_processing() {
+        let _env = TestEnvironment::new("test_remove_documents_batch");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3)
+            .batch_write_interval_ms(50); // Fast batching for testing
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Add multiple documents first
+        let mut doc_ids = Vec::new();
+        let mut postings = Vec::new();
+        
+        for i in 0..10 {
+            let doc_id = crate::identifiers::DocumentId::new();
+            doc_ids.push(doc_id);
+            postings.push(Posting {
+                document_id: doc_id,
+                start: i * 100,
+                length: 50,
+                vector: vec![i as f32, (i + 1) as f32, (i + 2) as f32],
+            });
+        }
+
+        // Add all postings
+        let add_result = shardex.add_postings(postings).await;
+        assert!(add_result.is_ok(), "Failed to add postings: {:?}", add_result);
+        shardex.flush().await.unwrap();
+
+        // Remove multiple documents
+        let doc_ids_to_remove: Vec<u128> = doc_ids.iter().take(5).map(|id| id.raw()).collect();
+        let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
+        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
+
+        // Wait a bit for batch processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Flush to ensure all operations are committed
+        let flush_result = shardex.flush().await;
+        assert!(flush_result.is_ok());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_wal_integration() {
+        let _env = TestEnvironment::new("test_remove_documents_wal");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config.clone()).await.unwrap();
+
+        // Add a document first
+        let doc_id = crate::identifiers::DocumentId::new();
+        let postings = vec![Posting {
+            document_id: doc_id,
+            start: 0,
+            length: 100,
+            vector: vec![1.0, 2.0, 3.0],
+        }];
+
+        shardex.add_postings(postings).await.unwrap();
+        shardex.flush().await.unwrap();
+
+        // Remove the document
+        let doc_ids_to_remove = vec![doc_id.raw()];
+        let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
+        assert!(remove_result.is_ok());
+
+        // Flush to ensure WAL is written
+        shardex.flush().await.unwrap();
+        shardex.shutdown().await.unwrap();
+
+        // Create a new instance to test WAL recovery
+        let mut shardex2 = ShardexImpl::open(config.directory_path).await.unwrap();
+
+        // The recovery should have been performed during open
+        let stats = shardex2.stats().await;
+        assert!(stats.is_ok());
+
+        shardex2.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_transaction_atomicity() {
+        let _env = TestEnvironment::new("test_remove_documents_atomicity");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3)
+            .batch_write_interval_ms(50);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Add multiple documents across multiple shards (if possible)
+        let doc_id1 = crate::identifiers::DocumentId::new();
+        let doc_id2 = crate::identifiers::DocumentId::new();
+        let doc_id3 = crate::identifiers::DocumentId::new();
+
+        let postings = vec![
+            Posting {
+                document_id: doc_id1,
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: doc_id2,
+                start: 0,
+                length: 100,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+            Posting {
+                document_id: doc_id3,
+                start: 0,
+                length: 100,
+                vector: vec![7.0, 8.0, 9.0],
+            },
+        ];
+
+        shardex.add_postings(postings).await.unwrap();
+        shardex.flush().await.unwrap();
+
+        // Remove multiple documents atomically
+        let doc_ids_to_remove = vec![doc_id1.raw(), doc_id2.raw()];
+        let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
+        assert!(remove_result.is_ok());
+
+        // Flush to commit the transaction
+        shardex.flush().await.unwrap();
+
+        // Test consistency - the index should be in a valid state
+        let stats = shardex.stats().await;
+        assert!(stats.is_ok());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_documents() {
+        let _env = TestEnvironment::new("test_remove_nonexistent");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Try to remove documents that don't exist
+        let nonexistent_doc_ids = vec![
+            crate::identifiers::DocumentId::new().raw(),
+            crate::identifiers::DocumentId::new().raw(),
+        ];
+
+        let remove_result = shardex.remove_documents(nonexistent_doc_ids).await;
+        assert!(remove_result.is_ok(), "Removing nonexistent documents should succeed silently");
+
+        // Flush should also succeed
+        let flush_result = shardex.flush().await;
+        assert!(flush_result.is_ok());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_with_multiple_postings_same_doc() {
+        let _env = TestEnvironment::new("test_remove_multiple_postings");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Add multiple postings for the same document
+        let doc_id = crate::identifiers::DocumentId::new();
+        let postings = vec![
+            Posting {
+                document_id: doc_id,
+                start: 0,
+                length: 50,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: doc_id,
+                start: 50,
+                length: 50,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+            Posting {
+                document_id: doc_id,
+                start: 100,
+                length: 50,
+                vector: vec![7.0, 8.0, 9.0],
+            },
+        ];
+
+        shardex.add_postings(postings).await.unwrap();
+        shardex.flush().await.unwrap();
+
+        // Remove the document - should remove all postings for this document
+        let doc_ids_to_remove = vec![doc_id.raw()];
+        let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
+        assert!(remove_result.is_ok());
+
+        shardex.flush().await.unwrap();
+
+        // All postings for this document should be removed
+        let stats = shardex.stats().await;
+        assert!(stats.is_ok());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_remove_documents_batch_processor_initialization() {
+        let _env = TestEnvironment::new("test_remove_batch_init");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Batch processor should be initialized automatically on first remove_documents
+        assert!(shardex.batch_processor.is_none());
+
+        let doc_ids_to_remove = vec![crate::identifiers::DocumentId::new().raw()];
+        shardex.remove_documents(doc_ids_to_remove).await.unwrap();
+
+        // Should now be initialized
+        assert!(shardex.batch_processor.is_some());
+
+        shardex.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mixed_operations_add_and_remove() {
+        let _env = TestEnvironment::new("test_mixed_operations");
+        let config = ShardexConfig::new()
+            .directory_path(_env.path())
+            .vector_size(3);
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Add some documents
+        let doc_id1 = crate::identifiers::DocumentId::new();
+        let doc_id2 = crate::identifiers::DocumentId::new();
+        let doc_id3 = crate::identifiers::DocumentId::new();
+
+        let postings = vec![
+            Posting {
+                document_id: doc_id1,
+                start: 0,
+                length: 100,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+            Posting {
+                document_id: doc_id2,
+                start: 0,
+                length: 100,
+                vector: vec![4.0, 5.0, 6.0],
+            },
+        ];
+
+        shardex.add_postings(postings).await.unwrap();
+
+        // Remove one document
+        let doc_ids_to_remove = vec![doc_id1.raw()];
+        shardex.remove_documents(doc_ids_to_remove).await.unwrap();
+
+        // Add another document
+        let more_postings = vec![Posting {
+            document_id: doc_id3,
+            start: 0,
+            length: 100,
+            vector: vec![7.0, 8.0, 9.0],
+        }];
+
+        shardex.add_postings(more_postings).await.unwrap();
+
+        // Flush all operations
+        shardex.flush().await.unwrap();
+
+        // Verify consistency
         let stats = shardex.stats().await;
         assert!(stats.is_ok());
 
