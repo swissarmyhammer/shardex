@@ -8,6 +8,7 @@ pub mod batch_processor;
 pub mod bloom_filter;
 pub mod concurrent;
 pub mod config;
+pub mod config_persistence;
 pub mod cow_index;
 pub mod crash_recovery;
 pub mod deduplication;
@@ -37,6 +38,7 @@ pub use concurrent::{
     ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType,
 };
 pub use config::ShardexConfig;
+pub use config_persistence::{ConfigurationManager, PersistedConfig};
 pub use cow_index::{CowShardexIndex, IndexWriter};
 pub use crash_recovery::{CrashRecovery, CrashRecoveryStats};
 pub use deduplication::{DeduplicationPolicy, DeduplicationStats, ResultDeduplicator};
