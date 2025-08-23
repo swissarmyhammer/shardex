@@ -1222,19 +1222,19 @@ impl ShardexIndex {
     pub fn delete_document(&mut self, doc_id: DocumentId) -> Result<usize, ShardexError> {
         // Find candidate shards using bloom filter optimization
         let candidate_shards = self.find_candidate_shards_for_deletion(doc_id);
-        
+
         if candidate_shards.is_empty() {
             return Ok(0); // No candidate shards, document definitely not present
         }
 
         let mut total_deleted = 0;
-        
+
         // Process each candidate shard
         for shard_id in candidate_shards {
             let deleted_count = {
                 // Load the shard for writing (needed for deletion)
                 let shard = self.get_shard_mut(shard_id)?;
-                
+
                 // Remove all postings for this document from the shard
                 match shard.remove_document(doc_id) {
                     Ok(deleted_count) => {
@@ -1253,7 +1253,7 @@ impl ShardexIndex {
                     }
                 }
             }; // shard borrow ends here
-            
+
             // Update the shard metadata if postings were deleted
             if deleted_count > 0 {
                 self.update_shard_metadata_from_disk(shard_id)?;
@@ -1288,7 +1288,7 @@ impl ShardexIndex {
     /// # let mut index = ShardexIndex::create(Default::default())?;
     /// let doc_ids = vec![DocumentId::new(), DocumentId::new(), DocumentId::new()];
     /// let deletion_counts = index.delete_documents(&doc_ids)?;
-    /// 
+    ///
     /// for (doc_id, count) in doc_ids.iter().zip(deletion_counts.iter()) {
     ///     println!("Deleted {} postings for document {}", count, doc_id);
     /// }
@@ -1301,21 +1301,21 @@ impl ShardexIndex {
         }
 
         let mut results = vec![0; doc_ids.len()];
-        
+
         // Group documents by their candidate shards for efficient processing
         let mut shard_to_doc_indices: HashMap<ShardId, Vec<usize>> = HashMap::new();
-        
+
         for (doc_index, &doc_id) in doc_ids.iter().enumerate() {
             let candidate_shards = self.find_candidate_shards_for_deletion(doc_id);
-            
+
             for shard_id in candidate_shards {
                 shard_to_doc_indices
                     .entry(shard_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(doc_index);
             }
         }
-        
+
         // Process each shard and its associated documents
         for (shard_id, doc_indices) in shard_to_doc_indices {
             // Load the shard for writing
@@ -1330,14 +1330,14 @@ impl ShardexIndex {
                     continue;
                 }
             };
-            
+
             let shard_modified = {
                 let mut any_deleted = false;
-                
+
                 // Delete documents from this shard
                 for &doc_index in &doc_indices {
                     let doc_id = doc_ids[doc_index];
-                    
+
                     match shard.remove_document(doc_id) {
                         Ok(deleted_count) => {
                             results[doc_index] += deleted_count;
@@ -1356,10 +1356,10 @@ impl ShardexIndex {
                         }
                     }
                 }
-                
+
                 any_deleted
             }; // shard borrow ends here
-            
+
             // Update shard metadata if any deletions occurred
             if shard_modified {
                 if let Err(e) = self.update_shard_metadata_from_disk(shard_id) {
@@ -1393,7 +1393,7 @@ impl ShardexIndex {
     /// - Very fast operation that only requires checking bloom filter bits
     pub fn find_candidate_shards_for_deletion(&self, doc_id: DocumentId) -> Vec<ShardId> {
         let mut candidates = Vec::new();
-        
+
         for shard_metadata in &self.shards {
             // Use bloom filter to check if this shard might contain the document
             // We need to load the shard temporarily to check its bloom filter
@@ -1417,7 +1417,7 @@ impl ShardexIndex {
                 }
             }
         }
-        
+
         candidates
     }
 
@@ -1432,7 +1432,7 @@ impl ShardexIndex {
     fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         // Load the shard to get updated metadata
         let shard = Shard::open_read_only(shard_id, &self.directory)?;
-        
+
         // Find and update the shard metadata
         if let Some(metadata) = self.shards.iter_mut().find(|s| s.id == shard_id) {
             // Update posting count and utilization from the shard
@@ -1440,10 +1440,10 @@ impl ShardexIndex {
             metadata.posting_count = shard_metadata.active_count;
             metadata.utilization = shard_metadata.active_count as f32 / shard.capacity() as f32;
             metadata.last_modified = SystemTime::now();
-            
+
             // Update centroid (it may have changed due to deletions)
             metadata.centroid = shard.get_centroid().to_vec();
-            
+
             tracing::debug!(
                 shard_id = %shard_id,
                 new_posting_count = metadata.posting_count,
@@ -1451,7 +1451,7 @@ impl ShardexIndex {
                 "Updated shard metadata after deletion"
             );
         }
-        
+
         Ok(())
     }
 }
@@ -2845,7 +2845,7 @@ mod tests {
         };
 
         shard1.add_posting(posting1).unwrap(); // doc_id1 in shard1
-        shard2.add_posting(posting2).unwrap(); // doc_id1 in shard2  
+        shard2.add_posting(posting2).unwrap(); // doc_id1 in shard2
         shard2.add_posting(posting3).unwrap(); // doc_id2 in shard2
         shard3.add_posting(posting4).unwrap(); // doc_id1 in shard3
 
