@@ -234,7 +234,7 @@ impl ShardexImpl {
         
         // Use conservative limits: smaller of calculated limit or reasonable defaults
         let max_operations_per_batch = std::cmp::min(max_ops_by_size, 1000).max(10); // At least 10, at most 1000
-        let max_batch_size_bytes = std::cmp::min(target_batch_size, 1024 * 1024); // At most 1MB
+        let max_batch_size_bytes = target_batch_size; // Use calculated target size based on WAL segment
         
         info!("Calculated batch config: vector_size={}, wal_segment_size={}, safety_margin={:.1}%, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
               vector_size, wal_segment_size, safety_margin * 100.0, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
