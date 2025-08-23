@@ -63,7 +63,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n4. Testing High-Performance Configuration");
     println!("=========================================");
 
+    println!("DEBUG: About to create ShardexImpl");
     let mut index = ShardexImpl::create(high_perf_config.clone()).await?;
+    println!("DEBUG: ShardexImpl created successfully");
 
     // Generate test data with larger vectors
     let test_data = generate_test_data(100, 768); // 100 documents, 768 dimensions
@@ -75,8 +77,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Measure indexing performance
     let start_time = Instant::now();
+    println!("DEBUG: About to call add_postings");
     index.add_postings(test_data).await?;
+    println!("DEBUG: add_postings completed, about to call flush");
     index.flush().await?;
+    println!("DEBUG: flush completed");
     let indexing_time = start_time.elapsed();
 
     println!("Indexing completed in {:?}", indexing_time);

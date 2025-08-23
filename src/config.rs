@@ -185,6 +185,8 @@ pub struct ShardexConfig {
     pub shardex_segment_size: usize,
     /// Size of each WAL segment in bytes
     pub wal_segment_size: usize,
+    /// Safety margin as percentage of WAL segment size (0.0 to 1.0, default 0.5 = 50%)
+    pub wal_safety_margin: f32,
     /// Interval between batch writes in milliseconds
     pub batch_write_interval_ms: u64,
     /// Slop factor configuration for search operations
@@ -203,6 +205,7 @@ impl Default for ShardexConfig {
             shard_size: 10000,
             shardex_segment_size: 1000,
             wal_segment_size: 1024 * 1024, // 1MB
+            wal_safety_margin: 0.5, // 50% safety margin
             batch_write_interval_ms: 100,
             slop_factor_config: SlopFactorConfig::default(),
             bloom_filter_size: 1024,
@@ -244,6 +247,13 @@ impl ShardexConfig {
     /// Set the WAL segment size in bytes
     pub fn wal_segment_size(mut self, size: usize) -> Self {
         self.wal_segment_size = size;
+        self
+    }
+
+    /// Set the WAL safety margin as a percentage (0.0 to 1.0)
+    /// Default is 0.5 (50%). Higher values provide more safety but reduce batch capacity.
+    pub fn wal_safety_margin(mut self, margin: f32) -> Self {
+        self.wal_safety_margin = margin.clamp(0.0, 1.0);
         self
     }
 
@@ -335,6 +345,14 @@ impl ShardexConfig {
                 "wal_segment_size",
                 format!("value {} bytes exceeds 1GB limit", self.wal_segment_size),
                 "Set wal_segment_size to 1GB or less to avoid memory and disk space issues",
+            ));
+        }
+
+        if self.wal_safety_margin < 0.0 || self.wal_safety_margin > 1.0 {
+            return Err(ShardexError::config_error(
+                "wal_safety_margin",
+                format!("value {} must be between 0.0 and 1.0", self.wal_safety_margin),
+                "Set wal_safety_margin between 0.0 (no safety margin) and 1.0 (100% margin). Recommended: 0.5 (50%)"
             ));
         }
 

@@ -207,25 +207,37 @@ impl ShardexImpl {
         let vector_size = self.config.vector_size;
         let wal_segment_size = self.config.wal_segment_size;
         
-        // Estimate serialized size per AddPosting operation:
-        // - WalTransactionHeader: ~32 bytes
-        // - WalRecordHeader: 8 bytes  
-        // - Operation overhead: ~29 bytes (tag + doc_id + start + length + vec_len)
-        // - Vector data: vector_size * 4 bytes
+        // Estimate serialized size per AddPosting operation based on WAL format:
+        // - WalTransactionHeader: ~32 bytes (transaction ID, timestamp, record count, checksum)
+        // - WalRecordHeader: 8 bytes (record type, payload length)  
+        // - Operation overhead: 29 bytes broken down as:
+        //   * Operation type enum: 1 byte
+        //   * DocumentId (u128): 16 bytes  
+        //   * start field (u64): 8 bytes
+        //   * length field (u32): 4 bytes
+        // - Vector data: vector_size * sizeof(f32) = vector_size * 4 bytes
         let estimated_operation_size = 29 + (vector_size * 4);
         
-        // Target using ~50% of WAL segment size for safety margin
-        let target_batch_size = wal_segment_size / 2;
+        // Target using configurable percentage of WAL segment size as safety margin to account for:
+        // - WAL segment headers and metadata
+        // - Potential fragmentation within segments  
+        // - Space needed for other concurrent transactions
+        let safety_margin = self.config.wal_safety_margin;
+        let target_batch_size = (wal_segment_size as f32 * (1.0 - safety_margin)) as usize;
         
         // Calculate max operations that fit in target batch size
-        let max_ops_by_size = target_batch_size / (estimated_operation_size + 50); // +50 for transaction overhead
+        // Additional 50 bytes accounts for transaction-level overhead:
+        // - Batch metadata and headers
+        // - Serialization padding and alignment
+        // - Transaction commit markers
+        let max_ops_by_size = target_batch_size / (estimated_operation_size + 50);
         
         // Use conservative limits: smaller of calculated limit or reasonable defaults
         let max_operations_per_batch = std::cmp::min(max_ops_by_size, 1000).max(10); // At least 10, at most 1000
         let max_batch_size_bytes = std::cmp::min(target_batch_size, 1024 * 1024); // At most 1MB
         
-        info!("Calculated batch config: vector_size={}, wal_segment_size={}, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
-              vector_size, wal_segment_size, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
+        info!("Calculated batch config: vector_size={}, wal_segment_size={}, safety_margin={:.1}%, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
+              vector_size, wal_segment_size, safety_margin * 100.0, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
         
         BatchConfig {
             batch_write_interval_ms: self.config.batch_write_interval_ms,
@@ -1310,8 +1322,8 @@ impl Shardex for ShardexImpl {
         // 5. Save persisted configuration
         let config_manager = ConfigurationManager::new(&config.directory_path);
 
-        // Use futures::executor::block_on for synchronous context
-        futures::executor::block_on(async { config_manager.save_config(&config).await }).map_err(
+        // Call save_config directly as we're already in an async context
+        config_manager.save_config(&config).await.map_err(
             |e| {
                 // Clean up on config save failure
                 let _ = std::fs::remove_dir_all(&config.directory_path);
