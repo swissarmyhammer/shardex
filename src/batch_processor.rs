@@ -379,6 +379,7 @@ mod tests {
             batch_write_interval_ms: 50,
             max_operations_per_batch: 5,
             max_batch_size_bytes: 1024,
+            max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(50);
         let mut processor =
@@ -429,6 +430,7 @@ mod tests {
             batch_write_interval_ms: 20,   // Very short for testing
             max_operations_per_batch: 100, // High limit so timer triggers first
             max_batch_size_bytes: 10000,
+            max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(20);
         let mut processor =
@@ -464,6 +466,7 @@ mod tests {
             batch_write_interval_ms: 1000, // Long interval
             max_operations_per_batch: 100,
             max_batch_size_bytes: 10000,
+            max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(1000);
         let mut processor =

@@ -371,7 +371,10 @@ impl WalReplayer {
 
                 Ok(())
             }
-            WalOperation::StoreDocumentText { document_id, text: _ } => {
+            WalOperation::StoreDocumentText {
+                document_id,
+                text: _,
+            } => {
                 // Document text storage operations will be handled at the index level
                 // For now, we'll just log and ignore these operations during WAL replay
                 info!(
