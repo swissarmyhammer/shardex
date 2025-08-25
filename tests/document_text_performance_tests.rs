@@ -12,6 +12,9 @@ use shardex::identifiers::DocumentId;
 use tempfile::TempDir;
 use std::time::{Duration, Instant};
 
+mod document_text_test_utils;
+use document_text_test_utils::TextGenerator;
+
 /// Performance test configuration
 struct PerformanceConfig {
     large_document_timeout: Duration,
@@ -31,35 +34,7 @@ impl Default for PerformanceConfig {
     }
 }
 
-/// Generate test text with specified characteristics
-fn generate_test_text(word_count: usize, avg_word_length: usize) -> String {
-    let words = [
-        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
-        "Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing",
-        "elit", "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore",
-        "et", "dolore", "magna", "aliqua", "Ut", "enim", "ad", "minim", "veniam",
-        "quis", "nostrud", "exercitation", "ullamco", "laboris", "nisi",
-        "aliquip", "ex", "ea", "commodo", "consequat", "Duis", "aute", "irure",
-        "performance", "testing", "document", "storage", "retrieval", "system",
-        "database", "memory", "mapping", "efficient", "scalable", "robust",
-    ];
-    
-    let mut text = String::with_capacity(word_count * (avg_word_length + 1));
-    let mut rng_state = 12345u32; // Simple PRNG for deterministic results
-    
-    for i in 0..word_count {
-        if i > 0 {
-            text.push(' ');
-        }
-        
-        // Simple linear congruential generator for deterministic randomness
-        rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
-        let word_index = (rng_state as usize) % words.len();
-        text.push_str(words[word_index]);
-    }
-    
-    text
-}
+
 
 #[test]
 fn test_large_document_storage_performance() {
@@ -79,7 +54,8 @@ fn test_large_document_storage_performance() {
     
     for (word_count, description) in document_sizes {
         let doc_id = DocumentId::new();
-        let large_text = generate_test_text(word_count, 6);
+        let mut text_generator = TextGenerator::new();
+        let large_text = text_generator.generate_text(word_count);
         println!("Testing {} (~{} bytes)", description, large_text.len());
         
         // Measure storage time
@@ -219,7 +195,8 @@ fn test_substring_extraction_performance() {
     // Store test documents
     for (word_count, description) in &test_documents {
         let doc_id = DocumentId::new();
-        let text = generate_test_text(*word_count, 6);
+        let mut text_generator = TextGenerator::new();
+        let text = text_generator.generate_text(*word_count);
         storage.store_text_safe(doc_id, &text).unwrap();
         doc_data.push((doc_id, text, *description));
     }
@@ -374,7 +351,8 @@ fn test_memory_usage_scaling() {
         
         for _i in 0..doc_count {
             let doc_id = DocumentId::new();
-            let text = generate_test_text(word_count, 6);
+            let mut text_generator = TextGenerator::new();
+            let text = text_generator.generate_text(word_count);
             expected_total_chars += text.len();
             
             storage.store_text_safe(doc_id, &text).unwrap();
@@ -511,7 +489,8 @@ fn test_worst_case_performance() {
     
     // Scenario 2: Fragmented text extraction patterns
     let large_doc = DocumentId::new();
-    let large_text = generate_test_text(100000, 8); // ~800KB
+    let mut text_generator = TextGenerator::new();
+    let large_text = text_generator.generate_text(100000); // ~800KB
     storage.store_text_safe(large_doc, &large_text).unwrap();
     
     // Many small extractions across the document

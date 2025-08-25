@@ -412,7 +412,7 @@ impl PerformanceTracker {
                 max_duration
             );
         } else {
-            panic!("No measurements recorded");
+            assert!(!self.measurements.is_empty(), "No measurements recorded");
         }
     }
     
@@ -617,6 +617,14 @@ impl TestScenario {
 // Convenience functions for common test patterns
 
 /// Create a simple test document with predictable content
+/// Create a test document of the specified size category
+/// 
+/// Generates deterministic text content appropriate for testing various scenarios:
+/// - `Tiny`: ~60 bytes (10 words) - for boundary testing
+/// - `Small`: ~600 bytes (100 words) - for basic functionality
+/// - `Medium`: ~6KB (1000 words) - for moderate size testing
+/// - `Large`: ~60KB (10,000 words) - for performance testing
+/// - `Huge`: ~600KB (100,000 words) - for stress testing
 pub fn create_test_document(size_category: DocumentSize) -> String {
     let mut generator = TextGenerator::new();
     match size_category {
