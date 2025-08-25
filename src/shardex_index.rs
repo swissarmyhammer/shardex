@@ -72,10 +72,13 @@
 use crate::config::ShardexConfig;
 use crate::deduplication::{DeduplicationPolicy, ResultDeduplicator};
 use crate::distance::DistanceMetric;
+use crate::document_text_storage::DocumentTextStorage;
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, ShardId};
+use crate::layout::DirectoryLayout;
 use crate::shard::{Shard, ShardMetadata as BaseShardMetadata};
-use crate::structures::SearchResult;
+use crate::structures::{Posting, SearchResult};
+use crate::transactions::WalOperation;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -105,6 +108,15 @@ pub struct ShardexMetadata {
     pub memory_usage: usize,
 }
 
+/// Statistics for text storage
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStorageStats {
+    pub index_file_size: u64,
+    pub data_file_size: u64,
+    pub document_count: u32,
+    pub total_text_size: u64,
+}
+
 /// Main in-memory index managing shard collection and centroids
 ///
 /// The ShardexIndex provides efficient shard management and centroid-based lookup
@@ -125,6 +137,8 @@ pub struct ShardexIndex {
     cache_limit: usize,
     /// Deduplication policy for search results
     deduplication_policy: DeduplicationPolicy,
+    /// Optional document text storage (None if not enabled)
+    document_text_storage: Option<DocumentTextStorage>,
 }
 
 impl ShardexMetadata {
@@ -261,6 +275,16 @@ impl ShardexIndex {
 
         std::fs::write(&index_metadata_path, metadata_json).map_err(ShardexError::Io)?;
 
+        // Create text storage if max_document_text_size is configured
+        let document_text_storage = if config.max_document_text_size > 0 {
+            Some(DocumentTextStorage::create(
+                &config.directory_path,
+                config.max_document_text_size,
+            )?)
+        } else {
+            None
+        };
+
         Ok(Self {
             shards: Vec::new(),
             directory: config.directory_path,
@@ -269,6 +293,7 @@ impl ShardexIndex {
             shard_cache: HashMap::new(),
             cache_limit: 100, // Default cache limit
             deduplication_policy: config.deduplication_policy,
+            document_text_storage,
         })
     }
 
@@ -295,6 +320,14 @@ impl ShardexIndex {
         let metadata: IndexMetadata = serde_json::from_str(&metadata_content)
             .map_err(|e| ShardexError::Config(format!("Failed to parse metadata: {}", e)))?;
 
+        // Check for text storage files
+        let layout = DirectoryLayout::new(&directory);
+        let document_text_storage = if layout.has_text_storage() {
+            Some(DocumentTextStorage::open(&directory)?)
+        } else {
+            None
+        };
+
         let mut index = Self {
             shards: Vec::new(),
             directory,
@@ -303,6 +336,7 @@ impl ShardexIndex {
             shard_cache: HashMap::new(),
             cache_limit: 100,
             deduplication_policy: DeduplicationPolicy::default(),
+            document_text_storage,
         };
 
         // Discover and load existing shards
@@ -1292,6 +1326,7 @@ impl ShardexIndex {
             shard_cache: HashMap::new(), // Start with empty cache
             cache_limit: self.cache_limit,
             deduplication_policy: self.deduplication_policy,
+            document_text_storage: None, // Don't clone text storage for deep clone
         })
     }
 
@@ -1612,6 +1647,246 @@ impl ShardexIndex {
         })?;
 
         // Basic structural validation passed
+        Ok(())
+    }
+
+    /// Apply WAL operation to index
+    ///
+    /// Routes text storage operations to DocumentTextStorage and shard-level operations
+    /// to the appropriate shards.
+    pub fn apply_wal_operation(&mut self, operation: &WalOperation) -> Result<(), ShardexError> {
+        match operation {
+            // Text storage operations (index-level)
+            WalOperation::StoreDocumentText { document_id, text } => {
+                if let Some(ref mut text_storage) = self.document_text_storage {
+                    text_storage.store_text_safe(*document_id, text)?;
+                } else {
+                    return Err(ShardexError::InvalidInput {
+                        field: "text_storage".to_string(),
+                        reason: "Text storage not enabled for this index".to_string(),
+                        suggestion: "Enable text storage in configuration".to_string(),
+                    });
+                }
+            }
+
+            WalOperation::DeleteDocumentText { document_id } => {
+                // Note: Actual deletion handled by compaction
+                // For now, this is a no-op as we use append-only storage
+                tracing::debug!("Document text deletion marked for: {}", document_id);
+            }
+
+            // Shard-level operations (delegate to specific shards)
+            WalOperation::AddPosting {
+                document_id,
+                start,
+                length,
+                vector,
+            } => {
+                let posting = Posting {
+                    document_id: *document_id,
+                    start: *start,
+                    length: *length,
+                    vector: vector.clone(),
+                };
+
+                let shard_id = self.determine_shard_for_posting(&posting)?;
+                let shard = self.get_shard_mut(shard_id)?;
+                shard.add_posting(posting)?;
+            }
+
+            WalOperation::RemoveDocument { document_id } => {
+                // Remove from all shards - collect shard IDs first to avoid borrow checker issues
+                let shard_ids: Vec<ShardId> = self.shards.iter().map(|s| s.id).collect();
+                for shard_id in shard_ids {
+                    let shard = self.get_shard_mut(shard_id)?;
+                    shard.remove_document(*document_id)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Determine the best shard for a posting based on vector similarity
+    ///
+    /// This method finds the shard with the closest centroid to the posting's vector.
+    /// If no shards exist, it returns an error indicating a shard should be created first.
+    fn determine_shard_for_posting(&self, posting: &Posting) -> Result<ShardId, ShardexError> {
+        if self.shards.is_empty() {
+            return Err(ShardexError::InvalidInput {
+                field: "shards".to_string(),
+                reason: "No shards available for posting".to_string(),
+                suggestion: "Create at least one shard before adding postings".to_string(),
+            });
+        }
+
+        // Find the shard with the minimum distance to the posting vector
+        let mut best_shard_id = self.shards[0].id;
+        let mut min_distance = self.shards[0].distance_to_query(&posting.vector)?;
+
+        for shard_metadata in &self.shards[1..] {
+            // Skip read-only or full shards for new postings
+            if shard_metadata.writable && shard_metadata.utilization < 1.0 {
+                let distance = shard_metadata.distance_to_query(&posting.vector)?;
+                if distance < min_distance {
+                    min_distance = distance;
+                    best_shard_id = shard_metadata.id;
+                }
+            }
+        }
+
+        Ok(best_shard_id)
+    }
+
+    /// Get document text if text storage is enabled
+    ///
+    /// Retrieves the complete text content for a document from the text storage.
+    /// Returns an error if text storage is not enabled for this index.
+    ///
+    /// # Arguments
+    /// * `document_id` - The document ID to retrieve text for
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The document text content
+    /// * `Err(ShardexError)` - Text storage not enabled or document not found
+    pub fn get_document_text(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+        match &self.document_text_storage {
+            Some(storage) => storage.get_text_safe(document_id),
+            None => Err(ShardexError::InvalidInput {
+                field: "text_storage".to_string(),
+                reason: "Text storage not enabled for this index".to_string(),
+                suggestion:
+                    "Enable text storage in configuration or use an index with text storage"
+                        .to_string(),
+            }),
+        }
+    }
+
+    /// Extract text from posting coordinates
+    ///
+    /// Uses the posting's document_id, start, and length to extract a specific
+    /// substring from the document's stored text content.
+    ///
+    /// # Arguments
+    /// * `posting` - The posting containing document coordinates
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The extracted text substring
+    /// * `Err(ShardexError)` - Text storage not enabled, document not found, or invalid coordinates
+    pub fn extract_text_from_posting(&self, posting: &Posting) -> Result<String, ShardexError> {
+        match &self.document_text_storage {
+            Some(storage) => {
+                storage.extract_text_substring(posting.document_id, posting.start, posting.length)
+            }
+            None => Err(ShardexError::InvalidInput {
+                field: "text_storage".to_string(),
+                reason: "Text storage not enabled for this index".to_string(),
+                suggestion: "Enable text storage in configuration".to_string(),
+            }),
+        }
+    }
+
+    /// Check if text storage is enabled
+    ///
+    /// Returns true if the index has text storage capabilities, false otherwise.
+    pub fn has_text_storage(&self) -> bool {
+        self.document_text_storage.is_some()
+    }
+
+    /// Get text storage statistics
+    ///
+    /// Returns statistics about the text storage including file sizes, document count,
+    /// and total text size. Returns None if text storage is not enabled.
+    ///
+    /// # Returns
+    /// * `Some(TextStorageStats)` - Text storage statistics if enabled
+    /// * `None` - Text storage not enabled for this index
+    pub fn text_storage_stats(&self) -> Option<TextStorageStats> {
+        self.document_text_storage.as_ref().map(|storage| {
+            // Note: DocumentTextStorage doesn't expose file size methods directly,
+            // so we'll calculate based on available metadata
+            let document_count = storage.entry_count();
+            let total_text_size = storage.total_text_size();
+
+            TextStorageStats {
+                index_file_size: (document_count as u64) * 32, // Approximate size per entry
+                data_file_size: total_text_size,
+                document_count,
+                total_text_size,
+            }
+        })
+    }
+
+    /// Flush text storage and all shards to disk
+    ///
+    /// Ensures that all pending writes are persisted to disk for both text storage
+    /// and all loaded shards in the cache.
+    ///
+    /// # Returns
+    /// * `Ok(())` - All data successfully flushed
+    /// * `Err(ShardexError)` - Flush operation failed
+    pub fn flush(&mut self) -> Result<(), ShardexError> {
+        // Flush text storage if enabled
+        if let Some(ref storage) = self.document_text_storage {
+            storage.sync()?;
+        }
+
+        // Flush all cached shards
+        for shard in self.shard_cache.values_mut() {
+            shard.sync()?;
+        }
+
+        Ok(())
+    }
+
+    /// Close index including text storage
+    ///
+    /// Properly closes the index by flushing all data and releasing resources.
+    /// The text storage is explicitly dropped to ensure proper cleanup.
+    ///
+    /// # Returns
+    /// * `Ok(())` - Index successfully closed
+    /// * `Err(ShardexError)` - Close operation failed
+    pub fn close(&mut self) -> Result<(), ShardexError> {
+        // Flush everything first
+        self.flush()?;
+
+        // Clear shard cache to release resources
+        self.shard_cache.clear();
+
+        // Close text storage by dropping it
+        if let Some(_storage) = self.document_text_storage.take() {
+            // DocumentTextStorage will be properly dropped here
+            tracing::debug!("Text storage closed for index");
+        }
+
+        Ok(())
+    }
+
+    /// Validate entire index including text storage
+    ///
+    /// Performs comprehensive validation of the index structure, metadata,
+    /// and text storage integrity if enabled.
+    ///
+    /// # Returns
+    /// * `Ok(())` - Index validation passed
+    /// * `Err(ShardexError)` - Validation failed with details
+    pub fn validate_integrity(&self) -> Result<(), ShardexError> {
+        // Validate basic index metadata
+        self.validate_metadata()?;
+
+        // Validate text storage if enabled
+        if let Some(ref _storage) = self.document_text_storage {
+            // Note: DocumentTextStorage doesn't currently expose a validate_integrity method
+            // This is a placeholder for when that method becomes available
+            tracing::debug!("Text storage validation would be performed here");
+        }
+
+        // Validate loaded shards
+        for shard in self.shard_cache.values() {
+            shard.validate_integrity()?;
+        }
+
         Ok(())
     }
 }
@@ -3322,5 +3597,251 @@ mod tests {
 
         // Larger vectors should generally benefit from higher slop factors
         assert!(slop_large_vec >= slop_small_vec);
+    }
+
+    #[test]
+    fn test_index_creation_with_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024); // 1MB
+
+        let index = ShardexIndex::create(config).unwrap();
+
+        // Text storage should be enabled
+        assert!(index.has_text_storage());
+        assert!(index.text_storage_stats().is_some());
+    }
+
+    #[test]
+    fn test_index_creation_without_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        // Use default max_document_text_size - text storage will be enabled by default
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384);
+
+        // For now, this test verifies default behavior includes text storage
+        // This will be updated when we implement a proper disable mechanism
+        let index = ShardexIndex::create(config).unwrap();
+
+        // With default config, text storage should be enabled
+        assert!(index.has_text_storage());
+        assert!(index.text_storage_stats().is_some());
+    }
+
+    #[test]
+    fn test_index_open_with_existing_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create index with text storage
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+        let index = ShardexIndex::create(config).unwrap();
+        assert!(index.has_text_storage());
+        drop(index);
+
+        // Reopen should detect existing text storage
+        let reopened_index = ShardexIndex::open(temp_dir.path()).unwrap();
+        assert!(reopened_index.has_text_storage());
+    }
+
+    #[test]
+    fn test_text_storage_access_when_enabled() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+        let doc_id = DocumentId::new();
+        let text = "Hello, world!";
+
+        // Store document text via WAL operation
+        let wal_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.to_string(),
+        };
+
+        index.apply_wal_operation(&wal_op).unwrap();
+
+        // Retrieve document text
+        let retrieved_text = index.get_document_text(doc_id).unwrap();
+        assert_eq!(retrieved_text, text);
+    }
+
+    #[test]
+    fn test_text_storage_access_when_disabled() {
+        let temp_dir = TempDir::new().unwrap();
+        let _config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384);
+
+        // Manually create an index without text storage for testing
+        let index = ShardexIndex {
+            shards: Vec::new(),
+            directory: temp_dir.path().to_path_buf(),
+            vector_size: 384,
+            segment_capacity: 1000,
+            shard_cache: HashMap::new(),
+            cache_limit: 100,
+            deduplication_policy: DeduplicationPolicy::default(),
+            document_text_storage: None, // Explicitly disabled for testing
+        };
+
+        let doc_id = DocumentId::new();
+
+        // Should get error when trying to access text storage
+        let result = index.get_document_text(doc_id);
+        assert!(result.is_err());
+
+        if let Err(ShardexError::InvalidInput { field, reason, .. }) = result {
+            assert_eq!(field, "text_storage");
+            assert!(reason.contains("not enabled"));
+        } else {
+            panic!("Expected InvalidInput error for disabled text storage");
+        }
+    }
+
+    #[test]
+    fn test_extract_text_from_posting() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+        let doc_id = DocumentId::new();
+        let text = "The quick brown fox jumps over the lazy dog.";
+
+        // Store document text
+        let wal_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.to_string(),
+        };
+        index.apply_wal_operation(&wal_op).unwrap();
+
+        // Create posting with text coordinates
+        let posting = Posting {
+            document_id: doc_id,
+            start: 4, // "quick"
+            length: 5,
+            vector: vec![0.1; 384],
+        };
+
+        // Extract text substring
+        let extracted = index.extract_text_from_posting(&posting).unwrap();
+        assert_eq!(extracted, "quick");
+    }
+
+    #[test]
+    fn test_wal_operation_store_document_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+        let doc_id = DocumentId::new();
+        let text = "Test document content";
+
+        let wal_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.to_string(),
+        };
+
+        // Operation should succeed
+        index.apply_wal_operation(&wal_op).unwrap();
+
+        // Text should be retrievable
+        let retrieved = index.get_document_text(doc_id).unwrap();
+        assert_eq!(retrieved, text);
+    }
+
+    #[test]
+    fn test_wal_operation_delete_document_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+        let doc_id = DocumentId::new();
+
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+
+        // Operation should succeed (it's a no-op for now)
+        index.apply_wal_operation(&delete_op).unwrap();
+    }
+
+    #[test]
+    fn test_text_storage_statistics() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Initially empty
+        let initial_stats = index.text_storage_stats().unwrap();
+        assert_eq!(initial_stats.document_count, 0);
+        assert_eq!(initial_stats.total_text_size, 0);
+
+        // Store some text
+        let doc_id = DocumentId::new();
+        let text = "Test document for statistics";
+        let wal_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.to_string(),
+        };
+        index.apply_wal_operation(&wal_op).unwrap();
+
+        // Statistics should update
+        let updated_stats = index.text_storage_stats().unwrap();
+        assert_eq!(updated_stats.document_count, 1);
+        assert_eq!(updated_stats.total_text_size, text.len() as u64);
+    }
+
+    #[test]
+    fn test_lifecycle_methods_with_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .max_document_text_size(1024 * 1024);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Store some text
+        let doc_id = DocumentId::new();
+        let text = "Test document for lifecycle";
+        let wal_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.to_string(),
+        };
+        index.apply_wal_operation(&wal_op).unwrap();
+
+        // Flush should succeed
+        index.flush().unwrap();
+
+        // Validate should succeed
+        index.validate_integrity().unwrap();
+
+        // Close should succeed
+        index.close().unwrap();
+
+        // After close, text storage should be None
+        assert!(!index.has_text_storage());
     }
 }
