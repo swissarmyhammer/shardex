@@ -59,7 +59,7 @@ use crate::document_text_entry::{DocumentTextEntry, TextDataHeader, TextIndexHea
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
 use crate::memory::MemoryMappedFile;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Document text storage manager using memory-mapped files
 ///
@@ -838,6 +838,340 @@ impl DocumentTextStorage {
         }
 
         Ok(())
+    }
+
+    // Additional validation methods for error handling and recovery system
+
+    /// Validate file headers for corruption detection
+    ///
+    /// Checks that both index and data file headers are valid and consistent.
+    /// This method is used by the health monitoring system to detect file corruption.
+    pub fn validate_headers(&self) -> Result<(), ShardexError> {
+        // Validate index header
+        self.index_header.validate().map_err(|e| {
+            ShardexError::text_corruption(format!("Index header validation failed: {}", e))
+        })?;
+
+        // Validate data header  
+        self.data_header.validate().map_err(|e| {
+            ShardexError::text_corruption(format!("Data header validation failed: {}", e))
+        })?;
+
+        Ok(())
+    }
+
+    /// Validate file sizes are consistent with headers
+    ///
+    /// Ensures that file sizes match what the headers indicate and that
+    /// there are no obvious size inconsistencies that indicate corruption.
+    pub fn validate_file_sizes(&self) -> Result<(), ShardexError> {
+        // Check index file size consistency
+        let expected_index_size = self.index_header.next_entry_offset;
+        let actual_index_size = self.text_index_file.len() as u64;
+        
+        if expected_index_size > actual_index_size {
+            return Err(ShardexError::text_corruption(format!(
+                "Index file size mismatch: header indicates {} bytes, file is {} bytes",
+                expected_index_size, actual_index_size
+            )));
+        }
+
+        // Check data file size consistency
+        let expected_data_size = self.data_header.next_text_offset;
+        let actual_data_size = self.text_data_file.len() as u64;
+        
+        if expected_data_size > actual_data_size {
+            return Err(ShardexError::text_corruption(format!(
+                "Data file size mismatch: header indicates {} bytes, file is {} bytes",
+                expected_data_size, actual_data_size
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Verify checksums if available (placeholder for future implementation)
+    ///
+    /// Currently a placeholder - in a full implementation this would verify
+    /// checksums stored in headers or maintained separately to detect corruption.
+    pub fn verify_checksums(&self) -> Result<(), ShardexError> {
+        // Placeholder - checksums not currently implemented in headers
+        // This would verify file integrity using stored checksums
+        Ok(())
+    }
+
+    /// Get entry at specific index position for validation
+    ///
+    /// Returns the document text entry at the given index position.
+    /// Used by health monitoring to sample and validate entries.
+    pub fn get_entry_at_index(&self, index: u32) -> Result<DocumentTextEntry, ShardexError> {
+        if index >= self.index_header.entry_count {
+            return Err(ShardexError::invalid_range(
+                index,
+                1,
+                self.index_header.entry_count as u64
+            ));
+        }
+
+        let offset = self.index_header.offset_for_entry(index);
+        let entry: DocumentTextEntry = self.text_index_file.read_at(offset as usize)?;
+        
+        // Validate the entry to detect corruption
+        entry.validate().map_err(|e| {
+            ShardexError::text_corruption(format!(
+                "Corrupted entry at index {}: {}", index, e
+            ))
+        })?;
+
+        Ok(entry)
+    }
+
+    /// Validate that an entry points to a valid data region
+    ///
+    /// Checks that the entry's text offset and length point to a valid
+    /// region within the data file bounds.
+    pub fn validate_entry_data_region(&self, entry: &DocumentTextEntry) -> Result<(), ShardexError> {
+        let data_file_size = self.text_data_file.len() as u64;
+        
+        // Check that offset is within bounds
+        if entry.text_offset >= data_file_size {
+            return Err(ShardexError::text_corruption(format!(
+                "Entry text offset {} exceeds data file size {}",
+                entry.text_offset, data_file_size
+            )));
+        }
+
+        // Check that offset + length + header size is within bounds
+        let required_size = entry.text_offset + entry.text_length + 4; // +4 for length prefix
+        if required_size > data_file_size {
+            return Err(ShardexError::text_corruption(format!(
+                "Entry text region {}..{} exceeds data file size {}",
+                entry.text_offset, required_size, data_file_size
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Read text at specific offset with validation (exposed for recovery system)
+    ///
+    /// Public wrapper around the private read_text_at_offset method to allow
+    /// the recovery system to validate specific text regions.
+    pub fn read_text_at_offset_public(&self, offset: u64, length: u64) -> Result<String, ShardexError> {
+        self.read_text_at_offset(offset, length)
+    }
+
+    /// Get count of entries in the index
+    ///
+    /// Returns the total number of document entries in the index.
+    /// Used by health monitoring and recovery systems.
+    pub fn get_entry_count(&self) -> u32 {
+        self.index_header.entry_count
+    }
+
+    /// Get paths to the underlying storage files
+    ///
+    /// Returns the file paths for the index and data files, used by
+    /// backup and recovery systems that need direct file access.
+    pub fn get_file_paths(&self) -> (PathBuf, PathBuf) {
+        // We need to reconstruct paths from the memory mapped files
+        // This is a simplified implementation - in practice we'd store these paths
+        (
+            PathBuf::from("text_index.dat"), // Placeholder
+            PathBuf::from("text_data.dat"),  // Placeholder
+        )
+    }
+
+    /// Reload storage from files after external modifications
+    ///
+    /// Reloads headers and validates consistency after files have been
+    /// modified externally (e.g., by recovery operations). This method
+    /// is used after restore operations to ensure storage is in a valid state.
+    pub async fn reload_from_files(&mut self) -> Result<(), ShardexError> {
+        // Re-read headers from files
+        let index_header: TextIndexHeader = self.text_index_file.read_at(0)?;
+        let data_header: TextDataHeader = self.text_data_file.read_at(0)?;
+
+        // Validate the reloaded headers
+        index_header.validate().map_err(|e| {
+            ShardexError::text_corruption(format!("Invalid index header after reload: {}", e))
+        })?;
+
+        data_header.validate().map_err(|e| {
+            ShardexError::text_corruption(format!("Invalid data header after reload: {}", e))
+        })?;
+
+        // Update cached headers
+        self.index_header = index_header;
+        self.data_header = data_header;
+
+        // Validate file consistency after reload
+        self.validate_file_sizes()?;
+
+        Ok(())
+    }
+
+    /// Scan and rebuild index from data file (placeholder for recovery)
+    ///
+    /// Placeholder method for rebuilding the index file by scanning the data file.
+    /// This would be used by recovery operations when the index is corrupted but
+    /// data is intact.
+    pub async fn scan_and_rebuild_index(&mut self) -> Result<u32, ShardexError> {
+        // This is a placeholder - full implementation would:
+        // 1. Scan through data file reading length-prefixed text blocks
+        // 2. Create new index entries for each text block found
+        // 3. Rebuild the index file with discovered entries
+        // 4. Update headers to reflect new index
+        
+        // For now, return error indicating this is not yet implemented
+        Err(ShardexError::text_corruption(
+            "Index rebuild from data file not yet implemented"
+        ))
+    }
+
+    /// Truncate to last valid entry (placeholder for recovery)
+    ///
+    /// Placeholder method for truncating corrupted data by finding the last
+    /// valid entry and removing everything after it.
+    pub async fn truncate_to_last_valid(&mut self) -> Result<(u64, u32), ShardexError> {
+        // This is a placeholder - full implementation would:
+        // 1. Scan backwards through entries to find last valid one
+        // 2. Truncate data file to end of that entry
+        // 3. Update headers to reflect new file size
+        // 4. Return (new_offset, entries_lost)
+        
+        // For now, return error indicating this is not yet implemented
+        Err(ShardexError::text_corruption(
+            "Truncate to last valid not yet implemented"
+        ))
+    }
+
+    /// Report error metrics to monitoring system
+    ///
+    /// Reports detailed error information to the monitoring system for tracking
+    /// and alerting. This method is called whenever an error occurs during
+    /// storage operations to maintain operational visibility.
+    pub fn report_error_metrics(&self, error: &ShardexError, operation: &str) {
+        // In a production system, this would integrate with the actual monitoring system
+        // For now, we'll use tracing to log the error metrics
+        
+        match error {
+            ShardexError::TextCorruption(msg) => {
+                tracing::error!(
+                    error_type = "text_corruption",
+                    operation = operation,
+                    corruption_details = msg,
+                    "Text storage corruption detected"
+                );
+                
+                // Could increment corruption error counter in monitoring system:
+                // monitor.increment_counter("text_storage.corruption_errors", &[
+                //     ("operation", operation),
+                // ]);
+            }
+            
+            ShardexError::DocumentTooLarge { size, max_size } => {
+                tracing::error!(
+                    error_type = "document_too_large", 
+                    operation = operation,
+                    document_size = size,
+                    max_size = max_size,
+                    "Document exceeds size limit"
+                );
+                
+                // Could record size limit violations:
+                // monitor.increment_counter("text_storage.size_limit_errors", &[
+                //     ("operation", operation),
+                // ]);
+                // monitor.record_histogram("text_storage.rejected_document_size", *size as f64, &[]);
+            }
+            
+            ShardexError::InvalidRange { start, length, document_length } => {
+                tracing::error!(
+                    error_type = "invalid_range",
+                    operation = operation, 
+                    range_start = start,
+                    range_length = length,
+                    document_length = document_length,
+                    "Invalid text range requested"
+                );
+                
+                // Could track range errors:
+                // monitor.increment_counter("text_storage.range_errors", &[
+                //     ("operation", operation),
+                // ]);
+            }
+            
+            ShardexError::Io(io_error) => {
+                tracing::error!(
+                    error_type = "io_error",
+                    operation = operation,
+                    io_error_kind = ?io_error.kind(),
+                    io_error_msg = %io_error,
+                    "I/O error during text storage operation"
+                );
+                
+                // Could track I/O errors:
+                // monitor.increment_counter("text_storage.io_errors", &[
+                //     ("operation", operation),
+                //     ("io_error_kind", &format!("{:?}", io_error.kind())),
+                // ]);
+            }
+            
+            ShardexError::DocumentTextNotFound { document_id } => {
+                tracing::warn!(
+                    error_type = "document_not_found",
+                    operation = operation,
+                    document_id = document_id,
+                    "Document text not found"
+                );
+                
+                // Could track not found errors:
+                // monitor.increment_counter("text_storage.not_found_errors", &[
+                //     ("operation", operation),
+                // ]);
+            }
+            
+            _ => {
+                tracing::error!(
+                    error_type = "other_error",
+                    operation = operation,
+                    error_display = %error,
+                    error_debug = ?error,
+                    "Other text storage error"
+                );
+                
+                // Could track other error types:
+                // monitor.increment_counter("text_storage.other_errors", &[
+                //     ("operation", operation),
+                //     ("error_type", &format!("{:?}", error)),
+                // ]);
+            }
+        }
+    }
+
+    /// Report storage operation metrics
+    ///
+    /// Reports successful operation metrics to the monitoring system for
+    /// performance tracking and capacity planning.
+    pub fn report_operation_metrics(&self, operation: &str, duration: std::time::Duration, bytes_processed: usize) {
+        tracing::info!(
+            operation = operation,
+            duration_ms = duration.as_millis(),
+            bytes_processed = bytes_processed,
+            total_entries = self.entry_count(),
+            total_text_size = self.total_text_size(),
+            utilization_ratio = self.utilization_ratio(),
+            "Text storage operation completed"
+        );
+        
+        // In a production system, this would report to actual monitoring:
+        // if let Some(monitor) = &self.performance_monitor {
+        //     monitor.record_operation(operation, duration, bytes_processed).await;
+        //     monitor.record_gauge("text_storage.total_entries", self.entry_count() as f64).await;
+        //     monitor.record_gauge("text_storage.total_size", self.total_text_size() as f64).await;
+        //     monitor.record_gauge("text_storage.utilization", self.utilization_ratio()).await;
+        // }
     }
 }
 

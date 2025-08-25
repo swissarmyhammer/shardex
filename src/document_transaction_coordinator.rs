@@ -799,8 +799,8 @@ mod tests {
         let tx_id = coordinator.begin_transaction().await.unwrap();
         let doc_id = DocumentId::new();
         
-        // Test document at max size boundary (assuming 1MB limit)
-        let max_size = 1024 * 1024; // 1MB
+        // Test document at max size boundary (configured as 1KB in setup)
+        let max_size = 1024; // 1KB - matches config.max_document_text_size
         let large_text = "a".repeat(max_size);
         
         let large_doc_op = WalOperation::StoreDocumentText {

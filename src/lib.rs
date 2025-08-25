@@ -52,6 +52,7 @@ pub mod document_text_entry;
 pub mod document_text_storage;
 pub mod document_transaction_coordinator;
 pub mod error;
+pub mod error_handling;
 pub mod identifiers;
 pub mod integrity;
 pub mod layout;
@@ -74,6 +75,9 @@ pub mod test_utils;
 #[cfg(test)]
 pub mod statistics_integration_test;
 
+#[cfg(test)]
+pub mod error_handling_integration_test;
+
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
 pub use concurrent::{
@@ -92,6 +96,11 @@ pub use document_text_entry::{
 pub use document_text_storage::DocumentTextStorage;
 pub use document_transaction_coordinator::{DocumentTransactionCoordinator, TransactionStatistics};
 pub use error::ShardexError;
+pub use error_handling::{
+    BackupInfo, BackupManager, BackupRetentionPolicy, RecoveryConfig, RecoveryResult,
+    RecoveryStrategy, RestoreResult, TextStorageHealth, TextStorageHealthMonitor,
+    TextStorageRecoveryManager,
+};
 pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
