@@ -74,6 +74,80 @@ pub trait Shardex {
 
     /// Get detailed index statistics with comprehensive performance metrics
     async fn detailed_stats(&self) -> Result<crate::monitoring::DetailedIndexStats, Self::Error>;
+
+    /// Get the current full text for a document
+    ///
+    /// Retrieves the complete text content stored for the specified document ID.
+    /// This method always returns the current document text, regardless of any
+    /// historical versions that might exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `document_id` - The unique identifier of the document
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The complete document text content
+    /// * `Err(Self::Error)` - Document not found, text storage disabled, or other error
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use shardex::{Shardex, ShardexImpl, ShardexConfig};
+    /// # use shardex::identifiers::DocumentId;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut shardex = ShardexImpl::create(ShardexConfig::default()).await?;
+    /// let document_id = DocumentId::new();
+    /// 
+    /// let document_text = shardex.get_document_text(document_id).await?;
+    /// println!("Full document: {}", document_text);
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn get_document_text(&self, document_id: crate::identifiers::DocumentId) -> Result<String, Self::Error>;
+
+    /// Extract text substring using posting coordinates
+    ///
+    /// Uses the posting's document ID, start position, and length to extract a specific
+    /// substring from the document's stored text content. This method always uses the
+    /// current document text for extraction, ensuring consistency with live data.
+    ///
+    /// # Arguments
+    ///
+    /// * `posting` - Contains document_id, start offset, and length for extraction
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The extracted text substring
+    /// * `Err(Self::Error)` - Invalid posting, document not found, or extraction error
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use shardex::{Shardex, ShardexImpl, ShardexConfig};
+    /// # use shardex::structures::Posting;
+    /// # use shardex::identifiers::DocumentId;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let shardex = ShardexImpl::create(ShardexConfig::default()).await?;
+    /// 
+    /// // From search results
+    /// let search_results = shardex.search(&[0.1, 0.2, 0.3], 5, None).await?;
+    /// for result in search_results {
+    ///     let posting = Posting::new(
+    ///         result.document_id,
+    ///         result.start,
+    ///         result.length,
+    ///         result.vector,
+    ///         3
+    ///     )?;
+    ///     
+    ///     let text_snippet = shardex.extract_text(&posting).await?;
+    ///     println!("Found: '{}'", text_snippet);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn extract_text(&self, posting: &Posting) -> Result<String, Self::Error>;
 }
 
 /// Main Shardex implementation
@@ -495,6 +569,55 @@ impl ShardexImpl {
             .await;
 
         Ok(stats)
+    }
+
+    /// Validate posting structure for text extraction
+    ///
+    /// Performs comprehensive validation of posting data to ensure safe text extraction.
+    /// Validates document ID, coordinate ranges, and overflow conditions.
+    ///
+    /// # Arguments
+    ///
+    /// * `posting` - The posting to validate
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Posting is valid for text extraction
+    /// * `Err(ShardexError)` - Invalid posting with detailed error message
+    ///
+    /// # Validation Rules
+    ///
+    /// 1. Document ID cannot be nil/zero
+    /// 2. Length must be greater than zero
+    /// 3. Start + length must not overflow u32 range
+    fn validate_posting(&self, posting: &Posting) -> Result<(), ShardexError> {
+        // Validate document ID - check if it's a zero/nil value
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        if posting.document_id == zero_document {
+            return Err(ShardexError::InvalidPostingData {
+                reason: "Posting document ID cannot be nil/zero".to_string(),
+                suggestion: "Ensure posting has a valid document ID".to_string(),
+            });
+        }
+
+        // Validate coordinate ranges
+        if posting.length == 0 {
+            return Err(ShardexError::InvalidPostingData {
+                reason: "Posting length cannot be zero".to_string(),
+                suggestion: "Provide a posting with positive length".to_string(),
+            });
+        }
+
+        // Check for potential overflow
+        let end_offset = posting.start as u64 + posting.length as u64;
+        if end_offset > u32::MAX as u64 {
+            return Err(ShardexError::InvalidPostingData {
+                reason: "Posting coordinates overflow u32 range".to_string(),
+                suggestion: "Use smaller start + length values".to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Validate consistency across WAL, shards, and index
@@ -1742,6 +1865,28 @@ impl Shardex for ShardexImpl {
         self.update_resource_metrics(&mut detailed_stats).await?;
 
         Ok(detailed_stats)
+    }
+
+    async fn get_document_text(&self, document_id: crate::identifiers::DocumentId) -> Result<String, ShardexError> {
+        // Validate document ID - check if it's a zero/nil value
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        if document_id == zero_document {
+            return Err(ShardexError::InvalidDocumentId {
+                reason: "Document ID cannot be nil/zero".to_string(),
+                suggestion: "Provide a valid document ID".to_string(),
+            });
+        }
+
+        // Delegate to index async method
+        self.index.get_document_text_async(document_id).await
+    }
+
+    async fn extract_text(&self, posting: &Posting) -> Result<String, ShardexError> {
+        // Validate posting structure
+        self.validate_posting(posting)?;
+
+        // Delegate to index async method
+        self.index.extract_text_from_posting_async(posting).await
     }
 }
 
@@ -3275,6 +3420,176 @@ mod tests {
             assert!(msg.contains("found 999"));
         } else {
             panic!("Expected Config error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_document_text_nil_document_id() {
+        let env = TestEnvironment::new("test_get_document_text_nil_document_id");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
+
+        let shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Test with nil/zero document ID
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        let result = shardex.get_document_text(zero_document).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidDocumentId { reason, suggestion }) = result {
+            assert!(reason.contains("Document ID cannot be nil/zero"));
+            assert!(suggestion.contains("Provide a valid document ID"));
+        } else {
+            panic!("Expected InvalidDocumentId error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_document_text_storage_disabled() {
+        let env = TestEnvironment::new("test_get_document_text_storage_disabled");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 1024, // Enable but minimal text storage
+            ..Default::default()
+        };
+        
+        // Create without text storage by using ShardexIndex directly
+        let mut shardex_config = config.clone();
+        shardex_config.max_document_text_size = 0; // This will create ShardexIndex without document_text_storage
+        let index = crate::shardex_index::ShardexIndex::create(shardex_config).unwrap();
+        
+        let shardex = ShardexImpl {
+            index,
+            config,
+            batch_processor: None,
+            layout: crate::layout::DirectoryLayout::new(env.path()),
+            config_manager: crate::config_persistence::ConfigurationManager::new(env.path()),
+            pending_shard_operations: Vec::new(),
+            performance_monitor: crate::monitoring::PerformanceMonitor::new(),
+        };
+        let document_id = crate::identifiers::DocumentId::new();
+
+        let result = shardex.get_document_text(document_id).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidInput { field, reason, suggestion }) = result {
+            assert_eq!(field, "text_storage");
+            assert!(reason.contains("Text storage not enabled"));
+            assert!(suggestion.contains("Enable text storage"));
+        } else {
+            panic!("Expected InvalidInput error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_text_nil_document_id() {
+        let env = TestEnvironment::new("test_extract_text_nil_document_id");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
+
+        let shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with nil document ID
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        let vector = vec![0.1, 0.2, 0.3];
+        let posting = Posting::new(zero_document, 0, 5, vector, 3).unwrap();
+
+        let result = shardex.extract_text(&posting).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidPostingData { reason, suggestion }) = result {
+            assert!(reason.contains("Posting document ID cannot be nil/zero"));
+            assert!(suggestion.contains("Ensure posting has a valid document ID"));
+        } else {
+            panic!("Expected InvalidPostingData error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_text_zero_length() {
+        let env = TestEnvironment::new("test_extract_text_zero_length");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
+
+        let shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with zero length
+        let document_id = crate::identifiers::DocumentId::new();
+        let vector = vec![0.1, 0.2, 0.3];
+        let posting = Posting::new(document_id, 0, 0, vector, 3).unwrap();
+
+        let result = shardex.extract_text(&posting).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidPostingData { reason, suggestion }) = result {
+            assert!(reason.contains("Posting length cannot be zero"));
+            assert!(suggestion.contains("Provide a posting with positive length"));
+        } else {
+            panic!("Expected InvalidPostingData error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_text_coordinate_overflow() {
+        let env = TestEnvironment::new("test_extract_text_coordinate_overflow");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
+
+        let shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with coordinates that would overflow u32
+        let document_id = crate::identifiers::DocumentId::new();
+        let vector = vec![0.1, 0.2, 0.3];
+        let posting = Posting::new(document_id, u32::MAX - 10, 20, vector, 3).unwrap();
+
+        let result = shardex.extract_text(&posting).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidPostingData { reason, suggestion }) = result {
+            assert!(reason.contains("Posting coordinates overflow u32 range"));
+            assert!(suggestion.contains("Use smaller start + length values"));
+        } else {
+            panic!("Expected InvalidPostingData error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_text_storage_disabled() {
+        let env = TestEnvironment::new("test_extract_text_storage_disabled");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 0, // Disable text storage
+            ..Default::default()
+        };
+
+        let shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create valid posting
+        let document_id = crate::identifiers::DocumentId::new();
+        let vector = vec![0.1, 0.2, 0.3];
+        let posting = Posting::new(document_id, 0, 5, vector, 3).unwrap();
+
+        let result = shardex.extract_text(&posting).await;
+        
+        assert!(result.is_err());
+        if let Err(ShardexError::InvalidInput { field, reason, suggestion }) = result {
+            assert_eq!(field, "text_storage");
+            assert!(reason.contains("Text storage not enabled"));
+            assert!(suggestion.contains("Enable text storage"));
+        } else {
+            panic!("Expected InvalidInput error, got: {:?}", result);
         }
     }
 }
