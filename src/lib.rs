@@ -50,6 +50,7 @@ pub mod deduplication;
 pub mod distance;
 pub mod document_text_entry;
 pub mod document_text_storage;
+pub mod document_transaction_coordinator;
 pub mod error;
 pub mod identifiers;
 pub mod integrity;
@@ -89,6 +90,7 @@ pub use document_text_entry::{
     TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
 };
 pub use document_text_storage::DocumentTextStorage;
+pub use document_transaction_coordinator::{DocumentTransactionCoordinator, TransactionStatistics};
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
@@ -105,7 +107,7 @@ pub use search_coordinator::{
 };
 pub use shard::{Shard, ShardMetadata};
 pub use shardex::{Shardex, ShardexImpl};
-pub use shardex_index::{IndexStatistics, ShardexIndex, ShardexMetadata};
+pub use shardex_index::{IndexConfig, IndexStatistics, ShardexIndex, ShardexMetadata};
 pub use structures::{
     FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader,
 };

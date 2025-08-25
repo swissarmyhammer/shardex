@@ -434,15 +434,25 @@ impl WalReplayer {
         tracing::debug!("Replaying store document text: {} ({} bytes)", 
                        document_id, text.len());
         
+        // Increment counter for store operations
+        self.recovery_stats.text_store_operations += 1;
+        
         // Apply to index-level text storage using public API
         match self.shardex_index.store_document_text(document_id, text) {
             Ok(()) => {
                 tracing::debug!("Successfully replayed text storage for document {}", document_id);
+                // Update bytes replayed on success
+                self.recovery_stats.total_text_bytes_replayed += text.len() as u64;
                 Ok(())
             }
             Err(e) => {
                 tracing::error!("Failed to replay text storage for document {}: {}", document_id, e);
                 self.recovery_stats.text_storage_errors += 1;
+                
+                // Add error to errors_encountered for proper error tracking
+                self.recovery_stats.add_error(format!(
+                    "Text storage error for document {}: {}", document_id, e
+                ));
                 
                 // Attempt recovery based on error type
                 self.handle_text_storage_error(&e, document_id, text)?;
@@ -455,6 +465,9 @@ impl WalReplayer {
     fn replay_delete_document_text(&mut self, document_id: DocumentId) -> Result<(), ShardexError> {
         tracing::debug!("Replaying delete document text: {}", document_id);
         
+        // Increment counter for delete operations
+        self.recovery_stats.text_delete_operations += 1;
+        
         // For append-only storage, deletions are typically logical
         // Since DocumentTextStorage doesn't have a delete method yet, we'll log the operation
         // In a full implementation, this would call a deletion method
@@ -464,6 +477,9 @@ impl WalReplayer {
             Ok(())
         } else {
             tracing::warn!("WAL contains text deletion for document {} but text storage not enabled", document_id);
+            self.recovery_stats.add_error(format!(
+                "WAL contains text deletion for document {} but text storage not enabled", document_id
+            ));
             Ok(())
         }
     }
@@ -889,7 +905,7 @@ mod tests {
         
         // The error message should indicate text storage is not enabled
         let has_text_storage_error = stats.errors_encountered.iter()
-            .any(|msg| msg.contains("text storage not enabled"));
+            .any(|msg| msg.to_lowercase().contains("text storage not enabled"));
         assert!(has_text_storage_error, "Should have specific error about text storage not enabled");
     }
 
