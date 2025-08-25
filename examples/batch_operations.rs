@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Adding increment {} of 10 documents...", i + 1);
         let increment = generate_document_batch(TOTAL_DOCS + i * 10, 10, 256);
         index.add_postings(increment).await?;
-        
+
         if i % 2 == 0 {
             index.flush().await?;
         }
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             current_stats.total_postings,
             current_stats.memory_usage as f64 / 1024.0 / 1024.0
         );
-        
+
         sleep(Duration::from_millis(200)).await;
     }
 
@@ -161,12 +161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let results = index.search(&query_vector, k, None).await?;
         let search_time = search_start.elapsed();
 
-        println!(
-            "  k={}: {:?} ({} results)",
-            k,
-            search_time,
-            results.len()
-        );
+        println!("  k={}: {:?} ({} results)", k, search_time, results.len());
     }
 
     // Example 5: Final statistics summary
@@ -183,7 +178,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         detailed_stats.memory_usage as f64 / 1024.0 / 1024.0
     );
     println!(
-        "  Disk usage: {:.2} MB", 
+        "  Disk usage: {:.2} MB",
         detailed_stats.disk_usage as f64 / 1024.0 / 1024.0
     );
     println!(

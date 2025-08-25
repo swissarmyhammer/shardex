@@ -1258,7 +1258,7 @@ impl Shard {
         // Create two new shards with appropriate capacity
         let unique_count = unique_postings.len();
         let has_duplicates = self.current_count() > unique_count;
-        
+
         let new_capacity = if has_duplicates {
             // For append-only scenarios, we need extra buffer for clustering imbalance
             let min_capacity_needed = (unique_count + 1) / 2 + 5;
@@ -2166,11 +2166,11 @@ mod tests {
 
         // Should return 2 unique postings (one for each document_id)
         assert_eq!(results.len(), 2);
-        
+
         // Find the results by document_id
         let doc1_result = results.iter().find(|r| r.document_id == doc_id1).unwrap();
         let doc2_result = results.iter().find(|r| r.document_id == doc_id2).unwrap();
-        
+
         // doc_id1 should have the updated vector [0.5, 0.5] (most recent version)
         assert_eq!(doc1_result.start, 100);
         assert_eq!(doc1_result.length, 50);
@@ -3038,7 +3038,8 @@ mod tests {
         // Add some "updated" postings with same document_id, start, length (append-only updates)
         for i in [1, 3, 5] {
             let updated_vector = vec![(i + 100) as f32, (i + 100) as f32];
-            let updated_posting = Posting::new(doc_ids[i], (i * 100) as u32, 50, updated_vector, 2).unwrap();
+            let updated_posting =
+                Posting::new(doc_ids[i], (i * 100) as u32, 50, updated_vector, 2).unwrap();
             shard.add_posting(updated_posting).unwrap();
         }
 
