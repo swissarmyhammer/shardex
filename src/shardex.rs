@@ -3426,9 +3426,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_document_text_nil_document_id() {
         let env = TestEnvironment::new("test_get_document_text_nil_document_id");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 10 * 1024 * 1024; // Enable text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
 
         let shardex = ShardexImpl::create(config).await.unwrap();
 
@@ -3448,21 +3450,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_document_text_storage_disabled() {
         let env = TestEnvironment::new("test_get_document_text_storage_disabled");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 1024; // Enable but minimal text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 1024, // Enable but minimal text storage
+            ..Default::default()
+        };
         
         // Create without text storage by using ShardexIndex directly
         let mut shardex_config = config.clone();
         shardex_config.max_document_text_size = 0; // This will create ShardexIndex without document_text_storage
         let index = crate::shardex_index::ShardexIndex::create(shardex_config).unwrap();
         
-        let mut shardex = ShardexImpl {
+        let shardex = ShardexImpl {
             index,
             config,
             batch_processor: None,
-            layout: crate::layout::DirectoryLayout::new(&env.path()),
-            config_manager: crate::config_persistence::ConfigurationManager::new(&env.path()),
+            layout: crate::layout::DirectoryLayout::new(env.path()),
+            config_manager: crate::config_persistence::ConfigurationManager::new(env.path()),
             pending_shard_operations: Vec::new(),
             performance_monitor: crate::monitoring::PerformanceMonitor::new(),
         };
@@ -3483,9 +3487,11 @@ mod tests {
     #[tokio::test]
     async fn test_extract_text_nil_document_id() {
         let env = TestEnvironment::new("test_extract_text_nil_document_id");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 10 * 1024 * 1024; // Enable text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
 
         let shardex = ShardexImpl::create(config).await.unwrap();
 
@@ -3508,9 +3514,11 @@ mod tests {
     #[tokio::test]
     async fn test_extract_text_zero_length() {
         let env = TestEnvironment::new("test_extract_text_zero_length");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 10 * 1024 * 1024; // Enable text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
 
         let shardex = ShardexImpl::create(config).await.unwrap();
 
@@ -3533,9 +3541,11 @@ mod tests {
     #[tokio::test]
     async fn test_extract_text_coordinate_overflow() {
         let env = TestEnvironment::new("test_extract_text_coordinate_overflow");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 10 * 1024 * 1024; // Enable text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024, // Enable text storage
+            ..Default::default()
+        };
 
         let shardex = ShardexImpl::create(config).await.unwrap();
 
@@ -3558,9 +3568,11 @@ mod tests {
     #[tokio::test]
     async fn test_extract_text_storage_disabled() {
         let env = TestEnvironment::new("test_extract_text_storage_disabled");
-        let mut config = ShardexConfig::default();
-        config.directory_path = env.path().to_path_buf();
-        config.max_document_text_size = 0; // Disable text storage
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 0, // Disable text storage
+            ..Default::default()
+        };
 
         let shardex = ShardexImpl::create(config).await.unwrap();
 
