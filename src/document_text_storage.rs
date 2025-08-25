@@ -1087,7 +1087,7 @@ mod tests {
 
         // Initially should have low utilization (header overhead)
         let initial_ratio = storage.utilization_ratio();
-        assert!(initial_ratio >= 0.0 && initial_ratio <= 1.0);
+        assert!((0.0..=1.0).contains(&initial_ratio));
 
         // Add some text
         let doc_id = DocumentId::new();
@@ -1096,7 +1096,7 @@ mod tests {
 
         let final_ratio = storage.utilization_ratio();
         assert!(final_ratio > initial_ratio);
-        assert!(final_ratio >= 0.0 && final_ratio <= 1.0);
+        assert!((0.0..=1.0).contains(&final_ratio));
     }
 
     #[test]
