@@ -565,7 +565,21 @@ impl WalReplayer {
         Ok(shard_id)
     }
 
-    /// Validate text storage consistency after replay
+    /// Validates text storage consistency after WAL replay operations.
+    ///
+    /// This method performs post-replay validation to ensure that the text storage
+    /// is in a consistent state after all WAL operations have been replayed. It
+    /// checks storage statistics and validates basic integrity.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If validation passes or text storage is not enabled
+    /// * `Err(ShardexError)` - If validation detects inconsistencies or errors
+    ///
+    /// # Errors
+    ///
+    /// Returns `ShardexError::TextCorruption` if text storage validation fails
+    /// or if the storage is in an inconsistent state.
     pub fn validate_text_storage_after_replay(&self) -> Result<(), ShardexError> {
         if self.shardex_index.has_text_storage() {
             tracing::info!("Validating text storage consistency after WAL replay");
@@ -600,7 +614,31 @@ impl WalReplayer {
         }
     }
 
-    /// Get comprehensive recovery statistics including text operations
+    /// Returns comprehensive WAL recovery statistics as a formatted string.
+    ///
+    /// This method generates a detailed report of all WAL replay operations,
+    /// including both traditional shard operations (AddPosting, RemoveDocument)
+    /// and text storage operations (StoreDocumentText, DeleteDocumentText).
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing:
+    /// - Segment and transaction processing counts
+    /// - Operation counts by type
+    /// - Text operation metrics (operations and bytes processed)
+    /// - Error counts and recovery status
+    /// - Timing information where available
+    ///
+    /// # Example Output
+    ///
+    /// ```text
+    /// WAL Recovery Statistics:
+    /// - Segments processed: 5
+    /// - Transactions replayed: 150
+    /// - Total operations applied: 200
+    /// - Text store operations: 25
+    /// - Text bytes replayed: 1048576
+    /// ```
     pub fn get_comprehensive_stats(&self) -> String {
         let stats = &self.recovery_stats;
         
@@ -847,7 +885,7 @@ mod tests {
 
         // Verify that an error was logged (check error messages)
         let stats = replayer.recovery_stats();
-        assert!(stats.errors_encountered.len() > 0, "Should have logged an error for missing text storage");
+        assert!(!stats.errors_encountered.is_empty(), "Should have logged an error for missing text storage");
         
         // The error message should indicate text storage is not enabled
         let has_text_storage_error = stats.errors_encountered.iter()
