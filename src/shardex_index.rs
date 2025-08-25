@@ -1762,6 +1762,28 @@ impl ShardexIndex {
         }
     }
 
+    /// Store document text content
+    ///
+    /// Stores text content for the specified document ID.
+    ///
+    /// # Arguments
+    /// * `document_id` - The unique identifier for the document
+    /// * `text` - The text content to store
+    ///
+    /// # Returns
+    /// * `Ok(())` - Text successfully stored
+    /// * `Err(ShardexError)` - Text storage not enabled, text too large, or storage error
+    pub fn store_document_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
+        match &mut self.document_text_storage {
+            Some(storage) => storage.store_text(document_id, text),
+            None => Err(ShardexError::InvalidInput {
+                field: "text_storage".to_string(),
+                reason: "Text storage not enabled for this index".to_string(),
+                suggestion: "Enable text storage in configuration".to_string(),
+            }),
+        }
+    }
+
     /// Extract text from posting coordinates
     ///
     /// Uses the posting's document_id, start, and length to extract a specific

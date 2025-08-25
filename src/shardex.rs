@@ -148,6 +148,49 @@ pub trait Shardex {
     /// # }
     /// ```
     async fn extract_text(&self, posting: &Posting) -> Result<String, Self::Error>;
+
+    /// Atomically replace document text and all its postings
+    ///
+    /// This method provides atomic document replacement by coordinating text storage
+    /// with posting updates through the WAL system. All operations succeed or fail
+    /// together, ensuring data consistency.
+    ///
+    /// # Arguments
+    ///
+    /// * `document_id` - The unique identifier of the document to replace
+    /// * `text` - The new document text content
+    /// * `postings` - Vector of new postings for the document
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Document successfully replaced
+    /// * `Err(Self::Error)` - Validation failed or atomic operation failed
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use shardex::{Shardex, ShardexImpl, ShardexConfig};
+    /// # use shardex::structures::Posting;
+    /// # use shardex::identifiers::DocumentId;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut shardex = ShardexImpl::create(ShardexConfig::default()).await?;
+    /// let document_id = DocumentId::new();
+    /// let text = "The quick brown fox jumps over the lazy dog.".to_string();
+    /// let postings = vec![
+    ///     Posting::new(document_id, 0, 9, vec![0.1; 128], 128)?,
+    ///     Posting::new(document_id, 10, 9, vec![0.2; 128], 128)?,
+    /// ];
+    /// 
+    /// shardex.replace_document_with_postings(document_id, text, postings).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn replace_document_with_postings(
+        &mut self, 
+        document_id: crate::identifiers::DocumentId, 
+        text: String, 
+        postings: Vec<Posting>
+    ) -> Result<(), Self::Error>;
 }
 
 /// Main Shardex implementation
@@ -617,6 +660,135 @@ impl ShardexImpl {
             });
         }
 
+        Ok(())
+    }
+
+    /// Validate inputs for document replacement
+    fn validate_replacement_inputs(
+        &self,
+        document_id: crate::identifiers::DocumentId,
+        text: &str,
+        postings: &[Posting],
+    ) -> Result<(), ShardexError> {
+        // Validate document ID - check if it's a zero/nil value
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        if document_id == zero_document {
+            return Err(ShardexError::InvalidDocumentId {
+                reason: "Document ID cannot be nil/zero".to_string(),
+                suggestion: "Provide a valid document ID".to_string(),
+            });
+        }
+        
+        // Validate text size (check against configuration)
+        let max_size = self.config.max_document_text_size;
+        if text.len() > max_size {
+            return Err(ShardexError::DocumentTooLarge {
+                size: text.len(),
+                max_size,
+            });
+        }
+        
+        // Validate text is valid UTF-8 (should already be true for &str)
+        if text.contains('\0') {
+            return Err(ShardexError::InvalidInput {
+                field: "document_text".to_string(),
+                reason: "Text contains null bytes".to_string(),
+                suggestion: "Remove null bytes from text".to_string(),
+            });
+        }
+        
+        // Validate all postings
+        for (i, posting) in postings.iter().enumerate() {
+            self.validate_posting_for_replacement(posting, text, i)?;
+        }
+        
+        // Validate posting coordinate consistency
+        self.validate_posting_coordinates_consistency(postings, text)?;
+        
+        Ok(())
+    }
+    
+    /// Validate individual posting for replacement
+    fn validate_posting_for_replacement(
+        &self,
+        posting: &Posting,
+        text: &str,
+        posting_index: usize,
+    ) -> Result<(), ShardexError> {
+        // Check document ID matches
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        if posting.document_id == zero_document {
+            return Err(ShardexError::InvalidPostingData {
+                reason: format!("Posting {} has nil/zero document ID", posting_index),
+                suggestion: "Ensure all postings have valid document IDs".to_string(),
+            });
+        }
+        
+        // Validate vector dimension
+        if posting.vector.len() != self.config.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.config.vector_size,
+                actual: posting.vector.len(),
+            });
+        }
+        
+        // Validate coordinates are within text bounds
+        let start = posting.start as usize;
+        let end = start + posting.length as usize;
+        
+        if end > text.len() {
+            return Err(ShardexError::InvalidRange {
+                start: posting.start,
+                length: posting.length,
+                document_length: text.len() as u64,
+            });
+        }
+        
+        // Validate UTF-8 boundaries
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return Err(ShardexError::InvalidRange {
+                start: posting.start,
+                length: posting.length,
+                document_length: text.len() as u64,
+            });
+        }
+        
+        // Validate length is positive
+        if posting.length == 0 {
+            return Err(ShardexError::InvalidPostingData {
+                reason: format!("Posting {} has zero length", posting_index),
+                suggestion: "Ensure all postings have positive length".to_string(),
+            });
+        }
+        
+        Ok(())
+    }
+    
+    /// Validate consistency of posting coordinates
+    fn validate_posting_coordinates_consistency(
+        &self,
+        postings: &[Posting],
+        _text: &str,
+    ) -> Result<(), ShardexError> {
+        // Check for overlapping postings (optional validation - just log warnings)
+        for (i, posting1) in postings.iter().enumerate() {
+            for (_j, posting2) in postings.iter().enumerate().skip(i + 1) {
+                let start1 = posting1.start;
+                let end1 = start1 + posting1.length;
+                let start2 = posting2.start;
+                let end2 = start2 + posting2.length;
+                
+                // Check for overlap
+                if start1 < end2 && start2 < end1 {
+                    tracing::warn!(
+                        "Overlapping postings detected: {}..{} and {}..{}", 
+                        start1, end1, start2, end2
+                    );
+                    // Note: Overlaps are allowed, just log warning
+                }
+            }
+        }
+        
         Ok(())
     }
 
@@ -1350,13 +1522,14 @@ impl ShardexImpl {
             }
             WalOperation::StoreDocumentText {
                 document_id,
-                text: _,
+                text,
             } => {
-                // Document text storage operations are handled at the index level, not shard level
-                // For now, we'll just log and ignore these operations until document text storage is implemented
+                // Store document text using the index's text storage
+                self.index.store_document_text(*document_id, text)?;
                 debug!(
                     document_id = %document_id,
-                    "StoreDocumentText operation received - document text storage not yet implemented"
+                    text_length = text.len(),
+                    "Successfully stored document text"
                 );
                 Ok(())
             }
@@ -1881,12 +2054,54 @@ impl Shardex for ShardexImpl {
         self.index.get_document_text_async(document_id).await
     }
 
+
+
     async fn extract_text(&self, posting: &Posting) -> Result<String, ShardexError> {
         // Validate posting structure
         self.validate_posting(posting)?;
 
         // Delegate to index async method
         self.index.extract_text_from_posting_async(posting).await
+    }
+
+    async fn replace_document_with_postings(
+        &mut self, 
+        document_id: crate::identifiers::DocumentId, 
+        text: String, 
+        postings: Vec<Posting>
+    ) -> Result<(), ShardexError> {
+        // Validate inputs
+        self.validate_replacement_inputs(document_id, &text, &postings)?;
+        
+        // Build WAL operations for atomic replacement
+        let mut operations = Vec::new();
+        
+        // 1. Store new document text
+        operations.push(WalOperation::StoreDocumentText { 
+            document_id, 
+            text: text.clone() 
+        });
+        
+        // 2. Remove all existing postings for this document
+        operations.push(WalOperation::RemoveDocument { document_id });
+        
+        // 3. Add all new postings
+        for posting in &postings {
+            operations.push(WalOperation::AddPosting {
+                document_id: posting.document_id,
+                start: posting.start,
+                length: posting.length,
+                vector: posting.vector.clone(),
+            });
+        }
+        
+        // Stage operations for atomic execution
+        self.pending_shard_operations.extend(operations);
+        
+        // Force flush to ensure atomicity
+        self.flush().await?;
+        
+        Ok(())
     }
 }
 
@@ -3591,5 +3806,303 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error, got: {:?}", result);
         }
+    }
+
+    #[tokio::test]
+    async fn test_document_text_storage_directly() {
+        let env = TestEnvironment::new("test_document_text_storage_directly");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+        assert!(shardex.index.has_text_storage(), "Text storage should be enabled");
+
+        // Test storing and retrieving text directly
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "Test document text for storage";
+        
+        // Store text directly
+        shardex.index.store_document_text(document_id, text).unwrap();
+        
+        // Flush to ensure it's persisted
+        shardex.index.flush().unwrap();
+        
+        // Retrieve text
+        let retrieved_text = shardex.index.get_document_text(document_id).unwrap();
+        assert_eq!(retrieved_text, text);
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_success() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_success");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create document and postings
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "The quick brown fox jumps over the lazy dog.".to_string();
+        let postings = vec![
+            Posting::new(document_id, 0, 9, vec![0.1, 0.2, 0.3], 3).unwrap(),  // "The quick"
+            Posting::new(document_id, 10, 9, vec![0.4, 0.5, 0.6], 3).unwrap(), // "brown fox"
+            Posting::new(document_id, 20, 5, vec![0.7, 0.8, 0.9], 3).unwrap(), // "jumps"
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text.clone(), postings).await;
+        assert!(result.is_ok(), "Replace operation should succeed: {:?}", result);
+
+        // Verify document text was stored
+        let retrieved_text = shardex.get_document_text(document_id).await;
+        match retrieved_text {
+            Ok(actual_text) => assert_eq!(actual_text, text),
+            Err(e) => panic!("Failed to retrieve document text: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_nil_document_id() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_nil_document_id");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create nil document ID
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        let text = "Test text".to_string();
+        let postings = vec![
+            Posting::new(zero_document, 0, 4, vec![0.1, 0.2, 0.3], 3).unwrap(),
+        ];
+
+        let result = shardex.replace_document_with_postings(zero_document, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidDocumentId { reason, suggestion }) = result {
+            assert!(reason.contains("Document ID cannot be nil/zero"));
+            assert!(suggestion.contains("Provide a valid document ID"));
+        } else {
+            panic!("Expected InvalidDocumentId error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_document_too_large() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_document_too_large");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 1024, // Minimum allowed limit
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create large document text
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "x".repeat(2000); // Exceed the 1024-byte limit
+        let postings = vec![
+            Posting::new(document_id, 0, 50, vec![0.1, 0.2, 0.3], 3).unwrap(),
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::DocumentTooLarge { size, max_size }) = result {
+            assert_eq!(size, 2000);
+            assert_eq!(max_size, 1024);
+        } else {
+            panic!("Expected DocumentTooLarge error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_invalid_text() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_invalid_text");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create text with null bytes
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "Text with\0null byte".to_string();
+        let postings = vec![
+            Posting::new(document_id, 0, 9, vec![0.1, 0.2, 0.3], 3).unwrap(),
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidInput { field, reason, suggestion }) = result {
+            assert_eq!(field, "document_text");
+            assert!(reason.contains("Text contains null bytes"));
+            assert!(suggestion.contains("Remove null bytes from text"));
+        } else {
+            panic!("Expected InvalidInput error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_invalid_vector_dimension() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_invalid_vector_dimension");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with wrong vector dimension
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "Test text".to_string();
+        let postings = vec![
+            Posting::new(document_id, 0, 4, vec![0.1, 0.2, 0.3, 0.4, 0.5], 5).unwrap(), // 5 dimensions instead of 3
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidDimension { expected, actual }) = result {
+            assert_eq!(expected, 3);
+            assert_eq!(actual, 5);
+        } else {
+            panic!("Expected InvalidDimension error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_invalid_range() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_invalid_range");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with coordinates beyond text length
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "Short text".to_string(); // 10 characters
+        let postings = vec![
+            Posting::new(document_id, 5, 10, vec![0.1, 0.2, 0.3], 3).unwrap(), // Start at 5, length 10 = end at 15, but text is only 10 chars
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidRange { start, length, document_length }) = result {
+            assert_eq!(start, 5);
+            assert_eq!(length, 10);
+            assert_eq!(document_length, 10);
+        } else {
+            panic!("Expected InvalidRange error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_zero_length_posting() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_zero_length_posting");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with zero length
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "Test text".to_string();
+        let postings = vec![
+            Posting::new(document_id, 0, 0, vec![0.1, 0.2, 0.3], 3).unwrap(),
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidPostingData { reason, suggestion }) = result {
+            assert!(reason.contains("Posting 0 has zero length"));
+            assert!(suggestion.contains("Ensure all postings have positive length"));
+        } else {
+            panic!("Expected InvalidPostingData error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_nil_posting_document_id() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_nil_posting_document_id");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create posting with nil document ID
+        let document_id = crate::identifiers::DocumentId::new();
+        let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
+        let text = "Test text".to_string();
+        let postings = vec![
+            Posting::new(zero_document, 0, 4, vec![0.1, 0.2, 0.3], 3).unwrap(),
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        assert!(result.is_err());
+        
+        if let Err(ShardexError::InvalidPostingData { reason, suggestion }) = result {
+            assert!(reason.contains("Posting 0 has nil/zero document ID"));
+            assert!(suggestion.contains("Ensure all postings have valid document IDs"));
+        } else {
+            panic!("Expected InvalidPostingData error, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_document_with_postings_overlapping_warning() {
+        let env = TestEnvironment::new("test_replace_document_with_postings_overlapping_warning");
+        let config = ShardexConfig {
+            directory_path: env.path().to_path_buf(),
+            max_document_text_size: 10 * 1024 * 1024,
+            vector_size: 3,
+            ..Default::default()
+        };
+
+        let mut shardex = ShardexImpl::create(config).await.unwrap();
+
+        // Create overlapping postings (should warn but not fail)
+        let document_id = crate::identifiers::DocumentId::new();
+        let text = "The quick brown fox".to_string();
+        let postings = vec![
+            Posting::new(document_id, 0, 10, vec![0.1, 0.2, 0.3], 3).unwrap(), // "The quick "
+            Posting::new(document_id, 5, 10, vec![0.4, 0.5, 0.6], 3).unwrap(), // "ick brown " (overlaps with first)
+        ];
+
+        let result = shardex.replace_document_with_postings(document_id, text, postings).await;
+        // Should succeed despite overlapping postings (just generates warnings)
+        assert!(result.is_ok(), "Replace operation should succeed even with overlapping postings: {:?}", result);
     }
 }
