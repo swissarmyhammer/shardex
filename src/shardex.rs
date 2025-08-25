@@ -242,6 +242,7 @@ impl ShardexImpl {
             batch_write_interval_ms: self.config.batch_write_interval_ms,
             max_operations_per_batch,
             max_batch_size_bytes,
+            max_document_text_size: self.config.max_document_text_size,
         }
     }
 
@@ -1219,6 +1220,27 @@ impl ShardexImpl {
                     document_id = %document_id,
                     removed_count = total_removed,
                     "Completed document removal from shards"
+                );
+                Ok(())
+            }
+            WalOperation::StoreDocumentText {
+                document_id,
+                text: _,
+            } => {
+                // Document text storage operations are handled at the index level, not shard level
+                // For now, we'll just log and ignore these operations until document text storage is implemented
+                debug!(
+                    document_id = %document_id,
+                    "StoreDocumentText operation received - document text storage not yet implemented"
+                );
+                Ok(())
+            }
+            WalOperation::DeleteDocumentText { document_id } => {
+                // Document text deletion operations are handled at the index level, not shard level
+                // For now, we'll just log and ignore these operations until document text storage is implemented
+                debug!(
+                    document_id = %document_id,
+                    "DeleteDocumentText operation received - document text storage not yet implemented"
                 );
                 Ok(())
             }

@@ -268,6 +268,12 @@ impl WalReplayer {
                 WalOperation::RemoveDocument { .. } => {
                     self.recovery_stats.remove_document_operations += 1;
                 }
+                WalOperation::StoreDocumentText { .. } => {
+                    // TODO: Add counter for document text operations when recovery stats are extended
+                }
+                WalOperation::DeleteDocumentText { .. } => {
+                    // TODO: Add counter for document text operations when recovery stats are extended
+                }
             }
         }
 
@@ -363,6 +369,27 @@ impl WalReplayer {
                     );
                 }
 
+                Ok(())
+            }
+            WalOperation::StoreDocumentText {
+                document_id,
+                text: _,
+            } => {
+                // Document text storage operations will be handled at the index level
+                // For now, we'll just log and ignore these operations during WAL replay
+                info!(
+                    document_id = %document_id,
+                    "StoreDocumentText operation during WAL replay - document text storage not yet implemented"
+                );
+                Ok(())
+            }
+            WalOperation::DeleteDocumentText { document_id } => {
+                // Document text deletion operations will be handled at the index level
+                // For now, we'll just log and ignore these operations during WAL replay
+                info!(
+                    document_id = %document_id,
+                    "DeleteDocumentText operation during WAL replay - document text storage not yet implemented"
+                );
                 Ok(())
             }
         }

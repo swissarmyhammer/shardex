@@ -24,6 +24,13 @@ pub enum WalOperation {
     },
     /// Remove all postings for a document
     RemoveDocument { document_id: DocumentId },
+    /// Store document text (part of atomic replace operation)
+    StoreDocumentText {
+        document_id: DocumentId,
+        text: String,
+    },
+    /// Delete document text (cleanup operation)
+    DeleteDocumentText { document_id: DocumentId },
 }
 
 /// A transaction containing batched WAL operations
@@ -68,6 +75,8 @@ impl WalOperation {
         match self {
             WalOperation::AddPosting { document_id, .. } => *document_id,
             WalOperation::RemoveDocument { document_id } => *document_id,
+            WalOperation::StoreDocumentText { document_id, .. } => *document_id,
+            WalOperation::DeleteDocumentText { document_id } => *document_id,
         }
     }
 
@@ -81,6 +90,16 @@ impl WalOperation {
         matches!(self, WalOperation::RemoveDocument { .. })
     }
 
+    /// Check if this is a StoreDocumentText operation
+    pub fn is_store_document_text(&self) -> bool {
+        matches!(self, WalOperation::StoreDocumentText { .. })
+    }
+
+    /// Check if this is a DeleteDocumentText operation
+    pub fn is_delete_document_text(&self) -> bool {
+        matches!(self, WalOperation::DeleteDocumentText { .. })
+    }
+
     /// Estimate the serialized size of this operation in bytes
     pub fn estimated_serialized_size(&self) -> usize {
         match self {
@@ -92,11 +111,23 @@ impl WalOperation {
                 // operation tag (1) + document_id (16)
                 1 + 16
             }
+            WalOperation::StoreDocumentText { text, .. } => {
+                // operation tag (1) + document_id (16) + text length (4) + text data (UTF-8 bytes)
+                1 + 16 + 4 + text.len()
+            }
+            WalOperation::DeleteDocumentText { .. } => {
+                // operation tag (1) + document_id (16)
+                1 + 16
+            }
         }
     }
 
     /// Validate the operation data
-    pub fn validate(&self, expected_vector_dimension: Option<usize>) -> Result<(), ShardexError> {
+    pub fn validate(
+        &self,
+        expected_vector_dimension: Option<usize>,
+        max_document_text_size: usize,
+    ) -> Result<(), ShardexError> {
         match self {
             WalOperation::AddPosting {
                 vector,
@@ -143,6 +174,27 @@ impl WalOperation {
             }
             WalOperation::RemoveDocument { .. } => {
                 // RemoveDocument operations are always valid if document_id is valid
+                // DocumentId validation is handled by the type system
+            }
+            WalOperation::StoreDocumentText { text, .. } => {
+                // String type in Rust guarantees valid UTF-8, so we don't need to check
+                // But we should validate the text is not empty
+                if text.is_empty() {
+                    return Err(ShardexError::Wal(
+                        "StoreDocumentText text cannot be empty".to_string(),
+                    ));
+                }
+
+                // Use the configured maximum document text size
+                if text.len() > max_document_text_size {
+                    return Err(ShardexError::DocumentTooLarge {
+                        size: text.len(),
+                        max_size: max_document_text_size,
+                    });
+                }
+            }
+            WalOperation::DeleteDocumentText { .. } => {
+                // DeleteDocumentText operations are always valid if document_id is valid
                 // DocumentId validation is handled by the type system
             }
         }
@@ -223,7 +275,7 @@ impl WalTransaction {
     }
 
     /// Validate all operations in the transaction
-    pub fn validate(&self, expected_vector_dimension: Option<usize>) -> Result<(), ShardexError> {
+    pub fn validate(&self, expected_vector_dimension: Option<usize>, max_document_text_size: usize) -> Result<(), ShardexError> {
         if self.operations.is_empty() {
             return Err(ShardexError::Wal(
                 "Transaction must contain at least one operation".to_string(),
@@ -232,7 +284,7 @@ impl WalTransaction {
 
         // Validate each operation
         for (i, operation) in self.operations.iter().enumerate() {
-            operation.validate(expected_vector_dimension).map_err(|e| {
+            operation.validate(expected_vector_dimension, max_document_text_size).map_err(|e| {
                 ShardexError::Wal(format!(
                     "Operation {} in transaction {} is invalid: {}",
                     i, self.id, e
@@ -405,6 +457,8 @@ pub struct BatchConfig {
     pub max_operations_per_batch: usize,
     /// Maximum size in bytes for a batch before forcing a flush
     pub max_batch_size_bytes: usize,
+    /// Maximum size for document text in bytes
+    pub max_document_text_size: usize,
 }
 
 impl Default for BatchConfig {
@@ -413,6 +467,7 @@ impl Default for BatchConfig {
             batch_write_interval_ms: 100,
             max_operations_per_batch: 1000,
             max_batch_size_bytes: 1024 * 1024, // 1MB
+            max_document_text_size: 10 * 1024 * 1024, // 10MB - matches ShardexConfig default
         }
     }
 }
@@ -476,7 +531,7 @@ impl WalBatchManager {
     /// Returns true if a flush is required due to batch size limits
     pub fn add_operation(&mut self, operation: WalOperation) -> Result<bool, ShardexError> {
         // Validate operation before adding
-        operation.validate(self.expected_vector_dimension)?;
+        operation.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
 
         let operation_size = operation.estimated_serialized_size();
 
@@ -510,7 +565,7 @@ impl WalBatchManager {
         let transaction_id = transaction.id;
 
         // Validate transaction
-        transaction.validate(self.expected_vector_dimension)?;
+        transaction.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
 
         // Write transaction using the provided function
         write_fn(&transaction)?;
@@ -762,11 +817,11 @@ mod tests {
             length: 50,
             vector: vec![1.0, 2.0, 3.0],
         };
-        assert!(valid_add.validate(Some(3)).is_ok());
-        assert!(valid_add.validate(None).is_ok());
+        assert!(valid_add.validate(Some(3), 10 * 1024 * 1024).is_ok());
+        assert!(valid_add.validate(None, 10 * 1024 * 1024).is_ok());
 
         // Invalid dimension
-        assert!(valid_add.validate(Some(4)).is_err());
+        assert!(valid_add.validate(Some(4), 10 * 1024 * 1024).is_err());
 
         // Invalid vector with NaN
         let invalid_nan = WalOperation::AddPosting {
@@ -775,7 +830,7 @@ mod tests {
             length: 50,
             vector: vec![1.0, f32::NAN, 3.0],
         };
-        assert!(invalid_nan.validate(None).is_err());
+        assert!(invalid_nan.validate(None, 10 * 1024 * 1024).is_err());
 
         // Invalid vector with infinity
         let invalid_inf = WalOperation::AddPosting {
@@ -784,7 +839,7 @@ mod tests {
             length: 50,
             vector: vec![1.0, f32::INFINITY, 3.0],
         };
-        assert!(invalid_inf.validate(None).is_err());
+        assert!(invalid_inf.validate(None, 10 * 1024 * 1024).is_err());
 
         // Zero length
         let zero_length = WalOperation::AddPosting {
@@ -793,7 +848,7 @@ mod tests {
             length: 0,
             vector: vec![1.0, 2.0, 3.0],
         };
-        assert!(zero_length.validate(None).is_err());
+        assert!(zero_length.validate(None, 10 * 1024 * 1024).is_err());
 
         // Empty vector
         let empty_vector = WalOperation::AddPosting {
@@ -802,7 +857,7 @@ mod tests {
             length: 50,
             vector: vec![],
         };
-        assert!(empty_vector.validate(None).is_err());
+        assert!(empty_vector.validate(None, 10 * 1024 * 1024).is_err());
 
         // Overflow in start + length
         let overflow = WalOperation::AddPosting {
@@ -811,14 +866,14 @@ mod tests {
             length: 1,
             vector: vec![1.0, 2.0, 3.0],
         };
-        assert!(overflow.validate(None).is_err());
+        assert!(overflow.validate(None, 10 * 1024 * 1024).is_err());
 
         // Valid RemoveDocument (always valid)
         let remove_doc = WalOperation::RemoveDocument {
             document_id: doc_id,
         };
-        assert!(remove_doc.validate(None).is_ok());
-        assert!(remove_doc.validate(Some(128)).is_ok());
+        assert!(remove_doc.validate(None, 10 * 1024 * 1024).is_ok());
+        assert!(remove_doc.validate(Some(128), 10 * 1024 * 1024).is_ok());
     }
 
     #[test]
@@ -1157,6 +1212,7 @@ mod tests {
             batch_write_interval_ms: 1000, // Long interval
             max_operations_per_batch: 2,   // Small limit for testing
             max_batch_size_bytes: 1024 * 1024,
+            max_document_text_size: 10 * 1024 * 1024,
         };
         let mut manager = WalBatchManager::new(config, Some(3));
 
@@ -1252,6 +1308,7 @@ mod tests {
             batch_write_interval_ms: 50,
             max_operations_per_batch: 3,
             max_batch_size_bytes: 1024,
+            max_document_text_size: 10 * 1024 * 1024,
         };
 
         let mut manager = WalBatchManager::new(config, Some(3));
@@ -1345,7 +1402,7 @@ mod tests {
             operation_count_clone.store(transaction.operations.len(), Ordering::SeqCst);
 
             // Verify transaction integrity
-            transaction.validate(Some(3))?;
+            transaction.validate(Some(3), 10 * 1024 * 1024)?;
             transaction.verify_checksum()?;
 
             Ok(())
@@ -1433,10 +1490,10 @@ mod tests {
             vector: vec![1.0, 2.0, 3.0],
         }];
         let valid_transaction = WalTransaction::new(valid_ops).unwrap();
-        assert!(valid_transaction.validate(Some(3)).is_ok());
+        assert!(valid_transaction.validate(Some(3), 10 * 1024 * 1024).is_ok());
 
         // Invalid vector dimension
-        assert!(valid_transaction.validate(Some(4)).is_err());
+        assert!(valid_transaction.validate(Some(4), 10 * 1024 * 1024).is_err());
 
         // Future timestamp should be rejected (create with manual timestamp)
         let future_time = SystemTime::now() + std::time::Duration::from_secs(3600); // 1 hour in future
@@ -1446,6 +1503,110 @@ mod tests {
         let future_transaction =
             WalTransaction::with_id_and_timestamp(TransactionId::new(), future_time, future_ops)
                 .unwrap();
-        assert!(future_transaction.validate(None).is_err());
+        assert!(future_transaction.validate(None, 10 * 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn test_document_text_wal_operations() {
+        let doc_id = DocumentId::new();
+        let text = "The quick brown fox jumps over the lazy dog.".to_string();
+
+        // Test StoreDocumentText operation
+        let store_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.clone(),
+        };
+
+        assert_eq!(store_op.document_id(), doc_id);
+        assert!(store_op.is_store_document_text());
+        assert!(!store_op.is_delete_document_text());
+        assert!(!store_op.is_add_posting());
+        assert!(!store_op.is_remove_document());
+
+        // Test DeleteDocumentText operation
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+
+        assert_eq!(delete_op.document_id(), doc_id);
+        assert!(delete_op.is_delete_document_text());
+        assert!(!delete_op.is_store_document_text());
+        assert!(!delete_op.is_add_posting());
+        assert!(!delete_op.is_remove_document());
+
+        // Test size estimation includes text content
+        let store_size = store_op.estimated_serialized_size();
+        let delete_size = delete_op.estimated_serialized_size();
+
+        assert!(store_size > delete_size);
+        assert!(store_size > text.len()); // Should include text plus overhead
+    }
+
+    #[test]
+    fn test_document_text_operation_validation() {
+        let doc_id = DocumentId::new();
+
+        // Valid text operation
+        let valid_text = "Hello, world!".to_string();
+        let valid_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: valid_text,
+        };
+        assert!(valid_op.validate(None, 10 * 1024 * 1024).is_ok());
+
+        // Test with configured max size
+        let large_text = "x".repeat(1000);
+        let large_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: large_text,
+        };
+
+        // Should be valid by default (no max size set)
+        assert!(large_op.validate(None, 10 * 1024 * 1024).is_ok());
+
+        // Delete operation should always be valid
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+        assert!(delete_op.validate(None, 10 * 1024 * 1024).is_ok());
+        assert!(delete_op.validate(Some(128), 10 * 1024 * 1024).is_ok());
+    }
+
+    #[test]
+    fn test_document_text_transaction_atomicity() {
+        let doc_id = DocumentId::new();
+        let text = "Updated document content".to_string();
+
+        // Create atomic replace transaction
+        let operations = vec![
+            WalOperation::StoreDocumentText {
+                document_id: doc_id,
+                text,
+            },
+            WalOperation::RemoveDocument {
+                document_id: doc_id,
+            },
+            WalOperation::AddPosting {
+                document_id: doc_id,
+                start: 0,
+                length: 7,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+        ];
+
+        let transaction = WalTransaction::new(operations).unwrap();
+        assert_eq!(transaction.operation_count(), 3);
+
+        let affected_docs = transaction.affected_document_ids();
+        assert_eq!(affected_docs.len(), 1);
+        assert_eq!(affected_docs[0], doc_id);
+
+        // Should validate successfully
+        assert!(transaction.validate(Some(3), 10 * 1024 * 1024).is_ok());
+
+        // Should serialize and deserialize correctly
+        let serialized = transaction.serialize().unwrap();
+        let deserialized = WalTransaction::deserialize(&serialized).unwrap();
+        assert_eq!(transaction.operations, deserialized.operations);
     }
 }

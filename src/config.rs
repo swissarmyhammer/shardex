@@ -195,6 +195,8 @@ pub struct ShardexConfig {
     pub bloom_filter_size: usize,
     /// Deduplication policy for search results
     pub deduplication_policy: DeduplicationPolicy,
+    /// Maximum size of document text in bytes (default 10MB)
+    pub max_document_text_size: usize,
 }
 
 impl Default for ShardexConfig {
@@ -210,6 +212,7 @@ impl Default for ShardexConfig {
             slop_factor_config: SlopFactorConfig::default(),
             bloom_filter_size: 1024,
             deduplication_policy: DeduplicationPolicy::default(),
+            max_document_text_size: 10 * 1024 * 1024, // 10MB
         }
     }
 }
@@ -284,6 +287,12 @@ impl ShardexConfig {
     /// Set the deduplication policy for search results
     pub fn deduplication_policy(mut self, policy: DeduplicationPolicy) -> Self {
         self.deduplication_policy = policy;
+        self
+    }
+
+    /// Set the maximum document text size in bytes
+    pub fn max_document_text_size(mut self, size: usize) -> Self {
+        self.max_document_text_size = size;
         self
     }
 
@@ -386,6 +395,25 @@ impl ShardexConfig {
             ));
         }
 
+        if self.max_document_text_size == 0 {
+            return Err(ShardexError::config_error(
+                "max_document_text_size",
+                "must be greater than 0",
+                "Set max_document_text_size in bytes (recommended: 1MB-100MB depending on use case)"
+            ));
+        }
+
+        if self.max_document_text_size > 1024 * 1024 * 1024 {
+            return Err(ShardexError::config_error(
+                "max_document_text_size",
+                format!(
+                    "value {} bytes exceeds 1GB limit",
+                    self.max_document_text_size
+                ),
+                "Set max_document_text_size to 1GB or less to avoid memory issues",
+            ));
+        }
+
         // Validate directory path is not empty
         if self.directory_path.as_os_str().is_empty() {
             return Err(ShardexError::Config(
@@ -418,6 +446,7 @@ mod tests {
         assert_eq!(config.batch_write_interval_ms, 100);
         assert_eq!(config.slop_factor_config.default_factor, 3);
         assert_eq!(config.bloom_filter_size, 1024);
+        assert_eq!(config.max_document_text_size, 10 * 1024 * 1024);
     }
 
     #[test]
@@ -436,7 +465,8 @@ mod tests {
             .wal_segment_size(2048)
             .batch_write_interval_ms(200)
             .default_slop_factor(5)
-            .bloom_filter_size(2048);
+            .bloom_filter_size(2048)
+            .max_document_text_size(20 * 1024 * 1024);
 
         assert_eq!(config.directory_path, PathBuf::from("/tmp/test_index"));
         assert_eq!(config.vector_size, 512);
@@ -446,6 +476,7 @@ mod tests {
         assert_eq!(config.batch_write_interval_ms, 200);
         assert_eq!(config.slop_factor_config.default_factor, 5);
         assert_eq!(config.bloom_filter_size, 2048);
+        assert_eq!(config.max_document_text_size, 20 * 1024 * 1024);
     }
 
     #[test]
@@ -569,6 +600,30 @@ mod tests {
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
             assert_eq!(msg, "Directory path cannot be empty");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_zero_max_document_text_size_validation() {
+        let config = ShardexConfig::new().max_document_text_size(0);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "max_document_text_size - must be greater than 0: Set max_document_text_size in bytes (recommended: 1MB-100MB depending on use case)");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_max_document_text_size_too_large_validation() {
+        let config = ShardexConfig::new().max_document_text_size(2 * 1024 * 1024 * 1024);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "max_document_text_size - value 2147483648 bytes exceeds 1GB limit: Set max_document_text_size to 1GB or less to avoid memory issues");
         } else {
             panic!("Expected Config error");
         }
