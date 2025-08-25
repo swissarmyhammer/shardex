@@ -84,8 +84,8 @@ pub use crash_recovery::{CrashRecovery, CrashRecoveryStats};
 pub use deduplication::{DeduplicationPolicy, DeduplicationStats, ResultDeduplicator};
 pub use distance::DistanceMetric;
 pub use document_text_entry::{
-    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_INDEX_MAGIC,
-    TEXT_DATA_VERSION, TEXT_INDEX_VERSION,
+    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
+    TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
 };
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId, TransactionId};

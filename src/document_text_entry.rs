@@ -85,7 +85,6 @@ use crate::identifiers::DocumentId;
 use crate::memory::FileHeader;
 use bytemuck::{Pod, Zeroable};
 
-
 /// Magic bytes for text index files (`text_index.dat`)
 pub const TEXT_INDEX_MAGIC: &[u8; 4] = b"TIDX";
 
@@ -251,7 +250,8 @@ impl TextIndexHeader {
         self.validate_magic()?;
 
         // Validate version (currently only version 1 is supported)
-        self.file_header.validate_version(TEXT_INDEX_VERSION, TEXT_INDEX_VERSION)?;
+        self.file_header
+            .validate_version(TEXT_INDEX_VERSION, TEXT_INDEX_VERSION)?;
 
         // Validate structure
         self.file_header.validate_structure()?;
@@ -361,8 +361,10 @@ impl DocumentTextEntry {
         if self.text_length > MAX_TEXT_SIZE {
             return Err(ShardexError::InvalidInput {
                 field: "text_length".to_string(),
-                reason: format!("Text length {} exceeds maximum allowed size {}", 
-                               self.text_length, MAX_TEXT_SIZE),
+                reason: format!(
+                    "Text length {} exceeds maximum allowed size {}",
+                    self.text_length, MAX_TEXT_SIZE
+                ),
                 suggestion: "Break large documents into smaller chunks".to_string(),
             });
         }
@@ -405,7 +407,7 @@ impl DocumentTextEntry {
             Some(end) => end,
             None => return false, // If we can't calculate end, assume no overlap
         };
-        
+
         let other_end = match other.end_offset() {
             Some(end) => end,
             None => return false,
@@ -440,12 +442,8 @@ impl TextDataHeader {
     /// Create a header with explicit data for checksum calculation
     pub fn new_with_data(data: &[u8]) -> Self {
         let mut header = Self::new();
-        header.file_header = FileHeader::new(
-            TEXT_DATA_MAGIC,
-            TEXT_DATA_VERSION,
-            Self::SIZE as u64,
-            data,
-        );
+        header.file_header =
+            FileHeader::new(TEXT_DATA_MAGIC, TEXT_DATA_VERSION, Self::SIZE as u64, data);
         header
     }
 
@@ -455,7 +453,8 @@ impl TextDataHeader {
         self.validate_magic()?;
 
         // Validate version
-        self.file_header.validate_version(TEXT_DATA_VERSION, TEXT_DATA_VERSION)?;
+        self.file_header
+            .validate_version(TEXT_DATA_VERSION, TEXT_DATA_VERSION)?;
 
         // Validate structure
         self.file_header.validate_structure()?;
@@ -540,7 +539,7 @@ mod tests {
     #[test]
     fn test_text_index_header_creation() {
         let header = TextIndexHeader::new();
-        
+
         assert_eq!(header.entry_count, 0);
         assert_eq!(header.next_entry_offset, TextIndexHeader::SIZE as u64);
         assert_eq!(header._padding, [0; 12]);
@@ -551,7 +550,7 @@ mod tests {
     #[test]
     fn test_text_data_header_creation() {
         let header = TextDataHeader::new();
-        
+
         assert_eq!(header.total_text_size, 0);
         assert_eq!(header.next_text_offset, TextDataHeader::SIZE as u64);
         assert_eq!(header._padding, [0; 8]);
@@ -563,7 +562,7 @@ mod tests {
     fn test_document_text_entry_creation() {
         let doc_id = DocumentId::new();
         let entry = DocumentTextEntry::new(doc_id, 1024, 512);
-        
+
         assert_eq!(entry.document_id, doc_id);
         assert_eq!(entry.text_offset, 1024);
         assert_eq!(entry.text_length, 512);
@@ -573,10 +572,10 @@ mod tests {
     fn test_header_validation() {
         let index_header = TextIndexHeader::new();
         let data_header = TextDataHeader::new();
-        
+
         assert!(index_header.validate().is_ok());
         assert!(data_header.validate().is_ok());
-        
+
         assert!(index_header.validate_magic().is_ok());
         assert!(data_header.validate_magic().is_ok());
     }
@@ -584,15 +583,15 @@ mod tests {
     #[test]
     fn test_document_text_entry_validation() {
         let doc_id = DocumentId::new();
-        
+
         // Valid entry
         let valid_entry = DocumentTextEntry::new(doc_id, 1024, 512);
         assert!(valid_entry.validate().is_ok());
-        
+
         // Invalid entry - zero length
         let zero_length_entry = DocumentTextEntry::new(doc_id, 1024, 0);
         assert!(zero_length_entry.validate().is_err());
-        
+
         // Invalid entry - too large
         let too_large_entry = DocumentTextEntry::new(doc_id, 1024, 200 * 1024 * 1024); // 200MB
         assert!(too_large_entry.validate().is_err());
@@ -601,11 +600,11 @@ mod tests {
     #[test]
     fn test_entry_overlap_detection() {
         let doc_id = DocumentId::new();
-        
+
         let entry1 = DocumentTextEntry::new(doc_id, 100, 50); // 100-150
         let entry2 = DocumentTextEntry::new(doc_id, 125, 50); // 125-175 (overlaps)
         let entry3 = DocumentTextEntry::new(doc_id, 200, 50); // 200-250 (no overlap)
-        
+
         assert!(entry1.overlaps_with(&entry2));
         assert!(entry2.overlaps_with(&entry1));
         assert!(!entry1.overlaps_with(&entry3));
@@ -616,22 +615,27 @@ mod tests {
     fn test_header_add_operations() {
         let mut index_header = TextIndexHeader::new();
         let mut data_header = TextDataHeader::new();
-        
+
         // Initially empty
         assert!(index_header.is_empty());
         assert!(data_header.is_empty());
-        
+
         // Add entry to index
         index_header.add_entry();
         assert_eq!(index_header.entry_count, 1);
-        assert_eq!(index_header.next_entry_offset, 
-                   TextIndexHeader::SIZE as u64 + DocumentTextEntry::SIZE as u64);
+        assert_eq!(
+            index_header.next_entry_offset,
+            TextIndexHeader::SIZE as u64 + DocumentTextEntry::SIZE as u64
+        );
         assert!(!index_header.is_empty());
-        
+
         // Add text to data
         data_header.add_text(512);
         assert_eq!(data_header.total_text_size, 512);
-        assert_eq!(data_header.next_text_offset, TextDataHeader::SIZE as u64 + 512 + 8);
+        assert_eq!(
+            data_header.next_text_offset,
+            TextDataHeader::SIZE as u64 + 512 + 8
+        );
         assert!(!data_header.is_empty());
     }
 
@@ -682,10 +686,10 @@ mod tests {
         let index_size = mem::size_of::<TextIndexHeader>();
         let data_size = mem::size_of::<TextDataHeader>();
         let entry_size = mem::size_of::<DocumentTextEntry>();
-        
+
         // Headers should be at least the size of FileHeader (80) plus our fields
         assert!(index_size >= 80 + 4 + 8); // FileHeader + entry_count + next_entry_offset
-        assert!(data_size >= 80 + 8 + 8);  // FileHeader + total_text_size + next_text_offset
+        assert!(data_size >= 80 + 8 + 8); // FileHeader + total_text_size + next_text_offset
         assert_eq!(entry_size, 32); // DocumentId (16) + text_offset (8) + text_length (8)
 
         // Verify alignment requirements
@@ -699,9 +703,15 @@ mod tests {
         assert_eq!(DocumentTextEntry::SIZE, entry_size);
 
         // Verify sizes are multiples of alignment (important for arrays)
-        assert_eq!(TextIndexHeader::SIZE % mem::align_of::<TextIndexHeader>(), 0);
+        assert_eq!(
+            TextIndexHeader::SIZE % mem::align_of::<TextIndexHeader>(),
+            0
+        );
         assert_eq!(TextDataHeader::SIZE % mem::align_of::<TextDataHeader>(), 0);
-        assert_eq!(DocumentTextEntry::SIZE % mem::align_of::<DocumentTextEntry>(), 0);
+        assert_eq!(
+            DocumentTextEntry::SIZE % mem::align_of::<DocumentTextEntry>(),
+            0
+        );
     }
 
     #[test]
@@ -710,7 +720,7 @@ mod tests {
         assert_eq!(TEXT_DATA_MAGIC, b"TDAT");
         assert_eq!(TEXT_INDEX_VERSION, 1);
         assert_eq!(TEXT_DATA_VERSION, 1);
-        
+
         assert_eq!(TextIndexHeader::SIZE, mem::size_of::<TextIndexHeader>());
         assert_eq!(TextDataHeader::SIZE, mem::size_of::<TextDataHeader>());
         assert_eq!(DocumentTextEntry::SIZE, mem::size_of::<DocumentTextEntry>());
@@ -720,11 +730,11 @@ mod tests {
     fn test_entry_helper_methods() {
         let doc_id = DocumentId::new();
         let entry = DocumentTextEntry::new(doc_id, 1000, 500);
-        
+
         assert!(entry.is_for_document(doc_id));
         assert!(!entry.is_for_document(DocumentId::new()));
         assert_eq!(entry.end_offset(), Some(1500));
-        
+
         // Test overflow protection
         let overflow_entry = DocumentTextEntry::new(doc_id, u64::MAX, 1);
         assert_eq!(overflow_entry.end_offset(), None);
@@ -733,31 +743,38 @@ mod tests {
     #[test]
     fn test_header_offset_calculations() {
         let header = TextIndexHeader::new();
-        
+
         assert_eq!(header.offset_for_entry(0), TextIndexHeader::SIZE as u64);
-        assert_eq!(header.offset_for_entry(1), 
-                   TextIndexHeader::SIZE as u64 + DocumentTextEntry::SIZE as u64);
-        assert_eq!(header.offset_for_entry(10), 
-                   TextIndexHeader::SIZE as u64 + 10 * DocumentTextEntry::SIZE as u64);
-        
+        assert_eq!(
+            header.offset_for_entry(1),
+            TextIndexHeader::SIZE as u64 + DocumentTextEntry::SIZE as u64
+        );
+        assert_eq!(
+            header.offset_for_entry(10),
+            TextIndexHeader::SIZE as u64 + 10 * DocumentTextEntry::SIZE as u64
+        );
+
         assert_eq!(header.total_entries_size(), 0);
-        
+
         let mut header_with_entries = header;
         header_with_entries.entry_count = 5;
-        assert_eq!(header_with_entries.total_entries_size(), 5 * DocumentTextEntry::SIZE as u64);
+        assert_eq!(
+            header_with_entries.total_entries_size(),
+            5 * DocumentTextEntry::SIZE as u64
+        );
     }
 
     #[test]
     fn test_utilization_calculation() {
         let mut header = TextDataHeader::new();
-        
+
         // Empty header has 0 utilization
         assert_eq!(header.utilization_ratio(), 0.0);
-        
+
         // Add some text
         header.total_text_size = 1000;
         header.next_text_offset = TextDataHeader::SIZE as u64 + 1500; // includes overhead
-        
+
         let expected_ratio = 1000.0 / 1500.0;
         assert!((header.utilization_ratio() - expected_ratio).abs() < 0.001);
     }
@@ -768,18 +785,24 @@ mod tests {
         let default_data = TextDataHeader::default();
         let new_index = TextIndexHeader::new();
         let new_data = TextDataHeader::new();
-        
+
         // Compare structure, not exact equality (due to timestamps)
         assert_eq!(default_index.entry_count, new_index.entry_count);
         assert_eq!(default_index.next_entry_offset, new_index.next_entry_offset);
         assert_eq!(default_index._padding, new_index._padding);
         assert_eq!(default_index.file_header.magic, new_index.file_header.magic);
-        assert_eq!(default_index.file_header.version, new_index.file_header.version);
-        
+        assert_eq!(
+            default_index.file_header.version,
+            new_index.file_header.version
+        );
+
         assert_eq!(default_data.total_text_size, new_data.total_text_size);
         assert_eq!(default_data.next_text_offset, new_data.next_text_offset);
         assert_eq!(default_data._padding, new_data._padding);
         assert_eq!(default_data.file_header.magic, new_data.file_header.magic);
-        assert_eq!(default_data.file_header.version, new_data.file_header.version);
+        assert_eq!(
+            default_data.file_header.version,
+            new_data.file_header.version
+        );
     }
 }
