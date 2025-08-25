@@ -2,7 +2,7 @@
 //!
 //! This module implements the core DocumentTextStorage component that manages
 //! memory-mapped text storage files with append-only semantics and efficient lookup.
-//! 
+//!
 //! The storage system uses two files:
 //! - **text_index.dat**: Contains document metadata and text location information
 //! - **text_data.dat**: Contains the actual UTF-8 text data with length prefixes
@@ -23,7 +23,7 @@
 //! [DocumentTextEntry: 32 bytes] *  // Document entries (append-only)
 //! ```
 //!
-//! ## Text Data File (text_data.dat) 
+//! ## Text Data File (text_data.dat)
 //! ```text
 //! [TextDataHeader: 104 bytes]                           // File header
 //! [length: u32][utf8_text_data][length: u32][data]...   // Text blocks with length prefixes
@@ -39,15 +39,15 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let temp_dir = TempDir::new()?;
 //! let max_size = 10 * 1024 * 1024; // 10MB
-//! 
+//!
 //! // Create new document text storage
 //! let mut storage = DocumentTextStorage::create(&temp_dir, max_size)?;
-//! 
+//!
 //! // Store document text
 //! let doc_id = DocumentId::new();
 //! let text = "The quick brown fox jumps over the lazy dog.";
 //! storage.store_text(doc_id, text)?;
-//! 
+//!
 //! // Retrieve document text
 //! let retrieved = storage.get_text(doc_id)?;
 //! assert_eq!(text, retrieved);
@@ -55,9 +55,7 @@
 //! # }
 //! ```
 
-use crate::document_text_entry::{
-    DocumentTextEntry, TextDataHeader, TextIndexHeader,
-};
+use crate::document_text_entry::{DocumentTextEntry, TextDataHeader, TextIndexHeader};
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
 use crate::memory::MemoryMappedFile;
@@ -102,7 +100,7 @@ impl DocumentTextStorage {
     /// ```rust
     /// use shardex::document_text_storage::DocumentTextStorage;
     /// use tempfile::TempDir;
-    /// 
+    ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let temp_dir = TempDir::new()?;
     /// let storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?; // 10MB limit
@@ -114,7 +112,7 @@ impl DocumentTextStorage {
         max_document_size: usize,
     ) -> Result<Self, ShardexError> {
         let directory = directory.as_ref();
-        
+
         // Create directory if it doesn't exist
         std::fs::create_dir_all(directory).map_err(|e| {
             ShardexError::MemoryMapping(format!(
@@ -173,7 +171,7 @@ impl DocumentTextStorage {
     /// ```rust
     /// use shardex::document_text_storage::DocumentTextStorage;
     /// use std::path::Path;
-    /// 
+    ///
     /// # fn open_example(dir_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     /// let storage = DocumentTextStorage::open(dir_path)?;
     /// # Ok(())
@@ -181,7 +179,7 @@ impl DocumentTextStorage {
     /// ```
     pub fn open<P: AsRef<Path>>(directory: P) -> Result<Self, ShardexError> {
         let directory = directory.as_ref();
-        
+
         // Define file paths
         let index_path = directory.join("text_index.dat");
         let data_path = directory.join("text_data.dat");
@@ -193,7 +191,7 @@ impl DocumentTextStorage {
         // Read and validate index header
         let index_header: TextIndexHeader = text_index_file.read_at(0)?;
         index_header.validate()?;
-        
+
         // Read and validate data header
         let data_header: TextDataHeader = text_data_file.read_at(0)?;
         data_header.validate()?;
@@ -228,24 +226,23 @@ impl DocumentTextStorage {
     /// use shardex::document_text_storage::DocumentTextStorage;
     /// use shardex::identifiers::DocumentId;
     /// use tempfile::TempDir;
-    /// 
+    ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let temp_dir = TempDir::new()?;
     /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
-    /// 
+    ///
     /// let doc_id = DocumentId::new();
     /// storage.store_text(doc_id, "Hello, world!")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn store_text(
-        &mut self,
-        document_id: DocumentId,
-        text: &str,
-    ) -> Result<(), ShardexError> {
+    pub fn store_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
         // Validate text size
         if text.len() > self.max_document_size {
-            return Err(ShardexError::document_too_large(text.len(), self.max_document_size));
+            return Err(ShardexError::document_too_large(
+                text.len(),
+                self.max_document_size,
+            ));
         }
 
         // Validate UTF-8 (str type guarantees this, but be explicit)
@@ -285,14 +282,14 @@ impl DocumentTextStorage {
     /// use shardex::document_text_storage::DocumentTextStorage;
     /// use shardex::identifiers::DocumentId;
     /// use tempfile::TempDir;
-    /// 
+    ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let temp_dir = TempDir::new()?;
     /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
-    /// 
+    ///
     /// let doc_id = DocumentId::new();
     /// storage.store_text(doc_id, "Hello, world!")?;
-    /// 
+    ///
     /// let retrieved = storage.get_text(doc_id)?;
     /// assert_eq!(retrieved, "Hello, world!");
     /// # Ok(())
@@ -302,9 +299,7 @@ impl DocumentTextStorage {
         // Find the latest entry for this document
         let entry = self
             .find_latest_document_entry(document_id)?
-            .ok_or_else(|| {
-                ShardexError::document_text_not_found(document_id.to_string())
-            })?;
+            .ok_or_else(|| ShardexError::document_text_not_found(document_id.to_string()))?;
 
         // Read text from data file
         self.read_text_at_offset(entry.text_offset, entry.text_length)
@@ -336,7 +331,7 @@ impl DocumentTextStorage {
         for i in (0..entry_count).rev() {
             let offset = self.index_header.offset_for_entry(i);
             let entry: DocumentTextEntry = self.text_index_file.read_at(offset as usize)?;
-            
+
             // Validate the entry to detect corruption
             entry.validate().map_err(|e| {
                 ShardexError::text_corruption(format!(
@@ -365,11 +360,7 @@ impl DocumentTextStorage {
     /// # Returns
     /// * `Ok(String)` - Successfully read and validated text
     /// * `Err(ShardexError)` - Read failed or text validation failed
-    fn read_text_at_offset(
-        &self,
-        offset: u64,
-        length: u64,
-    ) -> Result<String, ShardexError> {
+    fn read_text_at_offset(&self, offset: u64, length: u64) -> Result<String, ShardexError> {
         // Validate offset is within file bounds
         if offset + 4 + length > self.text_data_file.len() as u64 {
             return Err(ShardexError::text_corruption(format!(
@@ -396,8 +387,8 @@ impl DocumentTextStorage {
         }
 
         // Read text data
-        let text_slice = &self.text_data_file.as_slice()
-            [(offset + 4) as usize..(offset + 4 + length) as usize];
+        let text_slice =
+            &self.text_data_file.as_slice()[(offset + 4) as usize..(offset + 4 + length) as usize];
 
         // Validate and convert to String
         String::from_utf8(text_slice.to_vec()).map_err(|e| {
@@ -423,11 +414,11 @@ impl DocumentTextStorage {
     fn append_text_data(&mut self, text: &str) -> Result<u64, ShardexError> {
         let text_bytes = text.as_bytes();
         let text_length = text_bytes.len() as u32;
-        
+
         // Align the starting offset to 4 bytes
         let aligned_offset = (self.data_header.next_text_offset + 3) & !3; // Round up to nearest 4
         let alignment_padding = (aligned_offset - self.data_header.next_text_offset) as usize;
-        
+
         // Calculate total size including alignment padding + length prefix + text data
         let total_size = alignment_padding + 4 + text_bytes.len();
 
@@ -440,17 +431,19 @@ impl DocumentTextStorage {
 
         let start_offset = self.data_header.next_text_offset;
         let mut_slice = self.text_data_file.as_mut_slice()?;
-        
+
         // Write alignment padding if needed
         if alignment_padding > 0 {
-            mut_slice[start_offset as usize..(start_offset + alignment_padding as u64) as usize].fill(0);
+            mut_slice[start_offset as usize..(start_offset + alignment_padding as u64) as usize]
+                .fill(0);
         }
-        
+
         // Write length prefix at aligned offset
         let length_bytes = text_length.to_le_bytes();
-        mut_slice[aligned_offset as usize..(aligned_offset + 4) as usize].copy_from_slice(&length_bytes);
+        mut_slice[aligned_offset as usize..(aligned_offset + 4) as usize]
+            .copy_from_slice(&length_bytes);
 
-        // Write text data  
+        // Write text data
         let text_start = aligned_offset + 4;
         mut_slice[text_start as usize..(text_start as usize + text_bytes.len())]
             .copy_from_slice(text_bytes);
@@ -623,10 +616,10 @@ mod tests {
 
         // Update with new text (creates new entry)
         storage.store_text(doc_id, text2).unwrap();
-        
+
         // Should retrieve the latest (updated) text
         assert_eq!(storage.get_text(doc_id).unwrap(), text2);
-        
+
         // Should have 2 entries (append-only)
         assert_eq!(storage.entry_count(), 2);
     }
@@ -643,7 +636,7 @@ mod tests {
         // Should fail due to size limit
         let result = storage.store_text(doc_id, &large_text);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             ShardexError::DocumentTooLarge { size, max_size } => {
                 assert_eq!(size, 200);
@@ -675,11 +668,11 @@ mod tests {
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
 
         let nonexistent_doc = DocumentId::new();
-        
+
         // Should return not found error
         let result = storage.get_text(nonexistent_doc);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             ShardexError::DocumentTextNotFound { .. } => {
                 // Expected error type
@@ -777,7 +770,7 @@ mod tests {
         let text = "Text that needs to be synced.";
 
         storage.store_text(doc_id, text).unwrap();
-        
+
         // Sync should not fail
         storage.sync().unwrap();
     }
@@ -816,5 +809,73 @@ mod tests {
         let doc_id = DocumentId::new();
         let text = "A".repeat(150); // 150 bytes
         storage.store_text(doc_id, &text).unwrap();
+    }
+
+    #[test]
+    fn test_stress_file_growth_high_document_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store many documents to stress test file growth
+        let document_count = 1000;
+        let mut doc_ids = Vec::with_capacity(document_count);
+        
+        for i in 0..document_count {
+            let doc_id = DocumentId::new();
+            let text = format!("Document #{} with substantial content to fill space and test memory mapping behavior under stress conditions. This text is designed to be large enough to trigger multiple file growth operations and test the robustness of the memory mapping system.", i);
+            storage.store_text(doc_id, &text).unwrap();
+            doc_ids.push((doc_id, text));
+        }
+
+        // Verify all documents are still retrievable after stress
+        for (i, (doc_id, expected_text)) in doc_ids.iter().enumerate() {
+            let retrieved = storage.get_text(*doc_id).unwrap();
+            assert_eq!(retrieved, *expected_text, "Document {} content mismatch after stress test", i);
+        }
+
+        assert_eq!(storage.entry_count(), document_count as u32);
+        
+        // Verify utilization ratio is reasonable
+        let utilization = storage.utilization_ratio();
+        assert!(utilization > 0.0 && utilization <= 1.0, "Utilization ratio {} is out of bounds", utilization);
+    }
+
+    #[test]
+    fn test_maximum_file_size_boundary_conditions() {
+        let temp_dir = TempDir::new().unwrap();
+        let max_doc_size = 1000; // Small limit for testing boundary conditions
+        let mut storage = DocumentTextStorage::create(&temp_dir, max_doc_size).unwrap();
+
+        let doc_id = DocumentId::new();
+
+        // Test exactly at the limit
+        let exact_limit_text = "A".repeat(max_doc_size);
+        storage.store_text(doc_id, &exact_limit_text).unwrap();
+        assert_eq!(storage.get_text(doc_id).unwrap(), exact_limit_text);
+
+        // Test one byte over the limit - should fail
+        let over_limit_doc_id = DocumentId::new();
+        let over_limit_text = "A".repeat(max_doc_size + 1);
+        let result = storage.store_text(over_limit_doc_id, &over_limit_text);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::DocumentTooLarge { size, max_size } => {
+                assert_eq!(size, max_doc_size + 1);
+                assert_eq!(max_size, max_doc_size);
+            }
+            e => panic!("Expected DocumentTooLarge error, got {:?}", e),
+        }
+
+        // Test one byte under the limit
+        let under_limit_doc_id = DocumentId::new();
+        let under_limit_text = "A".repeat(max_doc_size - 1);
+        storage.store_text(under_limit_doc_id, &under_limit_text).unwrap();
+        assert_eq!(storage.get_text(under_limit_doc_id).unwrap(), under_limit_text);
+
+        // Test zero length (should fail based on existing empty_text_rejection test)
+        let empty_doc_id = DocumentId::new();
+        let empty_result = storage.store_text(empty_doc_id, "");
+        assert!(empty_result.is_err());
     }
 }
