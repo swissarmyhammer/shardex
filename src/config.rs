@@ -195,7 +195,42 @@ pub struct ShardexConfig {
     pub bloom_filter_size: usize,
     /// Deduplication policy for search results
     pub deduplication_policy: DeduplicationPolicy,
-    /// Maximum size of document text in bytes (default 10MB)
+    /// Maximum size of individual document text in bytes
+    ///
+    /// This configuration parameter sets the maximum allowed size for document text
+    /// storage to prevent memory exhaustion and ensure reasonable performance.
+    ///
+    /// # Limits
+    ///
+    /// - **Minimum**: 1024 bytes (1KB) - prevents unreasonably small documents
+    /// - **Maximum**: 1073741824 bytes (1GB) - prevents memory exhaustion
+    /// - **Default**: 10485760 bytes (10MB) - suitable for most use cases
+    ///
+    /// # Performance Implications
+    ///
+    /// - **Memory Usage**: Each document text is loaded into memory during extraction
+    /// - **Storage**: Larger limits increase disk space requirements
+    /// - **I/O Performance**: Very large documents may impact read/write performance
+    ///
+    /// # Use Case Guidelines
+    ///
+    /// - **Small Documents** (1MB-5MB): Code snippets, articles, short documents
+    /// - **Medium Documents** (10MB-50MB): Research papers, manuals, technical documentation
+    /// - **Large Documents** (50MB-1GB): Books, large technical specifications, data files
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use shardex::ShardexConfig;
+    ///
+    /// // Conservative configuration for memory-constrained environments
+    /// let config = ShardexConfig::new()
+    ///     .max_document_text_size(1024 * 1024); // 1MB per document
+    ///
+    /// // High-capacity configuration for large documents
+    /// let config = ShardexConfig::new()
+    ///     .max_document_text_size(100 * 1024 * 1024); // 100MB per document
+    /// ```
     pub max_document_text_size: usize,
 }
 
@@ -291,6 +326,30 @@ impl ShardexConfig {
     }
 
     /// Set the maximum document text size in bytes
+    ///
+    /// This parameter controls the maximum size of individual document text that can be
+    /// stored in the index. The size must be between 1KB (1024 bytes) and 1GB (1073741824 bytes).
+    ///
+    /// # Arguments
+    ///
+    /// - `size` - Maximum document text size in bytes
+    ///
+    /// # Validation
+    ///
+    /// The provided size will be validated when `build()` or `validate()` is called:
+    /// - Must be at least 1024 bytes (1KB)
+    /// - Must not exceed 1073741824 bytes (1GB)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use shardex::ShardexConfig;
+    ///
+    /// let config = ShardexConfig::new()
+    ///     .max_document_text_size(50 * 1024 * 1024) // 50MB
+    ///     .build()
+    ///     .expect("Valid configuration");
+    /// ```
     pub fn max_document_text_size(mut self, size: usize) -> Self {
         self.max_document_text_size = size;
         self
@@ -395,22 +454,25 @@ impl ShardexConfig {
             ));
         }
 
-        if self.max_document_text_size == 0 {
+        // Validate document text size limits
+        const MIN_DOCUMENT_SIZE: usize = 1024; // 1KB minimum
+        const MAX_DOCUMENT_SIZE: usize = 1024 * 1024 * 1024; // 1GB maximum
+
+        if self.max_document_text_size < MIN_DOCUMENT_SIZE {
             return Err(ShardexError::config_error(
                 "max_document_text_size",
-                "must be greater than 0",
-                "Set max_document_text_size in bytes (recommended: 1MB-100MB depending on use case)"
+                format!("Size {} bytes is below minimum {}", 
+                       self.max_document_text_size, MIN_DOCUMENT_SIZE),
+                format!("Set max_document_text_size to at least {} bytes", MIN_DOCUMENT_SIZE),
             ));
         }
 
-        if self.max_document_text_size > 1024 * 1024 * 1024 {
+        if self.max_document_text_size > MAX_DOCUMENT_SIZE {
             return Err(ShardexError::config_error(
                 "max_document_text_size",
-                format!(
-                    "value {} bytes exceeds 1GB limit",
-                    self.max_document_text_size
-                ),
-                "Set max_document_text_size to 1GB or less to avoid memory issues",
+                format!("Size {} bytes exceeds maximum {}", 
+                       self.max_document_text_size, MAX_DOCUMENT_SIZE),
+                format!("Set max_document_text_size to at most {} bytes", MAX_DOCUMENT_SIZE),
             ));
         }
 
@@ -611,10 +673,36 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - must be greater than 0: Set max_document_text_size in bytes (recommended: 1MB-100MB depending on use case)");
+            assert_eq!(msg, "max_document_text_size - Size 0 bytes is below minimum 1024: Set max_document_text_size to at least 1024 bytes");
         } else {
             panic!("Expected Config error");
         }
+    }
+
+    #[test]
+    fn test_max_document_text_size_below_minimum_validation() {
+        let config = ShardexConfig::new().max_document_text_size(512);
+        let result = config.validate();
+        assert!(result.is_err());
+        if let Err(ShardexError::Config(msg)) = result {
+            assert_eq!(msg, "max_document_text_size - Size 512 bytes is below minimum 1024: Set max_document_text_size to at least 1024 bytes");
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_max_document_text_size_at_minimum_boundary() {
+        let config = ShardexConfig::new().max_document_text_size(1024);
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_max_document_text_size_at_maximum_boundary() {
+        let config = ShardexConfig::new().max_document_text_size(1024 * 1024 * 1024);
+        let result = config.validate();
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -623,7 +711,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - value 2147483648 bytes exceeds 1GB limit: Set max_document_text_size to 1GB or less to avoid memory issues");
+            assert_eq!(msg, "max_document_text_size - Size 2147483648 bytes exceeds maximum 1073741824: Set max_document_text_size to at most 1073741824 bytes");
         } else {
             panic!("Expected Config error");
         }
