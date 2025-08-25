@@ -275,7 +275,11 @@ impl WalTransaction {
     }
 
     /// Validate all operations in the transaction
-    pub fn validate(&self, expected_vector_dimension: Option<usize>, max_document_text_size: usize) -> Result<(), ShardexError> {
+    pub fn validate(
+        &self,
+        expected_vector_dimension: Option<usize>,
+        max_document_text_size: usize,
+    ) -> Result<(), ShardexError> {
         if self.operations.is_empty() {
             return Err(ShardexError::Wal(
                 "Transaction must contain at least one operation".to_string(),
@@ -284,12 +288,14 @@ impl WalTransaction {
 
         // Validate each operation
         for (i, operation) in self.operations.iter().enumerate() {
-            operation.validate(expected_vector_dimension, max_document_text_size).map_err(|e| {
-                ShardexError::Wal(format!(
-                    "Operation {} in transaction {} is invalid: {}",
-                    i, self.id, e
-                ))
-            })?;
+            operation
+                .validate(expected_vector_dimension, max_document_text_size)
+                .map_err(|e| {
+                    ShardexError::Wal(format!(
+                        "Operation {} in transaction {} is invalid: {}",
+                        i, self.id, e
+                    ))
+                })?;
         }
 
         // Validate timestamp is not in the future (with some tolerance)
@@ -466,7 +472,7 @@ impl Default for BatchConfig {
         Self {
             batch_write_interval_ms: 100,
             max_operations_per_batch: 1000,
-            max_batch_size_bytes: 1024 * 1024, // 1MB
+            max_batch_size_bytes: 1024 * 1024,        // 1MB
             max_document_text_size: 10 * 1024 * 1024, // 10MB - matches ShardexConfig default
         }
     }
@@ -531,7 +537,10 @@ impl WalBatchManager {
     /// Returns true if a flush is required due to batch size limits
     pub fn add_operation(&mut self, operation: WalOperation) -> Result<bool, ShardexError> {
         // Validate operation before adding
-        operation.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
+        operation.validate(
+            self.expected_vector_dimension,
+            self.config.max_document_text_size,
+        )?;
 
         let operation_size = operation.estimated_serialized_size();
 
@@ -565,7 +574,10 @@ impl WalBatchManager {
         let transaction_id = transaction.id;
 
         // Validate transaction
-        transaction.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
+        transaction.validate(
+            self.expected_vector_dimension,
+            self.config.max_document_text_size,
+        )?;
 
         // Write transaction using the provided function
         write_fn(&transaction)?;
@@ -1490,10 +1502,14 @@ mod tests {
             vector: vec![1.0, 2.0, 3.0],
         }];
         let valid_transaction = WalTransaction::new(valid_ops).unwrap();
-        assert!(valid_transaction.validate(Some(3), 10 * 1024 * 1024).is_ok());
+        assert!(valid_transaction
+            .validate(Some(3), 10 * 1024 * 1024)
+            .is_ok());
 
         // Invalid vector dimension
-        assert!(valid_transaction.validate(Some(4), 10 * 1024 * 1024).is_err());
+        assert!(valid_transaction
+            .validate(Some(4), 10 * 1024 * 1024)
+            .is_err());
 
         // Future timestamp should be rejected (create with manual timestamp)
         let future_time = SystemTime::now() + std::time::Duration::from_secs(3600); // 1 hour in future

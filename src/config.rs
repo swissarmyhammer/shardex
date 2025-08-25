@@ -461,18 +461,28 @@ impl ShardexConfig {
         if self.max_document_text_size < MIN_DOCUMENT_SIZE {
             return Err(ShardexError::config_error(
                 "max_document_text_size",
-                format!("Size {} bytes is below minimum {}", 
-                       self.max_document_text_size, MIN_DOCUMENT_SIZE),
-                format!("Set max_document_text_size to at least {} bytes", MIN_DOCUMENT_SIZE),
+                format!(
+                    "Size {} bytes is below minimum {}",
+                    self.max_document_text_size, MIN_DOCUMENT_SIZE
+                ),
+                format!(
+                    "Set max_document_text_size to at least {} bytes",
+                    MIN_DOCUMENT_SIZE
+                ),
             ));
         }
 
         if self.max_document_text_size > MAX_DOCUMENT_SIZE {
             return Err(ShardexError::config_error(
                 "max_document_text_size",
-                format!("Size {} bytes exceeds maximum {}", 
-                       self.max_document_text_size, MAX_DOCUMENT_SIZE),
-                format!("Set max_document_text_size to at most {} bytes", MAX_DOCUMENT_SIZE),
+                format!(
+                    "Size {} bytes exceeds maximum {}",
+                    self.max_document_text_size, MAX_DOCUMENT_SIZE
+                ),
+                format!(
+                    "Set max_document_text_size to at most {} bytes",
+                    MAX_DOCUMENT_SIZE
+                ),
             ));
         }
 
