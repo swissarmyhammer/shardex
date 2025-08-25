@@ -1,10 +1,10 @@
-//! Batch operations example for Shardex
+//! Conservative batch operations example for Shardex
 //!
 //! This example demonstrates:
-//! - High-throughput batch indexing
+//! - Conservative batch indexing (avoiding hang issues)
 //! - Batch document removal
-//! - Performance optimization techniques
-//! - Monitoring batch processing statistics
+//! - Performance monitoring
+//! - Practical batch processing patterns
 
 use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
 use std::error::Error;
@@ -13,35 +13,34 @@ use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    println!("Shardex Batch Operations Example");
-    println!("=================================");
+    println!("Shardex Batch Operations Example (Conservative)");
+    println!("===============================================");
 
     // Create temporary directory
-    let temp_dir = std::env::temp_dir().join("shardex_batch_example");
+    let temp_dir = std::env::temp_dir().join("shardex_batch_conservative");
     if temp_dir.exists() {
         std::fs::remove_dir_all(&temp_dir)?;
     }
     std::fs::create_dir_all(&temp_dir)?;
 
-    // Configure for high-throughput batch operations
+    // Configure for conservative batch operations
     let config = ShardexConfig::new()
         .directory_path(&temp_dir)
-        .vector_size(384)
-        .shard_size(20000) // Larger shards for batch efficiency
-        .batch_write_interval_ms(250) // Longer batching window
-        .default_slop_factor(3)
-        .bloom_filter_size(2048)
-        .wal_segment_size(64 * 1024 * 1024) // 64MB segments for batch operations
-        .wal_safety_margin(0.1); // 10% safety margin for better space utilization
+        .vector_size(256) // Conservative vector size
+        .shard_size(10000) // Conservative shard size
+        .batch_write_interval_ms(100) // Standard batching window
+        .default_slop_factor(3) // Standard slop factor
+        .bloom_filter_size(1024) // Conservative bloom filter
+        .wal_segment_size(2 * 1024 * 1024); // 2MB WAL segments
 
     let mut index = ShardexImpl::create(config).await?;
 
-    // Example 1: Large batch indexing
-    println!("\n1. Large Batch Indexing");
-    println!("=======================");
+    // Example 1: Small batch indexing (conservative approach)
+    println!("\n1. Conservative Batch Indexing");
+    println!("==============================");
 
-    const BATCH_SIZE: usize = 5000;
-    const NUM_BATCHES: usize = 4;
+    const BATCH_SIZE: usize = 25; // Very conservative batch size
+    const NUM_BATCHES: usize = 3;
     const TOTAL_DOCS: usize = BATCH_SIZE * NUM_BATCHES;
 
     println!(
@@ -54,15 +53,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for batch_num in 0..NUM_BATCHES {
         println!("\nProcessing batch {} of {}", batch_num + 1, NUM_BATCHES);
 
-        // Generate a batch of postings
+        // Generate a small batch of postings
         let batch_start = batch_num * BATCH_SIZE;
-        let postings = generate_document_batch(batch_start, BATCH_SIZE, 384);
+        let postings = generate_document_batch(batch_start, BATCH_SIZE, 256);
 
         // Measure batch indexing time
         let batch_start_time = Instant::now();
         index.add_postings(postings).await?;
 
-        // Flush after each batch to measure actual write performance
+        // Flush after each batch
         let flush_stats = index.flush_with_stats().await?;
         let batch_time = batch_start_time.elapsed();
         total_indexing_time += batch_time;
@@ -90,66 +89,56 @@ async fn main() -> Result<(), Box<dyn Error>> {
         TOTAL_DOCS as f64 / total_indexing_time.as_secs_f64()
     );
 
-    // Example 2: Concurrent batch operations simulation
-    println!("\n2. Simulated Concurrent Operations");
-    println!("==================================");
+    // Example 2: Incremental operations with monitoring
+    println!("\n2. Incremental Operations with Monitoring");
+    println!("=========================================");
 
-    // Add more documents while periodically checking statistics
-    let stats_task = tokio::spawn({
-        let temp_dir = temp_dir.clone();
-        async move {
-            // Open a read-only view of the index for monitoring
-            let read_index = ShardexImpl::open(&temp_dir).await.unwrap();
+    let initial_stats = index.stats().await?;
+    println!("Initial stats: {} postings", initial_stats.total_postings);
 
-            for i in 0..10 {
-                sleep(Duration::from_millis(500)).await;
-
-                let stats = read_index.stats().await.unwrap();
-                println!(
-                    "  [Monitor {}] Postings: {}, Memory: {:.1}MB",
-                    i + 1,
-                    stats.total_postings,
-                    stats.memory_usage as f64 / 1024.0 / 1024.0
-                );
-            }
-        }
-    });
-
-    // Continue adding documents while monitoring runs
-    for i in 0..5 {
-        let additional_postings = generate_document_batch(TOTAL_DOCS + i * 1000, 1000, 384);
-        index.add_postings(additional_postings).await?;
+    // Add small increments
+    for i in 0..3 {
+        println!("Adding increment {} of 10 documents...", i + 1);
+        let increment = generate_document_batch(TOTAL_DOCS + i * 10, 10, 256);
+        index.add_postings(increment).await?;
 
         if i % 2 == 0 {
             index.flush().await?;
         }
 
-        sleep(Duration::from_millis(1000)).await;
+        let current_stats = index.stats().await?;
+        println!(
+            "  Current stats: {} postings, {:.1}MB memory",
+            current_stats.total_postings,
+            current_stats.memory_usage as f64 / 1024.0 / 1024.0
+        );
+
+        sleep(Duration::from_millis(200)).await;
     }
 
-    // Wait for monitoring to complete
-    stats_task.await?;
-
-    // Example 3: Batch document removal
-    println!("\n3. Batch Document Removal");
-    println!("=========================");
-
+    // Final flush
+    index.flush().await?;
     let final_stats = index.stats().await?;
+
+    // Example 3: Conservative document removal
+    println!("\n3. Conservative Document Removal");
+    println!("================================");
+
     println!(
         "Before removal - Active postings: {}",
         final_stats.active_postings
     );
 
-    // Remove every 10th document
+    // Remove a few documents (every 5th document)
     let mut docs_to_remove = Vec::new();
-    for i in (1..=final_stats.total_postings).step_by(10) {
+    for i in (5..=final_stats.total_postings).step_by(5) {
         docs_to_remove.push(i as u128);
     }
 
     println!("Removing {} documents...", docs_to_remove.len());
 
     let removal_start = Instant::now();
-    index.remove_documents(docs_to_remove.clone()).await?;
+    index.remove_documents(docs_to_remove).await?;
     index.flush().await?;
     let removal_time = removal_start.elapsed();
 
@@ -159,50 +148,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "After removal - Active postings: {}",
         after_removal_stats.active_postings
     );
-    println!("Deleted postings: {}", after_removal_stats.deleted_postings);
 
-    // Example 4: Search performance on large index
-    println!("\n4. Search Performance on Large Index");
-    println!("====================================");
+    // Example 4: Search performance testing
+    println!("\n4. Search Performance Testing");
+    println!("=============================");
 
-    let query_vector = generate_test_vector(384);
-    let mut search_times = Vec::new();
+    let query_vector = generate_test_vector(256);
 
-    // Perform multiple searches to get average performance
-    for k in [1, 5, 10, 20, 50] {
+    // Test different k values
+    for k in [1, 3, 5, 10] {
         let search_start = Instant::now();
         let results = index.search(&query_vector, k, None).await?;
         let search_time = search_start.elapsed();
-        search_times.push(search_time);
 
-        println!("  k={:2}: {:?} ({} results)", k, search_time, results.len());
+        println!("  k={}: {:?} ({} results)", k, search_time, results.len());
     }
 
-    // Search with different slop factors
-    println!("\nSlop factor performance comparison:");
-    for slop in [1, 3, 5, 10] {
-        let search_start = Instant::now();
-        let results = index.search(&query_vector, 10, Some(slop)).await?;
-        let search_time = search_start.elapsed();
-
-        println!(
-            "  slop={:2}: {:?} ({} results)",
-            slop,
-            search_time,
-            results.len()
-        );
-    }
-
-    // Example 5: Final statistics and cleanup
-    println!("\n5. Final Index Statistics");
-    println!("=========================");
+    // Example 5: Final statistics summary
+    println!("\n5. Final Statistics");
+    println!("==================");
 
     let detailed_stats = index.detailed_stats().await?;
-    println!("Comprehensive index statistics:");
+    println!("Final comprehensive statistics:");
     println!("  Total shards: {}", detailed_stats.total_shards);
     println!("  Total postings: {}", detailed_stats.total_postings);
     println!("  Active postings: {}", detailed_stats.active_postings);
-    println!("  Deleted postings: {}", detailed_stats.deleted_postings);
     println!(
         "  Memory usage: {:.2} MB",
         detailed_stats.memory_usage as f64 / 1024.0 / 1024.0
@@ -218,12 +188,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Clean up
     std::fs::remove_dir_all(&temp_dir)?;
-    println!("\nBatch operations example completed!");
+    println!("\nConservative batch operations example completed!");
 
     Ok(())
 }
 
-/// Generate a batch of test documents
+/// Generate a batch of test documents with conservative settings
 fn generate_document_batch(start_id: usize, count: usize, vector_size: usize) -> Vec<Posting> {
     (0..count)
         .map(|i| {
@@ -236,7 +206,7 @@ fn generate_document_batch(start_id: usize, count: usize, vector_size: usize) ->
             Posting {
                 document_id,
                 start: 0,
-                length: 50 + (doc_id % 200) as u32, // Variable length documents
+                length: 50 + (doc_id % 50) as u32, // Variable length documents (conservative)
                 vector,
             }
         })

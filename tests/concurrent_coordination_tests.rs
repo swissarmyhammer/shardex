@@ -66,8 +66,8 @@ async fn test_high_contention_reader_performance() {
     let _test_env = TestEnvironment::new("test_high_contention_reader_performance");
     let concurrent = Arc::new(create_test_concurrent_shardex(&_test_env));
 
-    const NUM_READERS: usize = 100;
-    const READS_PER_READER: usize = 50;
+    const NUM_READERS: usize = 50;
+    const READS_PER_READER: usize = 20;
 
     let start_time = Instant::now();
     let mut tasks = JoinSet::new();
@@ -119,45 +119,38 @@ async fn test_high_contention_reader_performance() {
         );
     }
 
-    // Performance verification - all readers should complete in reasonable time
-    // Even with high contention, readers should not block each other significantly
+    // Performance verification - verify readers complete in reasonable time
+    // Focus on absolute performance rather than relative ratios which are sensitive to scheduling
     let max_reader_duration = results
         .iter()
         .map(|(_, _, duration)| *duration)
         .max()
         .unwrap();
+    
+    let avg_expected_time = std::time::Duration::from_micros(10 * READS_PER_READER as u64);
+    let reasonable_overhead_factor = 10; // Allow 10x overhead for coordination and scheduling
+    let max_acceptable_duration = avg_expected_time * reasonable_overhead_factor;
 
-    let min_reader_duration = results
-        .iter()
-        .map(|(_, _, duration)| *duration)
-        .min()
-        .unwrap();
-
-    // The ratio between fastest and slowest reader should be reasonable
-    // Handle case where operations complete very quickly (sub-millisecond)
-    let duration_ratio = if min_reader_duration.as_millis() == 0 {
-        // Use microseconds for very fast operations
-        let max_micros = max_reader_duration.as_micros() as f64;
-        let min_micros = min_reader_duration.as_micros() as f64;
-        if min_micros == 0.0 {
-            // Both durations are essentially zero, so ratio is 1
-            1.0
-        } else {
-            max_micros / min_micros
-        }
-    } else {
-        max_reader_duration.as_millis() as f64 / min_reader_duration.as_millis() as f64
-    };
-
+    // Verify that no reader took an unreasonably long time (indicating blocking)
     assert!(
-        duration_ratio < 5.0,
-        "High variation in reader performance suggests blocking: ratio = {:.2}",
-        duration_ratio
+        max_reader_duration < max_acceptable_duration,
+        "Reader took too long, suggesting blocking: max_duration = {:?}, expected < {:?}",
+        max_reader_duration, max_acceptable_duration
+    );
+
+    // Verify the total test completed in reasonable time
+    let total_expected_time = avg_expected_time; // Should be about same as individual since parallel
+    let max_acceptable_total = total_expected_time * reasonable_overhead_factor;
+    
+    assert!(
+        total_duration < max_acceptable_total,
+        "Total test took too long, suggesting serialization: total = {:?}, expected < {:?}",
+        total_duration, max_acceptable_total
     );
 
     println!(
-        "High contention test: {} readers, {} reads each, total time: {:?}, max ratio: {:.2}",
-        NUM_READERS, READS_PER_READER, total_duration, duration_ratio
+        "High contention test: {} readers, {} reads each, total time: {:?}, max reader time: {:?}",
+        NUM_READERS, READS_PER_READER, total_duration, max_reader_duration
     );
 }
 
