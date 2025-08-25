@@ -184,7 +184,12 @@ impl ShardexMetadata {
 
     /// Check if this shard should be split based on utilization
     pub fn should_split(&self) -> bool {
-        self.utilization >= 0.9 // Split at 90% utilization
+        self.should_split_with_threshold(0.9)
+    }
+
+    /// Check if this shard should be split based on utilization with custom threshold
+    pub fn should_split_with_threshold(&self, threshold: f32) -> bool {
+        self.utilization >= threshold
     }
 
     /// Calculate distance between this shard's centroid and a query vector
