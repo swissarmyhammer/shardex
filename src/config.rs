@@ -458,7 +458,8 @@ impl ShardexConfig {
         const MIN_DOCUMENT_SIZE: usize = 1024; // 1KB minimum
         const MAX_DOCUMENT_SIZE: usize = 1024 * 1024 * 1024; // 1GB maximum
 
-        if self.max_document_text_size < MIN_DOCUMENT_SIZE {
+        // Allow 0 to disable text storage, otherwise enforce minimum
+        if self.max_document_text_size > 0 && self.max_document_text_size < MIN_DOCUMENT_SIZE {
             return Err(ShardexError::config_error(
                 "max_document_text_size",
                 format!(
@@ -466,7 +467,7 @@ impl ShardexConfig {
                     self.max_document_text_size, MIN_DOCUMENT_SIZE
                 ),
                 format!(
-                    "Set max_document_text_size to at least {} bytes",
+                    "Set max_document_text_size to 0 to disable text storage or at least {} bytes to enable",
                     MIN_DOCUMENT_SIZE
                 ),
             ));
@@ -679,14 +680,10 @@ mod tests {
 
     #[test]
     fn test_zero_max_document_text_size_validation() {
+        // 0 should now be valid (disables text storage)
         let config = ShardexConfig::new().max_document_text_size(0);
         let result = config.validate();
-        assert!(result.is_err());
-        if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - Size 0 bytes is below minimum 1024: Set max_document_text_size to at least 1024 bytes");
-        } else {
-            panic!("Expected Config error");
-        }
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -695,7 +692,7 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - Size 512 bytes is below minimum 1024: Set max_document_text_size to at least 1024 bytes");
+            assert_eq!(msg, "max_document_text_size - Size 512 bytes is below minimum 1024: Set max_document_text_size to 0 to disable text storage or at least 1024 bytes to enable");
         } else {
             panic!("Expected Config error");
         }

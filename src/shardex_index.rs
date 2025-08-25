@@ -1793,6 +1793,65 @@ impl ShardexIndex {
         self.document_text_storage.is_some()
     }
 
+    /// Get document text asynchronously
+    ///
+    /// Retrieves the complete text content for the specified document ID using
+    /// an async interface. This method wraps the synchronous text storage
+    /// operations to maintain API consistency.
+    ///
+    /// # Arguments
+    ///
+    /// * `document_id` - The unique identifier of the document
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The complete document text content
+    /// * `Err(ShardexError)` - Text storage not enabled, document not found, or task execution error
+    pub async fn get_document_text_async(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+        match &self.document_text_storage {
+            Some(storage) => {
+                // Since DocumentTextStorage methods are already safe and fast,
+                // we can call them directly. The async wrapper ensures API consistency
+                // but the actual operations don't need to be moved to blocking threads
+                // as they're just memory-mapped file reads.
+                storage.get_text_safe(document_id)
+            }
+            None => Err(ShardexError::InvalidInput {
+                field: "text_storage".to_string(),
+                reason: "Text storage not enabled for this index".to_string(),
+                suggestion: "Enable text storage in configuration".to_string(),
+            }),
+        }
+    }
+
+    /// Extract text from posting coordinates asynchronously
+    ///
+    /// Uses the posting's document ID, start position, and length to extract a specific
+    /// substring from the document's stored text content. This async method wraps
+    /// synchronous operations for consistent API patterns.
+    ///
+    /// # Arguments
+    ///
+    /// * `posting` - Contains document_id, start offset, and length for extraction
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The extracted text substring
+    /// * `Err(ShardexError)` - Text storage not enabled, invalid coordinates, or task execution error
+    pub async fn extract_text_from_posting_async(&self, posting: &Posting) -> Result<String, ShardexError> {
+        match &self.document_text_storage {
+            Some(storage) => {
+                // Memory-mapped file operations are fast, no need for spawn_blocking
+                storage.extract_text_substring(posting.document_id, posting.start, posting.length)
+            }
+            None => Err(ShardexError::InvalidInput {
+                field: "text_storage".to_string(),
+                reason: "Text storage not enabled for this index".to_string(),
+                suggestion: "Enable text storage in configuration".to_string(),
+            }),
+        }
+    }
+
     /// Get text storage statistics
     ///
     /// Returns statistics about the text storage including file sizes, document count,
