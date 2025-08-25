@@ -819,7 +819,7 @@ mod tests {
         // Store many documents to stress test file growth
         let document_count = 1000;
         let mut doc_ids = Vec::with_capacity(document_count);
-        
+
         for i in 0..document_count {
             let doc_id = DocumentId::new();
             let text = format!("Document #{} with substantial content to fill space and test memory mapping behavior under stress conditions. This text is designed to be large enough to trigger multiple file growth operations and test the robustness of the memory mapping system.", i);
@@ -830,14 +830,22 @@ mod tests {
         // Verify all documents are still retrievable after stress
         for (i, (doc_id, expected_text)) in doc_ids.iter().enumerate() {
             let retrieved = storage.get_text(*doc_id).unwrap();
-            assert_eq!(retrieved, *expected_text, "Document {} content mismatch after stress test", i);
+            assert_eq!(
+                retrieved, *expected_text,
+                "Document {} content mismatch after stress test",
+                i
+            );
         }
 
         assert_eq!(storage.entry_count(), document_count as u32);
-        
+
         // Verify utilization ratio is reasonable
         let utilization = storage.utilization_ratio();
-        assert!(utilization > 0.0 && utilization <= 1.0, "Utilization ratio {} is out of bounds", utilization);
+        assert!(
+            utilization > 0.0 && utilization <= 1.0,
+            "Utilization ratio {} is out of bounds",
+            utilization
+        );
     }
 
     #[test]
@@ -870,8 +878,13 @@ mod tests {
         // Test one byte under the limit
         let under_limit_doc_id = DocumentId::new();
         let under_limit_text = "A".repeat(max_doc_size - 1);
-        storage.store_text(under_limit_doc_id, &under_limit_text).unwrap();
-        assert_eq!(storage.get_text(under_limit_doc_id).unwrap(), under_limit_text);
+        storage
+            .store_text(under_limit_doc_id, &under_limit_text)
+            .unwrap();
+        assert_eq!(
+            storage.get_text(under_limit_doc_id).unwrap(),
+            under_limit_text
+        );
 
         // Test zero length (should fail based on existing empty_text_rejection test)
         let empty_doc_id = DocumentId::new();
