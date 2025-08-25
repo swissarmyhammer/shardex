@@ -1970,6 +1970,125 @@ impl ShardexIndex {
 
         Ok(())
     }
+
+    /// Configuration-like structure to access index settings
+    pub fn get_config(&self) -> IndexConfig {
+        IndexConfig {
+            vector_size: self.vector_size,
+            max_document_text_size: match &self.document_text_storage {
+                Some(_) => 10 * 1024 * 1024, // Default 10MB if text storage is enabled
+                None => 0, // Disabled if no text storage
+            },
+        }
+    }
+
+    /// Enable text storage if not already enabled
+    pub fn enable_text_storage(&mut self) -> Result<(), ShardexError> {
+        if self.document_text_storage.is_none() {
+            self.document_text_storage = Some(DocumentTextStorage::create(
+                &self.directory,
+                10 * 1024 * 1024, // Default to 10MB
+            )?);
+        }
+        Ok(())
+    }
+
+    /// Delete document text
+    pub fn delete_document_text(&mut self, document_id: DocumentId) -> Result<(), ShardexError> {
+        // For now, this is a no-op as we use append-only storage
+        // Actual deletion is handled during compaction
+        tracing::debug!("Document text deletion marked for: {}", document_id);
+        Ok(())
+    }
+
+    /// Add a posting to the appropriate shard
+    pub fn add_posting(&mut self, document_id: DocumentId, start: u32, length: u32, vector: Vec<f32>) -> Result<(), ShardexError> {
+        // Validate vector dimension
+        if vector.len() != self.vector_size {
+            return Err(ShardexError::InvalidDimension {
+                expected: self.vector_size,
+                actual: vector.len(),
+            });
+        }
+
+        let posting = Posting {
+            document_id,
+            start,
+            length,
+            vector,
+        };
+
+        let shard_id = self.determine_shard_for_posting(&posting)?;
+        let shard = self.get_shard_mut(shard_id)?;
+        shard.add_posting(posting)?;
+        
+        Ok(())
+    }
+
+    /// Remove all postings for a document
+    pub fn remove_document(&mut self, document_id: DocumentId) -> Result<(), ShardexError> {
+        // Collect shard IDs first to avoid borrow checker issues
+        let shard_ids: Vec<ShardId> = self.shards.iter().map(|s| s.id).collect();
+        
+        for shard_id in shard_ids {
+            let shard = self.get_shard_mut(shard_id)?;
+            shard.remove_document(document_id)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Create a new index with the provided layout and configuration
+    pub fn create_new(layout: DirectoryLayout, config: ShardexConfig) -> Result<Self, ShardexError> {
+        // Use the directory from the layout
+        let directory = layout.root_path().to_path_buf();
+        
+        // Validate configuration
+        config.validate()?;
+
+        // Ensure directory exists
+        std::fs::create_dir_all(&directory).map_err(ShardexError::Io)?;
+
+        // Ensure shards subdirectory exists
+        let shards_directory = directory.join("shards");
+        std::fs::create_dir_all(&shards_directory).map_err(ShardexError::Io)?;
+
+        // Create index metadata file
+        let index_metadata_path = directory.join("shardex.meta");
+        let metadata = IndexMetadata {
+            version: 1,
+            vector_size: config.vector_size,
+            segment_capacity: config.shardex_segment_size,
+            created_at: SystemTime::now(),
+            last_modified: SystemTime::now(),
+        };
+
+        let metadata_json = serde_json::to_string_pretty(&metadata)
+            .map_err(|e| ShardexError::Config(format!("Failed to serialize metadata: {}", e)))?;
+
+        std::fs::write(&index_metadata_path, metadata_json).map_err(ShardexError::Io)?;
+
+        // Create text storage if max_document_text_size is configured
+        let document_text_storage = if config.max_document_text_size > 0 {
+            Some(DocumentTextStorage::create(
+                &directory,
+                config.max_document_text_size,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            shards: Vec::new(),
+            directory,
+            vector_size: config.vector_size,
+            segment_capacity: config.shardex_segment_size,
+            shard_cache: HashMap::new(),
+            cache_limit: 100, // Default cache limit
+            deduplication_policy: config.deduplication_policy,
+            document_text_storage,
+        })
+    }
 }
 
 /// Index metadata stored in the shardex.meta file
@@ -2015,6 +2134,15 @@ impl std::fmt::Display for IndexStatistics {
             self.cached_shards
         )
     }
+}
+
+/// Configuration-like structure for accessing index settings
+#[derive(Debug, Clone)]
+pub struct IndexConfig {
+    /// Vector dimension size
+    pub vector_size: usize,
+    /// Maximum document text size (0 if text storage disabled)
+    pub max_document_text_size: usize,
 }
 
 #[cfg(test)]
