@@ -117,6 +117,8 @@ impl ShardexImpl {
                 needs_recovery: false,
                 clean_shutdown: false,
             },
+            text_storage_enabled: false,
+            max_document_text_size: Some(config.max_document_text_size),
         };
 
         // Save the metadata (overwrites the JSON metadata from ShardexIndex::create)

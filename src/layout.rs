@@ -33,6 +33,7 @@
 //! ```
 
 use crate::config::ShardexConfig;
+use crate::document_text_entry::{DocumentTextEntry, TextDataHeader, TextIndexHeader};
 use crate::error::ShardexError;
 use crate::identifiers::ShardId;
 use crate::Result;
@@ -100,6 +101,10 @@ pub struct IndexMetadata {
     pub wal_segment_count: usize,
     /// Index state flags
     pub flags: IndexFlags,
+    /// Whether text storage is enabled for this index
+    pub text_storage_enabled: bool,
+    /// Maximum document text size configuration
+    pub max_document_text_size: Option<usize>,
 }
 
 /// Flags indicating various index states and capabilities
@@ -160,6 +165,31 @@ pub struct CleanupManager {
     layout: DirectoryLayout,
     /// Temporary files that need cleanup
     temp_files: HashSet<PathBuf>,
+}
+
+/// Statistics about cleanup operations and file sizes
+#[derive(Debug, Clone)]
+pub struct CleanupStats {
+    /// Size of text storage files in bytes
+    pub text_storage_size: u64,
+    /// Number of temporary files
+    pub temp_file_count: usize,
+}
+
+impl Default for CleanupStats {
+    fn default() -> Self {
+        Self {
+            text_storage_size: 0,
+            temp_file_count: 0,
+        }
+    }
+}
+
+impl CleanupStats {
+    /// Create a new CleanupStats with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl DirectoryLayout {
@@ -227,6 +257,112 @@ impl DirectoryLayout {
     pub fn wal_segment_path(&self, segment_number: u32) -> PathBuf {
         self.wal_dir
             .join(format!("wal_{:06}.{}", segment_number, WAL_EXT))
+    }
+
+    /// Get path to text index file
+    pub fn text_index_file(&self) -> PathBuf {
+        self.root_path.join("text_index.dat")
+    }
+    
+    /// Get path to text data file  
+    pub fn text_data_file(&self) -> PathBuf {
+        self.root_path.join("text_data.dat")
+    }
+    
+    /// Check if text storage files exist
+    pub fn has_text_storage(&self) -> bool {
+        self.text_index_file().exists() && self.text_data_file().exists()
+    }
+    
+    /// Get total size of text storage files
+    pub fn text_storage_size(&self) -> Result<u64> {
+        let index_size = std::fs::metadata(self.text_index_file())?
+            .len();
+        let data_size = std::fs::metadata(self.text_data_file())?
+            .len();
+        Ok(index_size + data_size)
+    }
+    
+    /// Validate text storage files integrity
+    pub fn validate_text_storage(&self) -> Result<()> {
+        if !self.has_text_storage() {
+            return Ok(()); // No text storage to validate
+        }
+        
+        // Validate index file header
+        let index_file = std::fs::File::open(self.text_index_file())?;
+        let index_header = self.read_text_index_header(&index_file)?;
+        index_header.validate()?;
+        
+        // Validate data file header
+        let data_file = std::fs::File::open(self.text_data_file())?;
+        let data_header = self.read_text_data_header(&data_file)?;
+        data_header.validate()?;
+        
+        // Cross-validate file sizes and offsets
+        self.validate_text_storage_consistency(&index_header, &data_header)?;
+        
+        Ok(())
+    }
+    
+    /// Read text index header from file
+    fn read_text_index_header(&self, file: &std::fs::File) -> Result<TextIndexHeader> {
+        use std::io::{Read, Seek, SeekFrom};
+        
+        let mut file = file;
+        file.seek(SeekFrom::Start(0))?;
+        
+        let mut header_bytes = vec![0u8; TextIndexHeader::SIZE];
+        file.read_exact(&mut header_bytes)?;
+        
+        let header: TextIndexHeader = bytemuck::pod_read_unaligned(&header_bytes);
+        Ok(header)
+    }
+    
+    /// Read text data header from file
+    fn read_text_data_header(&self, file: &std::fs::File) -> Result<TextDataHeader> {
+        use std::io::{Read, Seek, SeekFrom};
+        
+        let mut file = file;
+        file.seek(SeekFrom::Start(0))?;
+        
+        let mut header_bytes = vec![0u8; TextDataHeader::SIZE];
+        file.read_exact(&mut header_bytes)?;
+        
+        let header: TextDataHeader = bytemuck::pod_read_unaligned(&header_bytes);
+        Ok(header)
+    }
+    
+    /// Validate consistency between text storage files
+    fn validate_text_storage_consistency(
+        &self,
+        index_header: &TextIndexHeader,
+        data_header: &TextDataHeader,
+    ) -> Result<()> {
+        // Ensure index entry count matches file size
+        let expected_index_size = TextIndexHeader::SIZE +
+            (index_header.entry_count as usize * DocumentTextEntry::SIZE);
+        
+        let actual_index_size = std::fs::metadata(self.text_index_file())?.len() as usize;
+        
+        if expected_index_size != actual_index_size {
+            return Err(ShardexError::text_corruption(
+                format!("Index file size mismatch: expected {}, actual {}", 
+                       expected_index_size, actual_index_size)
+            ));
+        }
+        
+        // Validate data file next offset doesn't exceed file size
+        let actual_data_size = std::fs::metadata(self.text_data_file())?.len();
+        
+        if data_header.next_text_offset > actual_data_size {
+            return Err(ShardexError::text_corruption(
+                format!("Data file next offset {} exceeds file size {}", 
+                       data_header.next_text_offset, actual_data_size)
+            ));
+        }
+        
+        Ok(())
     }
 
     /// Create all necessary directories for the index
@@ -325,6 +461,8 @@ impl IndexMetadata {
                 needs_recovery: false,
                 clean_shutdown: true,
             },
+            text_storage_enabled: false,
+            max_document_text_size: None,
         })
     }
 
@@ -747,6 +885,38 @@ impl CleanupManager {
         Ok(())
     }
 
+    /// Clean up text storage files
+    pub fn cleanup_text_storage(&self) -> Result<()> {
+        let layout = &self.layout;
+        
+        // Remove text index file if it exists
+        if layout.text_index_file().exists() {
+            std::fs::remove_file(layout.text_index_file())?;
+        }
+        
+        // Remove text data file if it exists  
+        if layout.text_data_file().exists() {
+            std::fs::remove_file(layout.text_data_file())?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Get cleanup statistics including text storage
+    pub fn get_cleanup_stats(&self) -> Result<CleanupStats> {
+        let mut stats = CleanupStats {
+            text_storage_size: 0,
+            temp_file_count: self.temp_files.len(),
+        };
+        
+        // Add text storage file sizes if they exist
+        if self.layout.has_text_storage() {
+            stats.text_storage_size = self.layout.text_storage_size()?;
+        }
+        
+        Ok(stats)
+    }
+
     /// Get the directory layout
     pub fn layout(&self) -> &DirectoryLayout {
         &self.layout
@@ -988,5 +1158,156 @@ mod tests {
         // Should pass validation after creation
         assert!(layout.validate().is_ok());
         assert!(layout.exists());
+    }
+
+    #[test]
+    fn test_text_storage_file_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+
+        let text_index_path = layout.text_index_file();
+        let text_data_path = layout.text_data_file();
+
+        assert_eq!(text_index_path, temp_dir.path().join("text_index.dat"));
+        assert_eq!(text_data_path, temp_dir.path().join("text_data.dat"));
+    }
+
+    #[test]
+    fn test_text_storage_existence_check() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+
+        // Initially no text storage files exist
+        assert!(!layout.has_text_storage());
+
+        // Create only index file - still should return false
+        std::fs::write(layout.text_index_file(), b"index data").unwrap();
+        assert!(!layout.has_text_storage());
+
+        // Create data file - now should return true
+        std::fs::write(layout.text_data_file(), b"data content").unwrap();
+        assert!(layout.has_text_storage());
+    }
+
+    #[test]
+    fn test_text_storage_size_calculation() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+
+        // Create text storage files with known sizes
+        let index_content = b"index file content";
+        let data_content = b"data file content with more data";
+        
+        std::fs::write(layout.text_index_file(), index_content).unwrap();
+        std::fs::write(layout.text_data_file(), data_content).unwrap();
+
+        let total_size = layout.text_storage_size().unwrap();
+        let expected_size = index_content.len() as u64 + data_content.len() as u64;
+        
+        assert_eq!(total_size, expected_size);
+    }
+
+    #[test]
+    fn test_text_storage_validation_no_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+
+        // Should succeed when no text storage files exist
+        assert!(layout.validate_text_storage().is_ok());
+    }
+
+    #[test]
+    fn test_cleanup_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+        let cleanup_manager = CleanupManager::new(layout.clone());
+
+        // Create text storage files
+        std::fs::write(layout.text_index_file(), b"index data").unwrap();
+        std::fs::write(layout.text_data_file(), b"data content").unwrap();
+        
+        assert!(layout.has_text_storage());
+
+        // Clean up text storage
+        cleanup_manager.cleanup_text_storage().unwrap();
+        
+        assert!(!layout.has_text_storage());
+        assert!(!layout.text_index_file().exists());
+        assert!(!layout.text_data_file().exists());
+    }
+
+    #[test]
+    fn test_cleanup_stats() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+        let mut cleanup_manager = CleanupManager::new(layout.clone());
+
+        // Register a temporary file
+        let temp_file = temp_dir.path().join("temp.txt");
+        cleanup_manager.register_temp_file(temp_file.clone());
+
+        // Create text storage files
+        let index_content = b"index content";
+        let data_content = b"data content";
+        std::fs::write(layout.text_index_file(), index_content).unwrap();
+        std::fs::write(layout.text_data_file(), data_content).unwrap();
+
+        let stats = cleanup_manager.get_cleanup_stats().unwrap();
+        
+        assert_eq!(stats.temp_file_count, 1);
+        assert_eq!(stats.text_storage_size, 
+                  index_content.len() as u64 + data_content.len() as u64);
+    }
+
+    #[test]
+    fn test_cleanup_stats_no_text_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        let layout = DirectoryLayout::new(temp_dir.path());
+        let cleanup_manager = CleanupManager::new(layout);
+
+        let stats = cleanup_manager.get_cleanup_stats().unwrap();
+        
+        assert_eq!(stats.text_storage_size, 0);
+        assert_eq!(stats.temp_file_count, 0);
+    }
+
+    #[test]
+    fn test_cleanup_stats_default() {
+        let stats = CleanupStats::default();
+        assert_eq!(stats.text_storage_size, 0);
+        assert_eq!(stats.temp_file_count, 0);
+
+        let stats_new = CleanupStats::new();
+        assert_eq!(stats_new.text_storage_size, 0);
+        assert_eq!(stats_new.temp_file_count, 0);
+    }
+
+    #[test]
+    fn test_index_metadata_text_storage_fields() {
+        let config = create_test_config();
+        let metadata = IndexMetadata::new(config).unwrap();
+
+        // Default values for text storage fields
+        assert!(!metadata.text_storage_enabled);
+        assert!(metadata.max_document_text_size.is_none());
+    }
+
+    #[test]
+    fn test_index_metadata_serialization_with_text_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let metadata_path = temp_dir.path().join("test.meta");
+        let config = create_test_config();
+
+        let mut metadata = IndexMetadata::new(config).unwrap();
+        metadata.text_storage_enabled = true;
+        metadata.max_document_text_size = Some(5 * 1024 * 1024); // 5MB
+
+        // Save metadata
+        metadata.save(&metadata_path).unwrap();
+
+        // Load metadata
+        let loaded_metadata = IndexMetadata::load(&metadata_path).unwrap();
+        assert_eq!(loaded_metadata.text_storage_enabled, true);
+        assert_eq!(loaded_metadata.max_document_text_size, Some(5 * 1024 * 1024));
     }
 }
