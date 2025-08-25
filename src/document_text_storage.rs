@@ -804,6 +804,15 @@ impl DocumentTextStorage {
         let length_usize = length as usize;
         let document_length = document_text.len();
 
+        // Reject zero-length extractions
+        if length_usize == 0 {
+            return Err(ShardexError::invalid_range(
+                start,
+                length,
+                document_length as u64,
+            ));
+        }
+
         if start_usize > document_length {
             return Err(ShardexError::invalid_range(
                 start,
