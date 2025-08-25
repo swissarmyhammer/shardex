@@ -9,6 +9,7 @@ ideas/
 
 # Test artifacts
 test_index/
+TEST_FAILURES.md
 
 # Editor files
 .vscode/
