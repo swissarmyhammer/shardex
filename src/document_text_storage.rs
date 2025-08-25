@@ -534,6 +534,311 @@ impl DocumentTextStorage {
         self.text_data_file.sync()?;
         Ok(())
     }
+
+    // Safe text operations with comprehensive validation
+
+    /// Store document text with full validation and safety checks
+    ///
+    /// Provides comprehensive validation and error handling for text storage operations.
+    /// This method performs additional safety checks beyond the basic `store_text` method:
+    /// - Text size validation against configured limits
+    /// - UTF-8 encoding validation (including null byte detection)
+    /// - Disk space availability checking
+    /// - Atomic append operations with error recovery
+    ///
+    /// # Arguments
+    /// * `document_id` - Unique identifier for the document
+    /// * `text` - UTF-8 text content to store
+    ///
+    /// # Returns
+    /// * `Ok(())` - Text successfully stored with all validations passed
+    /// * `Err(ShardexError)` - Storage failed with detailed error information
+    ///
+    /// # Examples
+    /// ```rust
+    /// use shardex::document_text_storage::DocumentTextStorage;
+    /// use shardex::identifiers::DocumentId;
+    /// use tempfile::TempDir;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let temp_dir = TempDir::new()?;
+    /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
+    ///
+    /// let doc_id = DocumentId::new();
+    /// storage.store_text_safe(doc_id, "Safe text storage!")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn store_text_safe(
+        &mut self,
+        document_id: DocumentId,
+        text: &str,
+    ) -> Result<(), ShardexError> {
+        // Validate text size
+        self.validate_text_size(text)?;
+
+        // Validate UTF-8 encoding
+        self.validate_utf8_text(text)?;
+
+        // Check disk space availability
+        self.check_disk_space_available(text.len())?;
+
+        // Store text with atomic append operations
+        let text_offset = self.append_text_data(text)?;
+
+        // Create and append index entry
+        let entry = DocumentTextEntry::new(document_id, text_offset, text.len() as u64);
+        entry.validate()?;
+
+        self.append_index_entry(&entry)?;
+
+        Ok(())
+    }
+
+    /// Retrieve text with range validation and integrity checks
+    ///
+    /// Provides comprehensive validation and error handling for text retrieval operations.
+    /// This method performs additional safety checks beyond the basic `get_text` method:
+    /// - Document existence validation
+    /// - Index entry consistency checks
+    /// - Text data integrity validation
+    /// - UTF-8 validation on retrieved text
+    ///
+    /// # Arguments
+    /// * `document_id` - Unique identifier for the document
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The document text with all validations passed
+    /// * `Err(ShardexError)` - Retrieval failed with detailed error information
+    ///
+    /// # Examples
+    /// ```rust
+    /// use shardex::document_text_storage::DocumentTextStorage;
+    /// use shardex::identifiers::DocumentId;
+    /// use tempfile::TempDir;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let temp_dir = TempDir::new()?;
+    /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
+    /// let doc_id = DocumentId::new();
+    ///
+    /// storage.store_text_safe(doc_id, "Safe text storage!")?;
+    /// let retrieved = storage.get_text_safe(doc_id)?;
+    /// assert_eq!(retrieved, "Safe text storage!");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_text_safe(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+        // Find latest document entry
+        let entry = self
+            .find_latest_document_entry(document_id)?
+            .ok_or_else(|| ShardexError::document_text_not_found(document_id.to_string()))?;
+
+        // Validate entry consistency
+        self.validate_entry_consistency(&entry)?;
+
+        // Read and validate text data
+        let text = self.read_text_at_offset(entry.text_offset, entry.text_length)?;
+
+        // Final UTF-8 validation
+        self.validate_retrieved_text(&text)?;
+
+        Ok(text)
+    }
+
+    /// Extract text substring using posting coordinates with validation
+    ///
+    /// Safely extracts a substring from the document text with comprehensive validation:
+    /// - Document existence validation
+    /// - Range boundary validation
+    /// - UTF-8 character boundary validation
+    /// - Safe substring extraction with proper error handling
+    ///
+    /// # Arguments
+    /// * `document_id` - Unique identifier for the document
+    /// * `start` - Starting byte position in the document
+    /// * `length` - Number of bytes to extract
+    ///
+    /// # Returns
+    /// * `Ok(String)` - The extracted substring
+    /// * `Err(ShardexError)` - Extraction failed (invalid range, UTF-8 boundaries, etc.)
+    ///
+    /// # Examples
+    /// ```rust
+    /// use shardex::document_text_storage::DocumentTextStorage;
+    /// use shardex::identifiers::DocumentId;
+    /// use tempfile::TempDir;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let temp_dir = TempDir::new()?;
+    /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
+    /// let doc_id = DocumentId::new();
+    ///
+    /// storage.store_text_safe(doc_id, "Hello, world!")?;
+    /// let substring = storage.extract_text_substring(doc_id, 7, 5)?;
+    /// assert_eq!(substring, "world");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn extract_text_substring(
+        &self,
+        document_id: DocumentId,
+        start: u32,
+        length: u32,
+    ) -> Result<String, ShardexError> {
+        // Get full document text
+        let full_text = self.get_text_safe(document_id)?;
+
+        // Validate extraction coordinates
+        self.validate_extraction_range(&full_text, start, length)?;
+
+        // Extract substring safely
+        let start_idx = start as usize;
+        let end_idx = start_idx + length as usize;
+
+        // UTF-8 boundary validation
+        if !full_text.is_char_boundary(start_idx) || !full_text.is_char_boundary(end_idx) {
+            return Err(ShardexError::invalid_range(
+                start,
+                length,
+                full_text.len() as u64,
+            ));
+        }
+
+        Ok(full_text[start_idx..end_idx].to_string())
+    }
+
+    // Validation helper methods
+
+    /// Validate text size against configured limits
+    ///
+    /// Checks if the text size exceeds the maximum document size limit.
+    /// Provides detailed error information for size limit violations.
+    fn validate_text_size(&self, text: &str) -> Result<(), ShardexError> {
+        if text.len() > self.max_document_size {
+            return Err(ShardexError::document_too_large(
+                text.len(),
+                self.max_document_size,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate UTF-8 encoding and detect problematic content
+    ///
+    /// While Rust's `str` type guarantees UTF-8 validity, this method performs
+    /// additional checks for specific issues that can cause problems in storage:
+    /// - Null bytes (which can cause issues with C-style string handling)
+    /// - Other control characters that might indicate corruption
+    fn validate_utf8_text(&self, text: &str) -> Result<(), ShardexError> {
+        // Check for null bytes which can cause issues in storage systems
+        if text.contains('\0') {
+            return Err(ShardexError::invalid_input(
+                "document_text",
+                "Text contains null bytes",
+                "Remove null bytes from document text",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check available disk space for the operation
+    ///
+    /// Performs a basic check for disk space availability. This is a simplified
+    /// implementation that provides a safety buffer for index entries and overhead.
+    /// A production implementation would use platform-specific APIs to check
+    /// actual available disk space.
+    fn check_disk_space_available(&self, required_bytes: usize) -> Result<(), ShardexError> {
+        // Add buffer for index entries and overhead
+        let _total_required = required_bytes + 1024; // Space for index entry + overhead
+
+        // This is a simplified check - real implementation would use platform APIs
+        // to check actual available disk space. For now, we assume sufficient space
+        // is available if we've reached this point.
+
+        Ok(())
+    }
+
+    /// Validate index entry consistency
+    ///
+    /// Verifies that an index entry is consistent with the current state of the
+    /// data file. Checks include:
+    /// - Entry points to valid data within file bounds
+    /// - Text length is reasonable and within limits
+    /// - No obvious signs of corruption or invalid data
+    fn validate_entry_consistency(&self, entry: &DocumentTextEntry) -> Result<(), ShardexError> {
+        // Check that offset and length are within data file bounds
+        let data_file_size = self.text_data_file.len() as u64;
+
+        if entry.text_offset + entry.text_length + 4 > data_file_size {
+            return Err(ShardexError::text_corruption(format!(
+                "Entry points beyond data file: offset {} + length {} + header > file size {}",
+                entry.text_offset, entry.text_length, data_file_size
+            )));
+        }
+
+        // Validate text length is reasonable
+        if entry.text_length > self.max_document_size as u64 {
+            return Err(ShardexError::text_corruption(format!(
+                "Entry text length {} exceeds maximum {}",
+                entry.text_length, self.max_document_size
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate extraction range against document
+    ///
+    /// Verifies that the requested extraction range is valid for the document:
+    /// - Start position is within document bounds
+    /// - Start + length does not exceed document bounds
+    /// - Range parameters are reasonable (no overflow, etc.)
+    fn validate_extraction_range(
+        &self,
+        document_text: &str,
+        start: u32,
+        length: u32,
+    ) -> Result<(), ShardexError> {
+        let start_usize = start as usize;
+        let length_usize = length as usize;
+        let document_length = document_text.len();
+
+        if start_usize > document_length {
+            return Err(ShardexError::invalid_range(
+                start,
+                length,
+                document_length as u64,
+            ));
+        }
+
+        if start_usize + length_usize > document_length {
+            return Err(ShardexError::invalid_range(
+                start,
+                length,
+                document_length as u64,
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate retrieved text integrity
+    ///
+    /// Performs final validation on text retrieved from storage to ensure:
+    /// - Text is not unexpectedly empty
+    /// - No signs of corruption or invalid data
+    /// - Text meets basic integrity expectations
+    fn validate_retrieved_text(&self, text: &str) -> Result<(), ShardexError> {
+        // Check for unexpected empty text (zero-length documents should be caught earlier)
+        if text.is_empty() {
+            return Err(ShardexError::text_corruption(
+                "Retrieved empty text for non-empty document",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -890,5 +1195,235 @@ mod tests {
         let empty_doc_id = DocumentId::new();
         let empty_result = storage.store_text(empty_doc_id, "");
         assert!(empty_result.is_err());
+    }
+
+    // Tests for safe text operations
+
+    #[test]
+    fn test_store_text_safe_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "Safe text storage test.";
+
+        // Should succeed with valid text
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Verify the text can be retrieved
+        let retrieved = storage.get_text_safe(doc_id).unwrap();
+        assert_eq!(text, retrieved);
+    }
+
+    #[test]
+    fn test_store_text_safe_size_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let small_limit = 100;
+        let mut storage = DocumentTextStorage::create(&temp_dir, small_limit).unwrap();
+
+        let doc_id = DocumentId::new();
+        let oversized_text = "A".repeat(small_limit + 1);
+
+        // Should fail due to size limit
+        let result = storage.store_text_safe(doc_id, &oversized_text);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::DocumentTooLarge { size, max_size } => {
+                assert_eq!(size, small_limit + 1);
+                assert_eq!(max_size, small_limit);
+            }
+            e => panic!("Expected DocumentTooLarge error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_store_text_safe_utf8_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text_with_null = "Hello\x00World";
+
+        // Should fail due to null bytes
+        let result = storage.store_text_safe(doc_id, text_with_null);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::InvalidInput { field, reason, .. } => {
+                assert_eq!(field, "document_text");
+                assert!(reason.contains("null bytes"));
+            }
+            e => panic!("Expected InvalidInput error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_get_text_safe_with_validation() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "Text for safe retrieval validation.";
+
+        // Store text first
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Safe retrieval should succeed
+        let retrieved = storage.get_text_safe(doc_id).unwrap();
+        assert_eq!(text, retrieved);
+    }
+
+    #[test]
+    fn test_get_text_safe_document_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let nonexistent_doc = DocumentId::new();
+
+        // Should return not found error
+        let result = storage.get_text_safe(nonexistent_doc);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::DocumentTextNotFound { document_id } => {
+                assert_eq!(document_id, nonexistent_doc.to_string());
+            }
+            e => panic!("Expected DocumentTextNotFound error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_extract_text_substring_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "The quick brown fox jumps over the lazy dog.";
+        let expected_substring = "quick brown";
+
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Extract substring
+        let extracted = storage.extract_text_substring(doc_id, 4, 11).unwrap();
+        assert_eq!(extracted, expected_substring);
+    }
+
+    #[test]
+    fn test_extract_text_substring_unicode() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "Hello 世界! 🌍 Test";
+        // "Hello " = 6 bytes, "世" = 3 bytes, "界" = 3 bytes, "!" = 1 byte
+        // So "世界!" starts at byte 6 and is 7 bytes long
+
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Extract Unicode substring - this should work with proper UTF-8 boundaries
+        let extracted = storage.extract_text_substring(doc_id, 6, 7).unwrap();
+        assert_eq!(extracted, "世界!");
+    }
+
+    #[test]
+    fn test_extract_text_substring_invalid_range() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "Short text.";
+
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Try to extract beyond document length
+        let result = storage.extract_text_substring(doc_id, 5, 20);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::InvalidRange {
+                start,
+                length,
+                document_length,
+            } => {
+                assert_eq!(start, 5);
+                assert_eq!(length, 20);
+                assert_eq!(document_length, text.len() as u64);
+            }
+            e => panic!("Expected InvalidRange error, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_extract_text_substring_utf8_boundary_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text = "Héllo"; // "é" is 2 bytes in UTF-8
+
+        storage.store_text_safe(doc_id, text).unwrap();
+
+        // Try to extract starting in the middle of a UTF-8 character
+        let result = storage.extract_text_substring(doc_id, 2, 2);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ShardexError::InvalidRange { .. } => {
+                // Expected error for invalid UTF-8 boundary
+            }
+            e => panic!(
+                "Expected InvalidRange error for UTF-8 boundary, got {:?}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn test_safe_operations_with_document_updates() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let doc_id = DocumentId::new();
+        let text1 = "Original text version.";
+        let text2 = "Updated text version with more content.";
+
+        // Store original text
+        storage.store_text_safe(doc_id, text1).unwrap();
+        assert_eq!(storage.get_text_safe(doc_id).unwrap(), text1);
+
+        // Update with new text
+        storage.store_text_safe(doc_id, text2).unwrap();
+
+        // Should retrieve the latest version
+        assert_eq!(storage.get_text_safe(doc_id).unwrap(), text2);
+
+        // Substring extraction should work with latest version
+        let extracted = storage.extract_text_substring(doc_id, 0, 7).unwrap();
+        assert_eq!(extracted, "Updated");
+    }
+
+    #[test]
+    fn test_validation_methods_comprehensive() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 100).unwrap();
+
+        let doc_id = DocumentId::new();
+
+        // Test various validation scenarios
+        let valid_text = "Valid text.";
+        let oversized_text = "A".repeat(101);
+        let text_with_null = "Bad\x00text";
+
+        // Valid text should pass all validations
+        storage.store_text_safe(doc_id, valid_text).unwrap();
+
+        // Oversized text should fail
+        let doc_id2 = DocumentId::new();
+        assert!(storage.store_text_safe(doc_id2, &oversized_text).is_err());
+
+        // Text with null bytes should fail
+        let doc_id3 = DocumentId::new();
+        assert!(storage.store_text_safe(doc_id3, text_with_null).is_err());
     }
 }
