@@ -24,6 +24,15 @@ pub enum WalOperation {
     },
     /// Remove all postings for a document
     RemoveDocument { document_id: DocumentId },
+    /// Store document text (part of atomic replace operation)
+    StoreDocumentText { 
+        document_id: DocumentId, 
+        text: String 
+    },
+    /// Delete document text (cleanup operation)
+    DeleteDocumentText { 
+        document_id: DocumentId 
+    },
 }
 
 /// A transaction containing batched WAL operations
@@ -68,6 +77,8 @@ impl WalOperation {
         match self {
             WalOperation::AddPosting { document_id, .. } => *document_id,
             WalOperation::RemoveDocument { document_id } => *document_id,
+            WalOperation::StoreDocumentText { document_id, .. } => *document_id,
+            WalOperation::DeleteDocumentText { document_id } => *document_id,
         }
     }
 
@@ -81,6 +92,16 @@ impl WalOperation {
         matches!(self, WalOperation::RemoveDocument { .. })
     }
 
+    /// Check if this is a StoreDocumentText operation
+    pub fn is_store_document_text(&self) -> bool {
+        matches!(self, WalOperation::StoreDocumentText { .. })
+    }
+
+    /// Check if this is a DeleteDocumentText operation
+    pub fn is_delete_document_text(&self) -> bool {
+        matches!(self, WalOperation::DeleteDocumentText { .. })
+    }
+
     /// Estimate the serialized size of this operation in bytes
     pub fn estimated_serialized_size(&self) -> usize {
         match self {
@@ -89,6 +110,14 @@ impl WalOperation {
                 1 + 16 + 4 + 4 + 4 + (vector.len() * 4)
             }
             WalOperation::RemoveDocument { .. } => {
+                // operation tag (1) + document_id (16)
+                1 + 16
+            }
+            WalOperation::StoreDocumentText { text, .. } => {
+                // operation tag (1) + document_id (16) + text length (4) + text data (UTF-8 bytes)
+                1 + 16 + 4 + text.len()
+            }
+            WalOperation::DeleteDocumentText { .. } => {
                 // operation tag (1) + document_id (16)
                 1 + 16
             }
@@ -143,6 +172,29 @@ impl WalOperation {
             }
             WalOperation::RemoveDocument { .. } => {
                 // RemoveDocument operations are always valid if document_id is valid
+                // DocumentId validation is handled by the type system
+            }
+            WalOperation::StoreDocumentText { text, .. } => {
+                // String type in Rust guarantees valid UTF-8, so we don't need to check
+                // But we should validate the text is not empty
+                if text.is_empty() {
+                    return Err(ShardexError::Wal(
+                        "StoreDocumentText text cannot be empty".to_string(),
+                    ));
+                }
+
+                // For now, use a reasonable default max size (10MB)
+                // TODO: This should be configurable via ShardexConfig in the future
+                const DEFAULT_MAX_TEXT_SIZE: usize = 10 * 1024 * 1024; // 10MB
+                if text.len() > DEFAULT_MAX_TEXT_SIZE {
+                    return Err(ShardexError::DocumentTooLarge {
+                        size: text.len(),
+                        max_size: DEFAULT_MAX_TEXT_SIZE,
+                    });
+                }
+            }
+            WalOperation::DeleteDocumentText { .. } => {
+                // DeleteDocumentText operations are always valid if document_id is valid
                 // DocumentId validation is handled by the type system
             }
         }
@@ -1447,5 +1499,109 @@ mod tests {
             WalTransaction::with_id_and_timestamp(TransactionId::new(), future_time, future_ops)
                 .unwrap();
         assert!(future_transaction.validate(None).is_err());
+    }
+
+    #[test] 
+    fn test_document_text_wal_operations() {
+        let doc_id = DocumentId::new();
+        let text = "The quick brown fox jumps over the lazy dog.".to_string();
+
+        // Test StoreDocumentText operation
+        let store_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: text.clone(),
+        };
+
+        assert_eq!(store_op.document_id(), doc_id);
+        assert!(store_op.is_store_document_text());
+        assert!(!store_op.is_delete_document_text());
+        assert!(!store_op.is_add_posting());
+        assert!(!store_op.is_remove_document());
+
+        // Test DeleteDocumentText operation
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+
+        assert_eq!(delete_op.document_id(), doc_id);
+        assert!(delete_op.is_delete_document_text());
+        assert!(!delete_op.is_store_document_text());
+        assert!(!delete_op.is_add_posting());
+        assert!(!delete_op.is_remove_document());
+
+        // Test size estimation includes text content
+        let store_size = store_op.estimated_serialized_size();
+        let delete_size = delete_op.estimated_serialized_size();
+        
+        assert!(store_size > delete_size);
+        assert!(store_size > text.len()); // Should include text plus overhead
+    }
+
+    #[test]
+    fn test_document_text_operation_validation() {
+        let doc_id = DocumentId::new();
+
+        // Valid text operation
+        let valid_text = "Hello, world!".to_string();
+        let valid_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: valid_text,
+        };
+        assert!(valid_op.validate(None).is_ok());
+
+        // Test with configured max size
+        let large_text = "x".repeat(1000);
+        let large_op = WalOperation::StoreDocumentText {
+            document_id: doc_id,
+            text: large_text,
+        };
+        
+        // Should be valid by default (no max size set)
+        assert!(large_op.validate(None).is_ok());
+
+        // Delete operation should always be valid
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+        assert!(delete_op.validate(None).is_ok());
+        assert!(delete_op.validate(Some(128)).is_ok());
+    }
+
+    #[test]
+    fn test_document_text_transaction_atomicity() {
+        let doc_id = DocumentId::new();
+        let text = "Updated document content".to_string();
+
+        // Create atomic replace transaction
+        let operations = vec![
+            WalOperation::StoreDocumentText {
+                document_id: doc_id,
+                text,
+            },
+            WalOperation::RemoveDocument {
+                document_id: doc_id,
+            },
+            WalOperation::AddPosting {
+                document_id: doc_id,
+                start: 0,
+                length: 7,
+                vector: vec![1.0, 2.0, 3.0],
+            },
+        ];
+
+        let transaction = WalTransaction::new(operations).unwrap();
+        assert_eq!(transaction.operation_count(), 3);
+        
+        let affected_docs = transaction.affected_document_ids();
+        assert_eq!(affected_docs.len(), 1);
+        assert_eq!(affected_docs[0], doc_id);
+        
+        // Should validate successfully
+        assert!(transaction.validate(Some(3)).is_ok());
+        
+        // Should serialize and deserialize correctly
+        let serialized = transaction.serialize().unwrap();
+        let deserialized = WalTransaction::deserialize(&serialized).unwrap();
+        assert_eq!(transaction.operations, deserialized.operations);
     }
 }

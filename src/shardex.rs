@@ -1222,6 +1222,24 @@ impl ShardexImpl {
                 );
                 Ok(())
             }
+            WalOperation::StoreDocumentText { document_id, text: _ } => {
+                // Document text storage operations are handled at the index level, not shard level
+                // For now, we'll just log and ignore these operations until document text storage is implemented
+                debug!(
+                    document_id = %document_id,
+                    "StoreDocumentText operation received - document text storage not yet implemented"
+                );
+                Ok(())
+            }
+            WalOperation::DeleteDocumentText { document_id } => {
+                // Document text deletion operations are handled at the index level, not shard level
+                // For now, we'll just log and ignore these operations until document text storage is implemented
+                debug!(
+                    document_id = %document_id,
+                    "DeleteDocumentText operation received - document text storage not yet implemented"
+                );
+                Ok(())
+            }
         }
     }
 
