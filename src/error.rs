@@ -84,6 +84,28 @@ pub enum ShardexError {
     /// Search operations failed
     #[error("Search error: {0}")]
     Search(String),
+
+    /// Text extraction coordinates are invalid for the document
+    #[error("Invalid text range: attempting to extract {start}..{} from document of length {document_length}", start + length)]
+    InvalidRange {
+        start: u32,
+        length: u32,
+        document_length: u64,
+    },
+
+    /// Document text exceeds configured size limits
+    #[error("Document too large: {size} bytes exceeds maximum {max_size} bytes")]
+    DocumentTooLarge { size: usize, max_size: usize },
+
+    /// Text storage file corruption detected
+    #[error("Text storage corruption: {0}")]
+    TextCorruption(String),
+
+    /// Document text not found for the given document ID
+    #[error("Document text not found for document ID: {document_id}")]
+    DocumentTextNotFound {
+        document_id: String, // String representation of DocumentId for display
+    },
 }
 
 impl ShardexError {
@@ -229,6 +251,32 @@ impl ShardexError {
             reason.into(),
             suggestion.into()
         ))
+    }
+
+    /// Create an invalid text range error
+    pub fn invalid_range(start: u32, length: u32, document_length: u64) -> Self {
+        Self::InvalidRange {
+            start,
+            length,
+            document_length,
+        }
+    }
+
+    /// Create a document too large error
+    pub fn document_too_large(size: usize, max_size: usize) -> Self {
+        Self::DocumentTooLarge { size, max_size }
+    }
+
+    /// Create a text storage corruption error
+    pub fn text_corruption(reason: impl Into<String>) -> Self {
+        Self::TextCorruption(reason.into())
+    }
+
+    /// Create a document text not found error
+    pub fn document_text_not_found(document_id: impl Into<String>) -> Self {
+        Self::DocumentTextNotFound {
+            document_id: document_id.into(),
+        }
     }
 
     /// Check if this error represents a transient failure that can be retried
@@ -490,5 +538,111 @@ mod tests {
         assert!(inf_msg.contains("Infinite values are not allowed"));
         assert!(negative_msg.contains("Negative similarity scores"));
         assert!(large_msg.contains("must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn test_invalid_range_error_display() {
+        let error = ShardexError::InvalidRange {
+            start: 10,
+            length: 20,
+            document_length: 25,
+        };
+        let display_str = format!("{}", error);
+        assert_eq!(
+            display_str,
+            "Invalid text range: attempting to extract 10..30 from document of length 25"
+        );
+    }
+
+    #[test]
+    fn test_document_too_large_error_display() {
+        let error = ShardexError::DocumentTooLarge {
+            size: 15_000_000,
+            max_size: 10_000_000,
+        };
+        let display_str = format!("{}", error);
+        assert_eq!(
+            display_str,
+            "Document too large: 15000000 bytes exceeds maximum 10000000 bytes"
+        );
+    }
+
+    #[test]
+    fn test_text_corruption_error_display() {
+        let error = ShardexError::TextCorruption("Invalid UTF-8 sequence".to_string());
+        let display_str = format!("{}", error);
+        assert_eq!(
+            display_str,
+            "Text storage corruption: Invalid UTF-8 sequence"
+        );
+    }
+
+    #[test]
+    fn test_document_text_not_found_error_display() {
+        let error = ShardexError::DocumentTextNotFound {
+            document_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        };
+        let display_str = format!("{}", error);
+        assert_eq!(
+            display_str,
+            "Document text not found for document ID: 01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        );
+    }
+
+    #[test]
+    fn test_invalid_range_helper_method() {
+        let error = ShardexError::invalid_range(10, 20, 25);
+        let display_str = format!("{}", error);
+        assert!(display_str.contains("Invalid text range"));
+        assert!(display_str.contains("10..30"));
+        assert!(display_str.contains("document of length 25"));
+    }
+
+    #[test]
+    fn test_document_too_large_helper_method() {
+        let error = ShardexError::document_too_large(15_000_000, 10_000_000);
+        let display_str = format!("{}", error);
+        assert!(display_str.contains("Document too large"));
+        assert!(display_str.contains("15000000 bytes"));
+        assert!(display_str.contains("maximum 10000000 bytes"));
+    }
+
+    #[test]
+    fn test_text_corruption_helper_method() {
+        let error = ShardexError::text_corruption("Invalid UTF-8 sequence");
+        let display_str = format!("{}", error);
+        assert!(display_str.contains("Text storage corruption"));
+        assert!(display_str.contains("Invalid UTF-8 sequence"));
+    }
+
+    #[test]
+    fn test_document_text_not_found_helper_method() {
+        let document_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let error = ShardexError::document_text_not_found(document_id);
+        let display_str = format!("{}", error);
+        assert!(display_str.contains("Document text not found"));
+        assert!(display_str.contains(document_id));
+    }
+
+    #[test]
+    fn test_document_text_error_classification() {
+        let range_error = ShardexError::invalid_range(10, 20, 25);
+        let too_large_error = ShardexError::document_too_large(15_000_000, 10_000_000);
+        let corruption_error = ShardexError::text_corruption("test corruption");
+        let not_found_error = ShardexError::document_text_not_found("test_id");
+
+        // Document text errors should not be transient or recoverable
+        // (they represent user input errors or data corruption)
+        assert!(!range_error.is_transient());
+        assert!(!range_error.is_recoverable());
+
+        assert!(!too_large_error.is_transient());
+        assert!(!too_large_error.is_recoverable());
+
+        assert!(!corruption_error.is_transient());
+        assert!(!corruption_error.is_recoverable());
+
+        assert!(!not_found_error.is_transient());
+        assert!(!not_found_error.is_recoverable());
     }
 }
