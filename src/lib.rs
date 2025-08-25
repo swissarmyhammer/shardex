@@ -48,6 +48,7 @@ pub mod cow_index;
 pub mod crash_recovery;
 pub mod deduplication;
 pub mod distance;
+pub mod document_text_entry;
 pub mod error;
 pub mod identifiers;
 pub mod integrity;
@@ -82,6 +83,10 @@ pub use cow_index::{CowShardexIndex, IndexWriter};
 pub use crash_recovery::{CrashRecovery, CrashRecoveryStats};
 pub use deduplication::{DeduplicationPolicy, DeduplicationStats, ResultDeduplicator};
 pub use distance::DistanceMetric;
+pub use document_text_entry::{
+    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_INDEX_MAGIC,
+    TEXT_DATA_VERSION, TEXT_INDEX_VERSION,
+};
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};

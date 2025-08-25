@@ -127,9 +127,11 @@ async fn test_high_contention_reader_performance() {
         .max()
         .unwrap();
     
-    let avg_expected_time = std::time::Duration::from_micros(10 * READS_PER_READER as u64);
-    let reasonable_overhead_factor = 10; // Allow 10x overhead for coordination and scheduling
-    let max_acceptable_duration = avg_expected_time * reasonable_overhead_factor;
+    // Each sleep(10μs) typically takes 1ms+ due to OS scheduling quantum
+    // With 20 operations, expect ~20ms base time + coordination overhead
+    let base_expected_time = std::time::Duration::from_millis(1 * READS_PER_READER as u64);
+    let reasonable_overhead_factor = 5; // Allow 5x overhead for coordination and CI variations
+    let max_acceptable_duration = base_expected_time * reasonable_overhead_factor;
 
     // Verify that no reader took an unreasonably long time (indicating blocking)
     assert!(
@@ -139,7 +141,7 @@ async fn test_high_contention_reader_performance() {
     );
 
     // Verify the total test completed in reasonable time
-    let total_expected_time = avg_expected_time; // Should be about same as individual since parallel
+    let total_expected_time = base_expected_time; // Should be about same as individual since parallel
     let max_acceptable_total = total_expected_time * reasonable_overhead_factor;
     
     assert!(
