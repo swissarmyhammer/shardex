@@ -137,7 +137,7 @@ impl TextStorageHealthMonitor {
 
         // Check utilization ratio is reasonable
         let utilization = self.storage.utilization_ratio();
-        if utilization < 0.0 || utilization > 1.0 {
+        if !(0.0..=1.0).contains(&utilization) {
             return Err(ShardexError::text_corruption(format!(
                 "Invalid utilization ratio: {}", utilization
             )));

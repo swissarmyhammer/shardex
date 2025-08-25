@@ -60,7 +60,7 @@ async fn test_error_handling_system_integration() {
     };
     
     // Create a new storage instance for the mutex since we can't move from Arc
-    let storage_for_mutex = DocumentTextStorage::create(&temp_dir.path().join("recovery"), 10 * 1024 * 1024).unwrap();
+    let storage_for_mutex = DocumentTextStorage::create(temp_dir.path().join("recovery"), 10 * 1024 * 1024).unwrap();
     let storage_mutex = Arc::new(Mutex::new(storage_for_mutex));
     let mut recovery_manager = TextStorageRecoveryManager::new(
         storage_mutex,
@@ -97,7 +97,7 @@ async fn test_health_monitoring_scenarios() {
     // Test with empty storage
     {
         let storage = Arc::new(
-            DocumentTextStorage::create(&temp_dir.path().join("empty"), 1024 * 1024).unwrap()
+            DocumentTextStorage::create(temp_dir.path().join("empty"), 1024 * 1024).unwrap()
         );
         
         let mut monitor = TextStorageHealthMonitor::new(
@@ -112,7 +112,7 @@ async fn test_health_monitoring_scenarios() {
     
     // Test with storage containing data
     {
-        let mut storage = DocumentTextStorage::create(&temp_dir.path().join("with_data"), 1024 * 1024).unwrap();
+        let mut storage = DocumentTextStorage::create(temp_dir.path().join("with_data"), 1024 * 1024).unwrap();
         
         // Add multiple documents
         for i in 0..100 {
@@ -173,7 +173,7 @@ async fn test_backup_restore_system() {
     // Verify we have some backups after restore
     let final_backups = backup_manager.list_backups().await.unwrap();
     println!("Found {} backups after restore", final_backups.len());
-    assert!(final_backups.len() > 0, "Should have at least some backups after restore");
+    assert!(!final_backups.is_empty(), "Should have at least some backups after restore");
 }
 
 /// Test error metrics integration
