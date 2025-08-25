@@ -49,6 +49,7 @@ pub mod crash_recovery;
 pub mod deduplication;
 pub mod distance;
 pub mod document_text_entry;
+pub mod document_text_storage;
 pub mod error;
 pub mod identifiers;
 pub mod integrity;
@@ -87,6 +88,7 @@ pub use document_text_entry::{
     DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
     TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
 };
+pub use document_text_storage::DocumentTextStorage;
 pub use error::ShardexError;
 pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
