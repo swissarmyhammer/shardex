@@ -2,13 +2,234 @@
 //!
 //! This module provides common utilities and helpers for testing Shardex components,
 //! including RAII-based temporary directory management, test environment setup,
-//! and standardized test builders to eliminate duplication across the test suite.
+//! standardized test builders, and error handling utilities to eliminate duplication 
+//! across the test suite.
 
 use crate::config::ShardexConfig;
 use crate::error::ShardexError;
 use crate::shardex_index::ShardexIndex;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+/// Error handling utilities for tests
+pub mod error {
+    use crate::error::ShardexError;
+    
+    /// Assert that a Result contains an error of a specific ShardexError variant
+    /// 
+    /// This macro provides a cleaner alternative to expect() in tests by validating
+    /// that errors are of the expected type and providing clear assertion messages.
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust
+    /// use shardex::test_utils::error::assert_error_type;
+    /// use shardex::error::ShardexError;
+    /// 
+    /// let result: Result<(), ShardexError> = Err(ShardexError::Config("test".to_string()));
+    /// assert_error_type!(result, Config);
+    /// ```
+    #[macro_export]
+    macro_rules! assert_error_type {
+        ($result:expr, $variant:ident) => {
+            match $result {
+                Ok(val) => panic!(
+                    "Expected error of type {}, but got Ok({:?})",
+                    stringify!($variant),
+                    val
+                ),
+                Err(ref err) => {
+                    if !matches!(err, ShardexError::$variant(..)) {
+                        panic!(
+                            "Expected error of type {}, but got: {}",
+                            stringify!($variant),
+                            err
+                        );
+                    }
+                }
+            }
+        };
+        ($result:expr, $variant:ident { $($field:ident),+ }) => {
+            match $result {
+                Ok(val) => panic!(
+                    "Expected error of type {} with fields {}, but got Ok({:?})",
+                    stringify!($variant),
+                    stringify!($($field),+),
+                    val
+                ),
+                Err(ref err) => {
+                    if !matches!(err, ShardexError::$variant { $($field: _),+ }) {
+                        panic!(
+                            "Expected error of type {} with fields {}, but got: {}",
+                            stringify!($variant),
+                            stringify!($($field),+),
+                            err
+                        );
+                    }
+                }
+            }
+        };
+    }
+
+    /// Assert that an error message contains specific text
+    /// 
+    /// This macro validates that error messages contain expected information,
+    /// useful for testing error context and recovery suggestions.
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust
+    /// use shardex::test_utils::error::assert_error_contains;
+    /// use shardex::error::ShardexError;
+    /// 
+    /// let result: Result<(), ShardexError> = Err(ShardexError::Config("missing field: vector_dim".to_string()));
+    /// assert_error_contains!(result, "missing field");
+    /// assert_error_contains!(result, "vector_dim");
+    /// ```
+    #[macro_export]
+    macro_rules! assert_error_contains {
+        ($result:expr, $text:expr) => {
+            match $result {
+                Ok(val) => panic!(
+                    "Expected error containing '{}', but got Ok({:?})",
+                    $text,
+                    val
+                ),
+                Err(ref err) => {
+                    let error_str = err.to_string();
+                    if !error_str.contains($text) {
+                        panic!(
+                            "Expected error to contain '{}', but error was: '{}'",
+                            $text,
+                            error_str
+                        );
+                    }
+                }
+            }
+        };
+        ($result:expr, $($text:expr),+) => {
+            $(assert_error_contains!($result, $text);)+
+        };
+    }
+
+    /// Get an error from a Result, panicking with a helpful message if Result is Ok
+    /// 
+    /// This function provides a cleaner alternative to unwrap_err() by providing
+    /// context about what error was expected.
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust
+    /// use shardex::test_utils::error::expect_error;
+    /// use shardex::error::ShardexError;
+    /// 
+    /// let result: Result<(), ShardexError> = Err(ShardexError::Config("test".to_string()));
+    /// let error = expect_error(result, "configuration validation should fail");
+    /// ```
+    pub fn expect_error<T, E>(
+        result: Result<T, E>,
+        context: &str,
+    ) -> E
+    where
+        T: std::fmt::Debug,
+    {
+        match result {
+            Ok(val) => panic!("Expected error ({}), but got Ok({:?})", context, val),
+            Err(err) => err,
+        }
+    }
+
+    /// Assert that a Result is Ok and return the value, with helpful error context
+    /// 
+    /// This function provides a cleaner alternative to unwrap() by providing
+    /// context about what operation should have succeeded.
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust
+    /// use shardex::test_utils::error::expect_success;
+    /// 
+    /// let result: Result<i32, String> = Ok(42);
+    /// let value = expect_success(result, "arithmetic operation should succeed");
+    /// assert_eq!(value, 42);
+    /// ```
+    pub fn expect_success<T, E>(
+        result: Result<T, E>,
+        context: &str,
+    ) -> T
+    where
+        E: std::fmt::Display,
+    {
+        match result {
+            Ok(val) => val,
+            Err(err) => panic!("Expected success ({}), but got error: {}", context, err),
+        }
+    }
+
+    /// Create a test error with context for validation
+    /// 
+    /// Helper function for creating errors in tests that need to validate
+    /// error handling and context preservation.
+    pub fn create_test_io_error(message: &str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::Other, message)
+    }
+
+    /// Create a test ShardexError for validation
+    /// 
+    /// Helper function for creating ShardexErrors in tests.
+    pub fn create_test_shardex_error(variant: &str, message: &str) -> ShardexError {
+        match variant {
+            "config" => ShardexError::Config(message.to_string()),
+            "memory_mapping" => ShardexError::MemoryMapping(message.to_string()),
+            "wal" => ShardexError::Wal(message.to_string()),
+            "shard" => ShardexError::Shard(message.to_string()),
+            "search" => ShardexError::Search(message.to_string()),
+            "corruption" => ShardexError::Corruption(message.to_string()),
+            "text_corruption" => ShardexError::TextCorruption(message.to_string()),
+            _ => panic!("Unknown test error variant: {}", variant),
+        }
+    }
+
+    /// Assert that error has proper context information
+    /// 
+    /// This function validates that errors contain expected context information
+    /// like file paths, operation names, and recovery suggestions.
+    pub fn assert_error_context(
+        error: &ShardexError,
+        expected_contexts: &[&str],
+    ) {
+        let error_str = error.to_string();
+        for context in expected_contexts {
+            if !error_str.contains(context) {
+                panic!(
+                    "Expected error to contain context '{}', but error was: '{}'",
+                    context,
+                    error_str
+                );
+            }
+        }
+    }
+
+    /// Assert that error chain is properly preserved
+    /// 
+    /// This function validates that error causality is preserved through
+    /// error transformations and context additions.
+    pub fn assert_error_causality(
+        error: &ShardexError,
+        expected_causes: &[&str],
+    ) {
+        let error_str = error.to_string();
+        for cause in expected_causes {
+            if !error_str.contains(cause) {
+                panic!(
+                    "Expected error to contain cause '{}', but error was: '{}'",
+                    cause,
+                    error_str
+                );
+            }
+        }
+    }
+}
 
 /// RAII-based test environment for isolated testing
 ///

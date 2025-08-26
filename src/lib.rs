@@ -55,6 +55,7 @@ pub mod document_text_performance;
 pub mod document_text_storage;
 pub mod document_transaction_coordinator;
 pub mod error;
+pub mod error_context_integration_test;
 pub mod error_handling;
 pub mod identifiers;
 pub mod integrity;
