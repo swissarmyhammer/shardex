@@ -15,6 +15,14 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 use hdrhistogram::Histogram;
 
+// HDRHistogram configuration constants
+const HISTOGRAM_MIN_MICROS: u64 = 1; // 1 microsecond minimum
+const HISTOGRAM_MAX_MICROS: u64 = 3_600_000_000; // 1 hour in microseconds 
+const HISTOGRAM_PRECISION: u8 = 3; // 3 significant digits
+
+// Test tolerance constants for percentile testing
+const PERCENTILE_TEST_TOLERANCE_MS: u64 = 5; // 5ms tolerance for percentile tests
+
 /// Enhanced index statistics with comprehensive performance monitoring
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DetailedIndexStats {
@@ -594,7 +602,7 @@ impl PercentileCalculator {
     pub fn new() -> Self {
         // Create histogram that can track values from 1 microsecond to 1 hour with 3 significant digits
         // This provides good precision for latency measurements
-        let histogram = Histogram::new_with_bounds(1, 3_600_000_000, 3)
+        let histogram = Histogram::new_with_bounds(HISTOGRAM_MIN_MICROS, HISTOGRAM_MAX_MICROS, HISTOGRAM_PRECISION)
             .expect("Failed to create HDRHistogram with valid bounds");
         
         Self {
@@ -610,7 +618,7 @@ impl PercentileCalculator {
         let micros = duration.as_micros() as u64;
         
         // Clamp to valid range (1 microsecond to 1 hour)
-        let clamped_micros = micros.max(1).min(3_600_000_000);
+        let clamped_micros = micros.clamp(HISTOGRAM_MIN_MICROS, HISTOGRAM_MAX_MICROS);
         
         if let Err(e) = self.histogram.record(clamped_micros) {
             // Log error but continue operation - this is monitoring code and shouldn't break the system
@@ -734,16 +742,19 @@ mod tests {
         let p95 = calc.percentile(0.95);
         let p99 = calc.percentile(0.99);
 
-        // P50 should be around 50ms (within 5ms tolerance)
-        assert!(p50 >= Duration::from_millis(45) && p50 <= Duration::from_millis(55), 
+        // P50 should be around 50ms (within tolerance)
+        assert!(p50 >= Duration::from_millis(50 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p50 <= Duration::from_millis(50 + PERCENTILE_TEST_TOLERANCE_MS), 
                 "P50 was {:?}, expected around 50ms", p50);
         
-        // P95 should be around 95ms (within 5ms tolerance) 
-        assert!(p95 >= Duration::from_millis(90) && p95 <= Duration::from_millis(100),
+        // P95 should be around 95ms (within tolerance) 
+        assert!(p95 >= Duration::from_millis(95 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p95 <= Duration::from_millis(95 + PERCENTILE_TEST_TOLERANCE_MS),
                 "P95 was {:?}, expected around 95ms", p95);
         
-        // P99 should be around 99ms (within 5ms tolerance)
-        assert!(p99 >= Duration::from_millis(94) && p99 <= Duration::from_millis(100),
+        // P99 should be around 99ms (within tolerance)
+        assert!(p99 >= Duration::from_millis(99 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p99 <= Duration::from_millis(99 + PERCENTILE_TEST_TOLERANCE_MS),
                 "P99 was {:?}, expected around 99ms", p99);
 
         // Test min/max (HDRHistogram may have slight bucketing variations)
@@ -751,7 +762,8 @@ mod tests {
         
         // Max should be close to 100ms but HDRHistogram bucketing may cause minor variations
         let max_val = calc.max();
-        assert!(max_val >= Duration::from_millis(100) && max_val <= Duration::from_millis(101),
+        assert!(max_val >= Duration::from_millis(100) && 
+                max_val <= Duration::from_millis(100 + PERCENTILE_TEST_TOLERANCE_MS),
                 "Max was {:?}, expected around 100ms", max_val);
 
         // Test edge cases
