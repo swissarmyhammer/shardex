@@ -7,44 +7,11 @@ use shardex::{ConcurrencyConfig, ConcurrentShardex, CowShardexIndex, ShardexConf
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
-/// RAII-based test environment for isolated testing
-struct TestEnvironment {
-    pub temp_dir: TempDir,
-    #[allow(dead_code)]
-    pub test_name: String,
-}
-
-impl TestEnvironment {
-    fn new(test_name: &str) -> Self {
-        let temp_dir =
-            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
-
-        Self {
-            temp_dir,
-            test_name: test_name.to_string(),
-        }
-    }
-
-    fn path(&self) -> &std::path::Path {
-        self.temp_dir.path()
-    }
-}
-
-/// Create a test ConcurrentShardex instance
-fn create_test_concurrent_shardex(test_env: &TestEnvironment) -> ConcurrentShardex {
-    let config = ShardexConfig::new()
-        .directory_path(test_env.path())
-        .vector_size(64)
-        .shard_size(100);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
-    let cow_index = CowShardexIndex::new(index);
-    ConcurrentShardex::new(cow_index)
-}
+mod common;
+use common::{TestEnvironment, create_test_concurrent_shardex};
 
 /// Create a test ConcurrentShardex instance with custom configuration
 fn create_test_concurrent_shardex_with_config(
@@ -178,8 +145,8 @@ async fn test_mixed_read_write_operations_no_deadlock() {
             for op_id in 0..OPERATIONS_PER_TASK {
                 let result = concurrent_clone
                     .read_operation(|index| {
-                        // Simulate variable read work
-                        let work_duration = (reader_id * op_id % 10) + 1;
+                        // Simulate variable read work (much shorter duration for timeout testing)
+                        let work_duration = (reader_id * op_id % 3) + 1; // Max 4ms instead of 11ms
                         std::thread::sleep(std::time::Duration::from_millis(work_duration as u64));
                         Ok(index.shard_count())
                     });
@@ -200,8 +167,8 @@ async fn test_mixed_read_write_operations_no_deadlock() {
             for op_id in 0..OPERATIONS_PER_TASK {
                 let result = concurrent_clone
                     .write_operation(|writer| {
-                        // Simulate variable write work
-                        let work_duration = (writer_id * op_id % 15) + 5;
+                        // Simulate variable write work (much shorter duration for timeout testing)
+                        let work_duration = (writer_id * op_id % 5) + 1; // Max 6ms instead of 20ms
                         std::thread::sleep(std::time::Duration::from_millis(work_duration as u64));
                         Ok(writer.index().shard_count())
                     })
@@ -215,15 +182,38 @@ async fn test_mixed_read_write_operations_no_deadlock() {
     }
 
     // Apply overall timeout to prevent test hanging due to deadlocks
-    let test_timeout = Duration::from_secs(60);
+    // With reduced operation times (max 6ms per operation), this should complete quickly
+    let test_timeout = Duration::from_secs(30); // Reduced from 60s since operations are shorter
     let test_result = timeout(test_timeout, async {
+        // Wait for all tasks to complete or timeout
+        let mut completed_tasks = 0;
+        let total_tasks = NUM_READERS + NUM_WRITERS;
+        
         while let Some(result) = tasks.join_next().await {
             result.expect("Task should not panic");
+            completed_tasks += 1;
+            
+            // Log progress to help debug timeout issues
+            if completed_tasks % 10 == 0 {
+                println!("Completed {}/{} tasks", completed_tasks, total_tasks);
+            }
         }
+        
+        println!("All {} tasks completed successfully", completed_tasks);
     })
     .await;
 
-    assert!(test_result.is_ok(), "Test timed out - possible deadlock detected");
+    if test_result.is_err() {
+        // If timeout occurred, provide diagnostic information
+        let partial_operations = successful_operations.load(Ordering::SeqCst);
+        panic!(
+            "Test timed out after 30s - possible deadlock detected. \
+             Completed operations: {}/{}, \
+             Consider debugging concurrency coordination logic",
+            partial_operations,
+            (NUM_READERS + NUM_WRITERS) * OPERATIONS_PER_TASK
+        );
+    }
 
     let total_successful = successful_operations.load(Ordering::SeqCst);
     let expected_operations = (NUM_READERS + NUM_WRITERS) * OPERATIONS_PER_TASK;

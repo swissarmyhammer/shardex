@@ -7,42 +7,10 @@ use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexIndex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 use tokio::task::JoinSet;
 
-/// RAII-based test environment for isolated testing
-struct TestEnvironment {
-    pub temp_dir: TempDir,
-    #[allow(dead_code)]
-    pub test_name: String,
-}
-
-impl TestEnvironment {
-    fn new(test_name: &str) -> Self {
-        let temp_dir =
-            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
-
-        Self {
-            temp_dir,
-            test_name: test_name.to_string(),
-        }
-    }
-
-    fn path(&self) -> &std::path::Path {
-        self.temp_dir.path()
-    }
-}
-
-/// Create a test ConcurrentShardex instance
-fn create_test_concurrent_shardex(test_env: &TestEnvironment) -> ConcurrentShardex {
-    let config = ShardexConfig::new()
-        .directory_path(test_env.path())
-        .vector_size(64)
-        .shard_size(100);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
-    let cow_index = CowShardexIndex::new(index);
-    ConcurrentShardex::new(cow_index)
+mod common;
+use common::{TestEnvironment, create_test_concurrent_shardex};
 }
 
 #[tokio::test]

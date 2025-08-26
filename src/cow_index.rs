@@ -19,6 +19,76 @@
 //! - **Memory usage**: Proportional to number of concurrent readers and writers
 //! - **Monitoring**: Use `metrics()` method to track performance and optimize usage patterns
 //!
+//! # Memory Usage Optimization
+//!
+//! COW operations have memory overhead that scales with concurrent operations. For large-scale
+//! deployments, consider the following optimization strategies:
+//!
+//! ## Memory Usage Patterns
+//! - **Baseline**: ~256 bytes per shard for metadata
+//! - **Active Writers**: +1MB per concurrent writer with modifications
+//! - **Reader Copies**: Minimal overhead (shared references)
+//! - **Peak Usage**: During write commits when both old and new versions exist
+//!
+//! ## Optimization Strategies
+//! 
+//! ### Limit Concurrent Writers
+//! ```rust,no_run
+//! // Use semaphore to limit concurrent COW operations
+//! use tokio::sync::Semaphore;
+//! use std::sync::Arc;
+//! 
+//! let write_semaphore = Arc::new(Semaphore::new(4)); // Max 4 concurrent writers
+//! 
+//! async fn optimized_write(cow_index: &CowShardexIndex, semaphore: &Semaphore) -> Result<(), ShardexError> {
+//!     let _permit = semaphore.acquire().await.unwrap();
+//!     let mut writer = cow_index.clone_for_write()?;
+//!     // ... perform write operations ...
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Batch Write Operations
+//! ```rust,no_run
+//! // Batch multiple operations into single COW cycle
+//! let mut writer = cow_index.clone_for_write()?;
+//! for operation in batch_operations {
+//!     // Perform multiple operations on same writer
+//!     operation.apply(&mut writer)?;
+//! }
+//! // Single commit for entire batch
+//! ```
+//!
+//! ### Monitor Memory Usage
+//! ```rust,no_run
+//! // Regular monitoring to detect memory pressure
+//! let metrics = cow_index.metrics().await;
+//! if metrics.estimated_memory_usage_bytes > threshold {
+//!     // Implement backpressure or cleanup
+//!     warn!("High COW memory usage: {} MB", 
+//!           metrics.estimated_memory_usage_bytes / 1024 / 1024);
+//! }
+//! ```
+//!
+//! ### Configure Memory Estimates
+//! ```rust,no_run
+//! use shardex::cow_index::CowMemoryConfig;
+//! 
+//! let memory_config = CowMemoryConfig {
+//!     metadata_bytes_per_shard: 512,  // Larger if you have complex metadata
+//!     average_vectors_per_shard: 2000, // Adjust based on your shard size
+//!     modified_shard_overhead_bytes: 2 * 1024 * 1024, // 2MB for large shards
+//!     new_shard_metadata_bytes: 1024, // Larger for complex new shards
+//! };
+//! ```
+//!
+//! ## Warning for Large Deployments
+//! 
+//! **⚠️ Memory Usage Warning**: In deployments with >10GB indices and >10 concurrent 
+//! writers, COW operations may consume significant memory (potentially 2-3x the base 
+//! index size). Monitor memory metrics closely and implement appropriate backpressure 
+//! mechanisms to prevent OOM conditions.
+//!
 //! # Usage Examples
 //!
 //! ## Basic Copy-on-Write Operations
@@ -82,6 +152,50 @@
 //! }
 //! # Ok(())
 //! # }
+//! ```
+//!
+//! # Error Handling and Recovery
+//!
+//! ## Common Error Scenarios
+//!
+//! ### Memory Exhaustion
+//! - **Cause**: Multiple concurrent writers creating many COW copies
+//! - **Recovery**: Limit concurrent writers, implement backpressure
+//! - **Prevention**: Monitor memory metrics, tune `CowMemoryConfig`
+//!
+//! ### Clone Operation Failures
+//! - **Cause**: Deep copy operations failing due to I/O errors or corruption
+//! - **Recovery**: Retry with exponential backoff, validate index integrity
+//! - **Prevention**: Regular integrity checks, proper error logging
+//!
+//! ### Performance Degradation
+//! - **Cause**: Excessive COW operations in write-heavy workloads
+//! - **Recovery**: Batch operations, reduce write frequency
+//! - **Prevention**: Monitor clone frequency, optimize write patterns
+//!
+//! ## Recovery Best Practices
+//!
+//! ```rust,no_run
+//! use std::time::Duration;
+//!
+//! // Monitor memory usage and implement backpressure
+//! async fn safe_write_with_memory_check(
+//!     cow_index: &CowShardexIndex,
+//!     max_memory_mb: usize,
+//! ) -> Result<IndexWriter, ShardexError> {
+//!     let metrics = cow_index.metrics().await;
+//!     let current_memory_mb = metrics.estimated_memory_usage_bytes / (1024 * 1024);
+//!     
+//!     if current_memory_mb > max_memory_mb {
+//!         return Err(ShardexError::ResourceExhaustion {
+//!             resource: "memory".to_string(),
+//!             current: current_memory_mb,
+//!             limit: max_memory_mb,
+//!         });
+//!     }
+//!     
+//!     cow_index.clone_for_write()
+//! }
 //! ```
 
 use crate::error::ShardexError;

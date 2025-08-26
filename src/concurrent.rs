@@ -96,6 +96,55 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Error Handling and Recovery
+//!
+//! ## Common Error Scenarios
+//!
+//! ### Timeout Errors
+//! - **Cause**: Write operations exceed configured timeout duration
+//! - **Recovery**: Retry with exponential backoff or adjust timeout configuration
+//! - **Prevention**: Monitor contention rates and optimize write patterns
+//!
+//! ### Coordination Failures
+//! - **Cause**: High contention or coordination lock acquisition failures
+//! - **Recovery**: Implement retry logic with jitter to reduce thundering herd
+//! - **Prevention**: Batch writes when possible, monitor `coordination_stats()`
+//!
+//! ### Resource Exhaustion
+//! - **Cause**: Too many concurrent operations exceed system limits
+//! - **Recovery**: Implement back-pressure and queue depth limits
+//! - **Prevention**: Configure `max_pending_writes` appropriately
+//!
+//! ## Recovery Strategies
+//!
+//! ```rust,no_run
+//! use std::time::Duration;
+//! use tokio::time::sleep;
+//!
+//! async fn retry_write_with_backoff<F, R>(
+//!     concurrent: &ConcurrentShardex,
+//!     operation: F,
+//!     max_retries: usize,
+//! ) -> Result<R, ShardexError>
+//! where
+//!     F: Fn(&mut IndexWriter) -> Result<R, ShardexError> + Send + Clone,
+//!     R: Send,
+//! {
+//!     let mut attempt = 0;
+//!     loop {
+//!         match concurrent.write_operation(operation.clone()).await {
+//!             Ok(result) => return Ok(result),
+//!             Err(e) if attempt < max_retries => {
+//!                 let backoff = Duration::from_millis(100 * (1 << attempt));
+//!                 sleep(backoff).await;
+//!                 attempt += 1;
+//!             }
+//!             Err(e) => return Err(e),
+//!         }
+//!     }
+//! }
+//! ```
 
 use crate::cow_index::{CowShardexIndex, IndexWriter};
 use crate::error::ShardexError;

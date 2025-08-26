@@ -3,7 +3,7 @@
 //! This module provides shared utilities for integration tests that cannot
 //! access the main crate's test_utils module.
 
-use shardex::{ShardexConfig, ShardexError, ShardexIndex};
+use shardex::{ShardexConfig, ShardexError, ShardexIndex, ConcurrentShardex, CowShardexIndex};
 use tempfile::TempDir;
 
 /// Test constants for consistent test configuration across integration tests
@@ -78,4 +78,47 @@ impl TestSetupBuilder {
 
         Ok((temp_dir, config, index))
     }
+}
+
+/// Test environment for concurrent coordination tests
+/// 
+/// Provides isolated temporary directory and cleanup for each test
+pub struct TestEnvironment {
+    pub temp_dir: TempDir,
+    #[allow(dead_code)]
+    pub test_name: String,
+}
+
+impl TestEnvironment {
+    /// Create a new test environment with isolated temporary directory
+    pub fn new(test_name: &str) -> Self {
+        let temp_dir =
+            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
+
+        Self {
+            temp_dir,
+            test_name: test_name.to_string(),
+        }
+    }
+
+    /// Get the path to the temporary directory
+    pub fn path(&self) -> &std::path::Path {
+        self.temp_dir.path()
+    }
+}
+
+/// Create a test ConcurrentShardex instance with standard configuration
+/// 
+/// Uses consistent test parameters:
+/// - Vector size: 64 dimensions
+/// - Shard size: 100 postings per shard
+pub fn create_test_concurrent_shardex(test_env: &TestEnvironment) -> ConcurrentShardex {
+    let config = ShardexConfig::new()
+        .directory_path(test_env.path())
+        .vector_size(64)
+        .shard_size(100);
+
+    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let cow_index = CowShardexIndex::new(index);
+    ConcurrentShardex::new(cow_index)
 }
