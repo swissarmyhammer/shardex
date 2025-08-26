@@ -37,7 +37,14 @@
 //! // Use semaphore to limit concurrent COW operations
 //! use tokio::sync::Semaphore;
 //! use std::sync::Arc;
+//! use shardex::{CowShardexIndex, ShardexIndex, ShardexError, ShardexConfig};
+//! use tempfile::TempDir;
 //!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let temp_dir = TempDir::new()?;
+//! # let config = ShardexConfig::new().directory_path(temp_dir.path()).vector_size(128);
+//! # let index = ShardexIndex::create(config)?;
+//! # let cow_index = CowShardexIndex::new(index);
 //! let write_semaphore = Arc::new(Semaphore::new(4)); // Max 4 concurrent writers
 //!
 //! async fn optimized_write(cow_index: &CowShardexIndex, semaphore: &Semaphore) -> Result<(), ShardexError> {
@@ -46,10 +53,24 @@
 //!     // ... perform write operations ...
 //!     Ok(())
 //! }
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ### Batch Write Operations
 //! ```rust,no_run
+//! # use shardex::{CowShardexIndex, ShardexIndex, ShardexError, ShardexConfig};
+//! # use tempfile::TempDir;
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let temp_dir = TempDir::new()?;
+//! # let config = ShardexConfig::new().directory_path(temp_dir.path()).vector_size(128);
+//! # let index = ShardexIndex::create(config)?;
+//! # let cow_index = CowShardexIndex::new(index);
+//! # struct Operation;
+//! # impl Operation {
+//! #     fn apply(&self, writer: &mut shardex::IndexWriter) -> Result<(), ShardexError> { Ok(()) }
+//! # }
+//! # let batch_operations: Vec<Operation> = vec![];
 //! // Batch multiple operations into single COW cycle
 //! let mut writer = cow_index.clone_for_write()?;
 //! for operation in batch_operations {
@@ -57,17 +78,30 @@
 //!     operation.apply(&mut writer)?;
 //! }
 //! // Single commit for entire batch
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ### Monitor Memory Usage
 //! ```rust,no_run
+//! # use shardex::{CowShardexIndex, ShardexIndex, ShardexConfig};
+//! # use tempfile::TempDir;
+//! # use tracing::warn;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let temp_dir = TempDir::new()?;
+//! # let config = ShardexConfig::new().directory_path(temp_dir.path()).vector_size(128);
+//! # let index = ShardexIndex::create(config)?;
+//! # let cow_index = CowShardexIndex::new(index);
+//! # let threshold = 1024 * 1024 * 100; // 100MB threshold
 //! // Regular monitoring to detect memory pressure
-//! let metrics = cow_index.metrics().await;
-//! if metrics.estimated_memory_usage_bytes > threshold {
+//! let metrics = cow_index.metrics();
+//! if metrics.memory_usage_bytes > threshold {
 //!     // Implement backpressure or cleanup
 //!     warn!("High COW memory usage: {} MB",
-//!           metrics.estimated_memory_usage_bytes / 1024 / 1024);
+//!           metrics.memory_usage_bytes / 1024 / 1024);
 //! }
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ### Configure Memory Estimates
@@ -177,20 +211,21 @@
 //!
 //! ```rust,no_run
 //! use std::time::Duration;
+//! use shardex::{CowShardexIndex, IndexWriter, ShardexError};
 //!
 //! // Monitor memory usage and implement backpressure
 //! async fn safe_write_with_memory_check(
 //!     cow_index: &CowShardexIndex,
 //!     max_memory_mb: usize,
 //! ) -> Result<IndexWriter, ShardexError> {
-//!     let metrics = cow_index.metrics().await;
-//!     let current_memory_mb = metrics.estimated_memory_usage_bytes / (1024 * 1024);
+//!     let metrics = cow_index.metrics();
+//!     let current_memory_mb = metrics.memory_usage_bytes / (1024 * 1024);
 //!     
 //!     if current_memory_mb > max_memory_mb {
-//!         return Err(ShardexError::ResourceExhaustion {
+//!         return Err(ShardexError::ResourceExhausted {
 //!             resource: "memory".to_string(),
-//!             current: current_memory_mb,
-//!             limit: max_memory_mb,
+//!             reason: format!("Current memory usage {}MB exceeds limit {}MB", current_memory_mb, max_memory_mb),
+//!             suggestion: "Reduce concurrent writers or increase memory limit".to_string(),
 //!         });
 //!     }
 //!     

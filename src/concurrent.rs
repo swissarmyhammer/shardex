@@ -38,7 +38,7 @@
 //! // Non-blocking read operation
 //! let read_result = concurrent.read_operation(|index| {
 //!     Ok(index.shard_count())
-//! }).await?;
+//! })?;
 //!
 //! println!("Shard count: {}", read_result);
 //!
@@ -72,7 +72,7 @@
 //!         concurrent_clone.read_operation(|index| {
 //!             println!("Reader {}: {} shards", i, index.shard_count());
 //!             Ok(index.shard_count())
-//!         }).await
+//!         })
 //!     });
 //! }
 //!
@@ -121,6 +121,7 @@
 //! ```rust,no_run
 //! use std::time::Duration;
 //! use tokio::time::sleep;
+//! use shardex::{ConcurrentShardex, IndexWriter, ShardexError};
 //!
 //! async fn retry_write_with_backoff<F, R>(
 //!     concurrent: &ConcurrentShardex,

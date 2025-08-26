@@ -103,7 +103,7 @@ impl DocumentTextStorage {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let temp_dir = TempDir::new()?;
-    /// let storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?; // 10MB limit
+    /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?; // 10MB limit
     /// # Ok(())
     /// # }
     /// ```
@@ -892,7 +892,7 @@ impl DocumentTextStorage {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let temp_dir = TempDir::new()?;
-    /// let storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
+    /// let mut storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
     ///
     /// // Verify data integrity
     /// storage.verify_checksums()?;
