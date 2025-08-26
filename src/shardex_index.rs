@@ -1163,7 +1163,7 @@ impl ShardexIndex {
 
     /// Get index statistics
     /// Calculate active and deleted posting counts across all shards
-    /// 
+    ///
     /// This method aggregates posting counts from both cached and uncached shards.
     /// For cached shards, it uses the actual active_count() method.
     /// For uncached shards, it estimates based on utilization and capacity.
@@ -1177,7 +1177,7 @@ impl ShardexIndex {
                 let active_count = cached_shard.active_count();
                 let current_count = cached_shard.current_count();
                 let deleted_count = current_count.saturating_sub(active_count);
-                
+
                 total_active += active_count;
                 total_deleted += deleted_count;
             } else {
@@ -1186,7 +1186,7 @@ impl ShardexIndex {
                 let total_postings = shard_metadata.posting_count;
                 let estimated_active = (shard_metadata.utilization * shard_metadata.capacity as f32) as usize;
                 let estimated_deleted = total_postings.saturating_sub(estimated_active);
-                
+
                 total_active += estimated_active;
                 total_deleted += estimated_deleted;
             }
@@ -4090,15 +4090,15 @@ mod tests {
         let doc_id1 = DocumentId::new();
         let doc_id2 = DocumentId::new();
         let doc_id3 = DocumentId::new();
-        
+
         let vector1 = vec![1.0; 384];
-        let vector2 = vec![2.0; 384];  
+        let vector2 = vec![2.0; 384];
         let vector3 = vec![3.0; 384];
-        
+
         let posting1 = Posting::new(doc_id1, 0, 10, vector1, 384).unwrap();
         let posting2 = Posting::new(doc_id2, 0, 10, vector2, 384).unwrap();
         let posting3 = Posting::new(doc_id3, 0, 10, vector3, 384).unwrap();
-        
+
         shard.add_posting(posting1).unwrap();
         shard.add_posting(posting2).unwrap();
         shard.add_posting(posting3).unwrap();

@@ -131,7 +131,7 @@ impl DocumentTextStorage {
         let mut index_header = TextIndexHeader::new();
         text_index_file.write_at(0, &index_header)?;
 
-        // Initialize data header  
+        // Initialize data header
         let mut data_header = TextDataHeader::new();
         text_data_file.write_at(0, &data_header)?;
 
@@ -439,7 +439,9 @@ impl DocumentTextStorage {
         let data_start = self.data_header.file_header.header_size as usize;
         let data_end = self.data_header.next_text_offset as usize;
         let data_slice = &self.text_data_file.as_slice()[data_start..data_end];
-        self.data_header.file_header.update_for_modification(data_slice);
+        self.data_header
+            .file_header
+            .update_for_modification(data_slice);
 
         // Write updated header to file
         self.text_data_file.write_at(0, &self.data_header)?;
@@ -483,7 +485,9 @@ impl DocumentTextStorage {
         let index_data_start = self.index_header.file_header.header_size as usize;
         let index_data_end = index_data_start + (self.index_header.entry_count as usize * DocumentTextEntry::SIZE);
         let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
-        self.index_header.file_header.update_for_modification(index_data);
+        self.index_header
+            .file_header
+            .update_for_modification(index_data);
 
         // Write updated header to file
         self.text_index_file.write_at(0, &self.index_header)?;
@@ -895,9 +899,8 @@ impl DocumentTextStorage {
     /// # Ok(())
     /// # }
     /// ```
-    
     /// Update header checksums to reflect current data state
-    /// 
+    ///
     /// This method recalculates and updates checksums for both index and data headers
     /// based on the current file contents. Used primarily by verify_checksums()
     /// to ensure checksums are current before validation.
@@ -905,47 +908,51 @@ impl DocumentTextStorage {
         // Re-read headers from disk to ensure we have the actual current state
         let mut current_index_header: TextIndexHeader = self.text_index_file.read_at(0)?;
         let mut current_data_header: TextDataHeader = self.text_data_file.read_at(0)?;
-        
+
         // Update index header checksum based on current data
         let index_data_start = current_index_header.file_header.header_size as usize;
         let index_data_end = index_data_start + (current_index_header.entry_count as usize * DocumentTextEntry::SIZE);
         let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
-        current_index_header.file_header.update_for_modification(index_data);
+        current_index_header
+            .file_header
+            .update_for_modification(index_data);
         self.text_index_file.write_at(0, &current_index_header)?;
-        
+
         // Update data header checksum based on current data
         let data_data_start = current_data_header.file_header.header_size as usize;
         let data_data_end = current_data_header.next_text_offset as usize;
         let text_data = &self.text_data_file.as_slice()[data_data_start..data_data_end];
-        current_data_header.file_header.update_for_modification(text_data);
+        current_data_header
+            .file_header
+            .update_for_modification(text_data);
         self.text_data_file.write_at(0, &current_data_header)?;
-        
+
         // Update cached headers to match what we just wrote
         self.index_header = current_index_header;
         self.data_header = current_data_header;
-        
+
         // Sync to ensure headers are written to disk
         self.text_index_file.sync()?;
         self.text_data_file.sync()?;
-        
+
         Ok(())
     }
-    
+
     pub fn verify_checksums(&mut self) -> Result<(), ShardexError> {
         // First, update checksums to current data state before validation
         self.update_checksums_to_current_state()?;
-        
+
         // Re-read header from disk to ensure we have the current state
         let current_index_header: TextIndexHeader = self.text_index_file.read_at(0)?;
         let current_data_header: TextDataHeader = self.text_data_file.read_at(0)?;
 
         // Verify index file checksum with comprehensive bounds checking
         let index_data_start = current_index_header.file_header.header_size as usize;
-        
+
         // Protect against integer overflow when calculating data size
         let entry_size = DocumentTextEntry::SIZE;
         let entry_count = current_index_header.entry_count as usize;
-        
+
         // Check for potential overflow before multiplication
         if entry_count > usize::MAX / entry_size {
             return Err(ShardexError::text_corruption(format!(
@@ -953,9 +960,9 @@ impl DocumentTextStorage {
                 entry_count, entry_size, usize::MAX / entry_size
             )));
         }
-        
+
         let data_size = entry_count * entry_size;
-        
+
         // Check for potential overflow when adding to start offset
         let index_data_end = index_data_start.checked_add(data_size).ok_or_else(|| {
             ShardexError::text_corruption(format!(
@@ -963,7 +970,7 @@ impl DocumentTextStorage {
                 index_data_start, data_size, usize::MAX
             ))
         })?;
-        
+
         // Verify data end doesn't exceed file bounds
         if index_data_end > self.text_index_file.len() {
             return Err(ShardexError::text_corruption(format!(
@@ -971,7 +978,7 @@ impl DocumentTextStorage {
                 index_data_end, self.text_index_file.len(), entry_count, index_data_start
             )));
         }
-        
+
         // Additional sanity check: ensure data start is reasonable
         if index_data_start > self.text_index_file.len() {
             return Err(ShardexError::text_corruption(format!(
@@ -979,7 +986,7 @@ impl DocumentTextStorage {
                 index_data_start, self.text_index_file.len()
             )));
         }
-        
+
         let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
         if let Err(e) = current_index_header.validate_checksum(index_data) {
             return Err(ShardexError::text_corruption(format!(
@@ -990,7 +997,7 @@ impl DocumentTextStorage {
 
         // Verify data file checksum with comprehensive bounds checking
         let data_data_start = current_data_header.file_header.header_size as usize;
-        
+
         // Validate that next_text_offset can be safely converted to usize
         let next_text_offset = current_data_header.next_text_offset;
         if next_text_offset > usize::MAX as u64 {
@@ -999,9 +1006,9 @@ impl DocumentTextStorage {
                 next_text_offset, usize::MAX
             )));
         }
-        
+
         let data_data_end = next_text_offset as usize;
-        
+
         // Verify data start is reasonable
         if data_data_start > self.text_data_file.len() {
             return Err(ShardexError::text_corruption(format!(
@@ -1009,15 +1016,17 @@ impl DocumentTextStorage {
                 data_data_start, self.text_data_file.len()
             )));
         }
-        
-        // Verify data end doesn't exceed file bounds  
+
+        // Verify data end doesn't exceed file bounds
         if data_data_end > self.text_data_file.len() {
             return Err(ShardexError::text_corruption(format!(
                 "Data file corruption (text_data.dat): next_text_offset {} exceeds file size {} (total_text_size: {})",
-                data_data_end, self.text_data_file.len(), current_data_header.total_text_size
+                data_data_end,
+                self.text_data_file.len(),
+                current_data_header.total_text_size
             )));
         }
-        
+
         // Verify data range is logically consistent
         if data_data_start > data_data_end {
             return Err(ShardexError::text_corruption(format!(
@@ -1025,7 +1034,7 @@ impl DocumentTextStorage {
                 data_data_start, data_data_end
             )));
         }
-        
+
         let text_data = &self.text_data_file.as_slice()[data_data_start..data_data_end];
         if let Err(e) = current_data_header.validate_checksum(text_data) {
             return Err(ShardexError::text_corruption(format!(
@@ -1921,13 +1930,13 @@ mod tests {
         // Perform multiple operations
         let doc1 = DocumentId::new();
         let doc2 = DocumentId::new();
-        
+
         storage.store_text(doc1, "First document").unwrap();
         storage.verify_checksums().unwrap(); // Should pass after first store
-        
+
         storage.store_text(doc2, "Second document").unwrap();
         storage.verify_checksums().unwrap(); // Should pass after second store
-        
+
         storage.store_text(doc1, "Updated first document").unwrap();
         storage.verify_checksums().unwrap(); // Should pass after update
     }
@@ -1961,7 +1970,7 @@ mod tests {
         // Store some data to have checksums to potentially corrupt
         let doc_id = DocumentId::new();
         storage.store_text(doc_id, "Test data").unwrap();
-        
+
         // Verify that normal validation passes first
         assert!(storage.verify_checksums().is_ok());
 
@@ -1977,17 +1986,19 @@ mod tests {
 
         // Store data and verify normal operation
         let doc_id = DocumentId::new();
-        storage.store_text(doc_id, "Test data for bounds checking").unwrap();
-        
+        storage
+            .store_text(doc_id, "Test data for bounds checking")
+            .unwrap();
+
         // Verify checksums pass with normal data
         assert!(storage.verify_checksums().is_ok());
-        
+
         // The verify_checksums method includes bounds checking that would
         // detect if entry_count or next_text_offset exceed file sizes
         // This test verifies the method doesn't panic or crash with normal data
     }
 
-    #[test]  
+    #[test]
     fn test_checksum_verification_with_unicode() {
         let temp_dir = TempDir::new().unwrap();
         let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
@@ -2010,22 +2021,16 @@ mod tests {
         // Store initial data
         let doc_id = DocumentId::new();
         storage.store_text(doc_id, "Initial text").unwrap();
-        
+
         // Read the current headers to verify checksum calculation
         let index_header: TextIndexHeader = storage.text_index_file.read_at(0).unwrap();
         let data_header: TextDataHeader = storage.text_data_file.read_at(0).unwrap();
-        
+
         // Verify that headers have non-zero checksums after data storage
         assert_ne!(index_header.file_header.checksum, 0);
         assert_ne!(data_header.file_header.checksum, 0);
-        
+
         // Verify that checksum validation passes
         assert!(storage.verify_checksums().is_ok());
-    }
-
-    #[test]
-    fn test_simple_checksum_debug() {
-        // Simple test to debug test discovery
-        assert!(true);
     }
 }

@@ -23,14 +23,16 @@ fn test_checksum_verification_with_stored_data() {
 
     // Verify checksums on empty storage first
     println!("🔍 Verifying checksums on empty storage...");
-    storage.verify_checksums().expect("Empty storage checksums should be valid");
+    storage
+        .verify_checksums()
+        .expect("Empty storage checksums should be valid");
 
     // Store some test data
     let doc_id = DocumentId::new();
     let text = "Test document for checksum verification.";
     println!("📝 Storing text data...");
     storage.store_text(doc_id, text).unwrap();
-    
+
     println!("🔍 Entry count after store: {}", storage.entry_count());
     println!("🔍 Total text size after store: {}", storage.total_text_size());
 
@@ -53,15 +55,21 @@ fn test_checksum_verification_after_multiple_operations() {
     // Perform multiple operations
     let doc1 = DocumentId::new();
     let doc2 = DocumentId::new();
-    
+
     storage.store_text(doc1, "First document").unwrap();
-    storage.verify_checksums().expect("Checksums should be valid after first store");
-    
+    storage
+        .verify_checksums()
+        .expect("Checksums should be valid after first store");
+
     storage.store_text(doc2, "Second document").unwrap();
-    storage.verify_checksums().expect("Checksums should be valid after second store");
-    
+    storage
+        .verify_checksums()
+        .expect("Checksums should be valid after second store");
+
     storage.store_text(doc1, "Updated first document").unwrap();
-    storage.verify_checksums().expect("Checksums should be valid after update");
+    storage
+        .verify_checksums()
+        .expect("Checksums should be valid after update");
 }
 
 #[test]
@@ -74,15 +82,19 @@ fn test_checksum_verification_persistence() {
     {
         let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
         storage.store_text(doc_id, text).unwrap();
-        storage.verify_checksums().expect("Checksums should be valid before sync");
+        storage
+            .verify_checksums()
+            .expect("Checksums should be valid before sync");
         storage.sync().unwrap();
     }
 
     // Reopen storage and verify checksums are still valid
     {
         let mut storage = DocumentTextStorage::open(&temp_dir).unwrap();
-        storage.verify_checksums().expect("Checksums should be valid after reload");
-        
+        storage
+            .verify_checksums()
+            .expect("Checksums should be valid after reload");
+
         // Verify data integrity
         assert_eq!(storage.get_text(doc_id).unwrap(), text);
     }

@@ -470,7 +470,8 @@ impl ConcurrentShardex {
                 writer.commit_changes()?;
 
                 // Update coordination statistics
-                self.update_coordination_stats(coordination_duration, false).await;
+                self.update_coordination_stats(coordination_duration, false)
+                    .await;
 
                 // Release coordination lock
                 drop(coordinator_acquired);
@@ -491,7 +492,8 @@ impl ConcurrentShardex {
                 writer.discard();
 
                 // Update coordination statistics
-                self.update_coordination_stats(coordination_duration, false).await;
+                self.update_coordination_stats(coordination_duration, false)
+                    .await;
 
                 // Release coordination lock
                 drop(coordinator_acquired);
@@ -536,7 +538,7 @@ impl ConcurrentShardex {
 
             // There's an active writer, so we need to queue this operation
             let (notify_sender, notify_receiver) = tokio::sync::oneshot::channel();
-            let pending_write = PendingWrite { 
+            let pending_write = PendingWrite {
                 _operation_id: operation_id,
                 notify: notify_sender,
             };
@@ -563,12 +565,10 @@ impl ConcurrentShardex {
                     operation_id,
                     coordinator: Arc::clone(&self.write_coordinator),
                 })
-            },
-            Err(_) => {
-                Err(ShardexError::Config(
-                    "Write coordination channel closed while waiting".to_string(),
-                ))
             }
+            Err(_) => Err(ShardexError::Config(
+                "Write coordination channel closed while waiting".to_string(),
+            )),
         }
     }
 
@@ -738,12 +738,10 @@ mod tests {
         for _i in 0..10 {
             let concurrent_clone = Arc::clone(&concurrent);
             tasks.spawn(async move {
-                concurrent_clone
-                    .read_operation(|index| {
-                        let shard_count = index.shard_count();
-                        Ok(shard_count)
-                    })
-
+                concurrent_clone.read_operation(|index| {
+                    let shard_count = index.shard_count();
+                    Ok(shard_count)
+                })
             });
         }
 
@@ -802,12 +800,11 @@ mod tests {
             let concurrent_clone = Arc::clone(&concurrent);
             tasks.spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(i * 10)).await;
-                concurrent_clone
-                    .read_operation(|index| {
-                        // Simulate some read work
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        Ok(index.shard_count())
-                    })
+                concurrent_clone.read_operation(|index| {
+                    // Simulate some read work
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    Ok(index.shard_count())
+                })
             });
         }
 
@@ -847,8 +844,7 @@ mod tests {
         let concurrent = ConcurrentShardex::new(cow_index);
 
         // Initial stats should be empty
-        let initial_stats = concurrent
-            .coordination_stats().await;
+        let initial_stats = concurrent.coordination_stats().await;
         assert_eq!(initial_stats.total_writes, 0);
         assert_eq!(initial_stats.contended_writes, 0);
         assert_eq!(initial_stats.timeout_count, 0);
@@ -860,8 +856,7 @@ mod tests {
             .expect("Write operation should succeed");
 
         // Stats should be updated
-        let updated_stats = concurrent
-            .coordination_stats().await;
+        let updated_stats = concurrent.coordination_stats().await;
         assert_eq!(updated_stats.total_writes, 1);
     }
 
@@ -884,11 +879,10 @@ mod tests {
 
         // Test that readers are tracked during operations by running a synchronous operation
         // that we can properly time
-        let result = concurrent
-            .read_operation(|index| {
-                // Read operation should work successfully
-                Ok(index.shard_count())
-            });
+        let result = concurrent.read_operation(|index| {
+            // Read operation should work successfully
+            Ok(index.shard_count())
+        });
 
         // Verify the operation completed successfully
         assert!(result.is_ok());

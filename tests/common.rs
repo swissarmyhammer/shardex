@@ -3,7 +3,7 @@
 //! This module provides shared utilities for integration tests that cannot
 //! access the main crate's test_utils module.
 
-use shardex::{ShardexConfig, ShardexError, ShardexIndex, ConcurrentShardex, CowShardexIndex};
+use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexError, ShardexIndex};
 use tempfile::TempDir;
 
 /// Test constants for consistent test configuration across integration tests
@@ -81,7 +81,7 @@ impl TestSetupBuilder {
 }
 
 /// Test environment for concurrent coordination tests
-/// 
+///
 /// Provides isolated temporary directory and cleanup for each test
 #[allow(dead_code)]
 pub struct TestEnvironment {
@@ -111,7 +111,7 @@ impl TestEnvironment {
 }
 
 /// Create a test ConcurrentShardex instance with standard configuration
-/// 
+///
 /// Uses consistent test parameters:
 /// - Vector size: 64 dimensions
 /// - Shard size: 100 postings per shard
