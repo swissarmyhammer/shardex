@@ -214,30 +214,30 @@ impl OptimizedMemoryMapping {
     }
 
     /// Apply platform-specific memory advice hints (Unix/Linux implementation)
-    /// 
+    ///
     /// Uses the madvise() system call to provide the kernel with information about
     /// expected memory access patterns, which can help optimize memory management.
-    /// 
+    ///
     /// # Platform Behavior
     /// - Unix/Linux: Uses libc::madvise() with appropriate MADV_* flags
     /// - Sequential access → MADV_SEQUENTIAL (optimize for sequential reading)
     /// - Random access → MADV_RANDOM (disable readahead, optimize for random access)
     /// - Mixed access → MADV_NORMAL (default kernel behavior)
-    /// 
+    ///
     /// # Safety Considerations
     /// - Uses unsafe madvise() system call on the provided memory pointer
     /// - Assumes ptr and len represent a valid memory-mapped region
     /// - Failures are logged but don't cause operation failure (advisory nature)
-    /// 
+    ///
     /// # Error Handling
     /// - System call failures are logged as warnings using portable error reporting
     /// - Always returns Ok(()) as memory advice failures are non-critical
     /// - Distinguishes between different errno conditions for better diagnostics
-    /// 
+    ///
     /// # Arguments
     /// - `ptr`: Raw pointer to the start of the memory region
     /// - `len`: Length of the memory region in bytes
-    /// 
+    ///
     /// # Returns
     /// Always returns Ok(()) - madvise failures don't break functionality
     #[cfg(unix)]
@@ -259,36 +259,32 @@ impl OptimizedMemoryMapping {
             Ok(())
         } else {
             let error = std::io::Error::last_os_error();
-            log::warn!(
-                "Failed to apply memory advice {:?}: {}",
-                self.access_pattern,
-                error
-            );
+            log::warn!("Failed to apply memory advice {:?}: {}", self.access_pattern, error);
             // Don't fail the operation - madvise failures are not critical
             Ok(())
         }
     }
 
     /// Apply platform-specific memory advice hints (Windows implementation)
-    /// 
+    ///
     /// Windows has limited equivalents to Unix madvise(). This implementation
     /// provides logging for different access patterns but does not make actual
     /// system calls due to Windows API limitations.
-    /// 
+    ///
     /// # Platform Behavior
     /// - Windows: Limited memory advice support compared to Unix
     /// - Could potentially use VirtualAlloc with MEM_RESET for some patterns
     /// - Currently logs access patterns for debugging and monitoring
-    /// 
+    ///
     /// # Future Enhancements
     /// - Could implement VirtualAlloc(MEM_RESET) for memory reset hints
     /// - Could use PrefetchVirtualMemory for sequential access optimization
     /// - Windows 8+ supports limited memory management hints
-    /// 
+    ///
     /// # Arguments
     /// - `_ptr`: Raw pointer to the start of the memory region (unused)
     /// - `_len`: Length of the memory region in bytes (unused)
-    /// 
+    ///
     /// # Returns
     /// Always returns Ok(()) - Windows implementation is currently advisory logging only
     #[cfg(windows)]
@@ -306,31 +302,34 @@ impl OptimizedMemoryMapping {
                 log::debug!("Applied Windows random access hints");
             }
         }
-        
+
         // Windows memory advice is more limited, so we log and continue
         Ok(())
     }
 
     /// Apply platform-specific memory advice hints (fallback for unsupported platforms)
-    /// 
+    ///
     /// Fallback implementation for platforms that don't have Unix madvise() or
     /// Windows memory management APIs. Provides logging for access patterns
     /// without making any system calls.
-    /// 
+    ///
     /// # Platform Behavior
     /// - Other platforms: No system calls made, logging only
     /// - Provides consistent API across all platforms
     /// - Allows code to run on any platform without conditional compilation at call sites
-    /// 
+    ///
     /// # Arguments
     /// - `_ptr`: Raw pointer to the start of the memory region (unused)
     /// - `_len`: Length of the memory region in bytes (unused)
-    /// 
+    ///
     /// # Returns
     /// Always returns Ok(()) - fallback implementation is logging only
     #[cfg(not(any(unix, windows)))]
     fn apply_platform_memory_advice(&self, _ptr: *mut std::ffi::c_void, _len: usize) -> Result<(), ShardexError> {
-        log::debug!("Memory advice not supported on this platform, pattern: {:?}", self.access_pattern);
+        log::debug!(
+            "Memory advice not supported on this platform, pattern: {:?}",
+            self.access_pattern
+        );
         Ok(())
     }
 
@@ -430,9 +429,90 @@ impl OptimizedMemoryMapping {
     }
 
     /// Prefault memory page to avoid page faults during critical sections
+    ///
+    /// Prefaulting works by touching memory locations within a page to force
+    /// the operating system to load the page into physical memory. This helps
+    /// avoid page faults during critical performance sections.
+    ///
+    /// # Algorithm
+    /// 1. Calculate the memory range for the specified page
+    /// 2. Touch memory locations within the page at cache line intervals
+    /// 3. Handle edge cases where the page extends beyond the file size
+    /// 4. Update performance statistics
+    ///
+    /// # Arguments
+    /// * `page_index` - Zero-based index of the page to prefault
+    ///
+    /// # Returns
+    /// Returns Ok(()) on success, or an error if memory access fails
     fn prefault_index_page(&self, page_index: usize) -> Result<(), ShardexError> {
-        // This is a placeholder for actual prefaulting
-        // In practice, we would touch memory locations to ensure pages are loaded
+        // Calculate the memory region for this page
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+        let entries_per_page = self.page_size / std::mem::size_of::<DocumentTextEntry>();
+
+        // Calculate the byte range this page covers in the index file
+        let page_start_entry = page_index * entries_per_page;
+        let page_start_offset = header_size + (page_start_entry * std::mem::size_of::<DocumentTextEntry>());
+        let page_size_to_touch = self.page_size.min(
+            // Don't touch beyond the actual file size
+            self.index_file
+                .read()
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "index_file_lock".to_string(),
+                    reason: "Failed to acquire index file read lock".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?
+                .len()
+                .saturating_sub(page_start_offset),
+        );
+
+        // Skip if page is beyond file bounds
+        if page_size_to_touch == 0 {
+            log::trace!("Prefault page {} skipped - beyond file bounds", page_index);
+            return Ok(());
+        }
+
+        // Get reference to the memory-mapped region
+        let index_file = self
+            .index_file
+            .read()
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "index_file_lock".to_string(),
+                reason: "Failed to acquire index file read lock".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
+
+        let memory_slice = index_file.as_slice();
+
+        // Safety check: ensure we don't go out of bounds
+        if page_start_offset >= memory_slice.len() {
+            log::trace!("Prefault page {} skipped - offset beyond file size", page_index);
+            return Ok(());
+        }
+
+        // Touch memory at cache line intervals to prefault the page
+        // Most systems use 64-byte cache lines
+        const CACHE_LINE_SIZE: usize = 64;
+        let end_offset = (page_start_offset + page_size_to_touch).min(memory_slice.len());
+
+        // Perform the actual memory touching to trigger page loading
+        let mut touch_offset = page_start_offset;
+        let mut bytes_touched = 0u64;
+
+        while touch_offset < end_offset {
+            // Touch the memory location to ensure the page is loaded
+            // Using volatile read to prevent compiler optimization
+            unsafe {
+                let ptr = memory_slice.as_ptr().add(touch_offset);
+                let _value = std::ptr::read_volatile(ptr);
+                // The volatile read ensures the memory location is actually accessed
+            }
+
+            bytes_touched += 1;
+            touch_offset = (touch_offset + CACHE_LINE_SIZE).min(end_offset);
+        }
+
+        // Update performance statistics
         {
             let mut stats = self.stats.write().map_err(|_| ShardexError::InvalidInput {
                 field: "stats_lock".to_string(),
@@ -442,7 +522,13 @@ impl OptimizedMemoryMapping {
             stats.pages_prefaulted += 1;
         }
 
-        log::trace!("Prefaulted index page {}", page_index);
+        log::trace!(
+            "Prefaulted index page {} ({} bytes, {} memory touches)",
+            page_index,
+            page_size_to_touch,
+            bytes_touched
+        );
+
         Ok(())
     }
 
@@ -686,30 +772,175 @@ mod tests {
     #[test]
     fn test_apply_memory_advice_functionality() {
         use tempfile::TempDir;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("advice_test.dat");
-        
+
         // Test each access pattern
         for pattern in [AccessPattern::Sequential, AccessPattern::Random, AccessPattern::Mixed] {
             // Create a new memory-mapped file for each test
             let index_file = MemoryMappedFile::create(&file_path, 4096).unwrap();
-            
-            let mapping = OptimizedMemoryMapping::create_optimized(
-                index_file,
-                pattern,
-                10
-            ).unwrap();
-            
+
+            let mapping = OptimizedMemoryMapping::create_optimized(index_file, pattern, 10).unwrap();
+
             let initial_stats = mapping.get_stats().unwrap();
-            
+
             // Apply memory advice again - this should call the actual implementation
             mapping.apply_memory_advice().unwrap();
-            
+
             let updated_stats = mapping.get_stats().unwrap();
-            
+
             // Should have increased the advice application count
             assert!(updated_stats.memory_advice_applied > initial_stats.memory_advice_applied);
         }
+    }
+
+    #[test]
+    fn test_prefault_index_page_basic() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("prefault_basic_test.dat");
+
+        // Create a file with a header and some entries
+        let entry_count = 100;
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+        let entry_size = std::mem::size_of::<DocumentTextEntry>();
+        let file_size = header_size + (entry_count * entry_size);
+
+        let index_file = MemoryMappedFile::create(&file_path, file_size).unwrap();
+
+        let mapping = OptimizedMemoryMapping::create_optimized(index_file, AccessPattern::Random, 10).unwrap();
+
+        let initial_stats = mapping.get_stats().unwrap();
+
+        // Test prefaulting the first page
+        mapping.prefault_index_page(0).unwrap();
+
+        let updated_stats = mapping.get_stats().unwrap();
+
+        // Should have incremented the prefaulted pages count
+        assert_eq!(updated_stats.pages_prefaulted, initial_stats.pages_prefaulted + 1);
+    }
+
+    #[test]
+    fn test_prefault_index_page_multiple_pages() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("prefault_multi_test.dat");
+
+        // Create a larger file to span multiple pages
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+        let entry_size = std::mem::size_of::<DocumentTextEntry>();
+        let page_size = 4096;
+        let entries_per_page = page_size / entry_size;
+        let entry_count = entries_per_page * 3; // 3 pages worth of entries
+        let file_size = header_size + (entry_count * entry_size);
+
+        let index_file = MemoryMappedFile::create(&file_path, file_size).unwrap();
+
+        let mapping = OptimizedMemoryMapping::create_optimized(index_file, AccessPattern::Sequential, 10).unwrap();
+
+        let initial_stats = mapping.get_stats().unwrap();
+
+        // Prefault multiple pages
+        mapping.prefault_index_page(0).unwrap();
+        mapping.prefault_index_page(1).unwrap();
+        mapping.prefault_index_page(2).unwrap();
+
+        let updated_stats = mapping.get_stats().unwrap();
+
+        // Should have incremented the prefaulted pages count by 3
+        assert_eq!(updated_stats.pages_prefaulted, initial_stats.pages_prefaulted + 3);
+    }
+
+    #[test]
+    fn test_prefault_index_page_beyond_bounds() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("prefault_bounds_test.dat");
+
+        // Create a small file
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+        let file_size = header_size + 1024; // Just header + small amount of data
+
+        let index_file = MemoryMappedFile::create(&file_path, file_size).unwrap();
+
+        let mapping = OptimizedMemoryMapping::create_optimized(index_file, AccessPattern::Mixed, 10).unwrap();
+
+        let initial_stats = mapping.get_stats().unwrap();
+
+        // Try to prefault a page way beyond file bounds
+        let large_page_index = 1000;
+        mapping.prefault_index_page(large_page_index).unwrap();
+
+        let updated_stats = mapping.get_stats().unwrap();
+
+        // Should not increment pages_prefaulted for out-of-bounds pages
+        assert_eq!(updated_stats.pages_prefaulted, initial_stats.pages_prefaulted);
+    }
+
+    #[test]
+    fn test_prefault_index_page_empty_file() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("prefault_empty_test.dat");
+
+        // Create a file with just the header
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+
+        let index_file = MemoryMappedFile::create(&file_path, header_size).unwrap();
+
+        let mapping = OptimizedMemoryMapping::create_optimized(index_file, AccessPattern::Sequential, 10).unwrap();
+
+        let initial_stats = mapping.get_stats().unwrap();
+
+        // Try to prefault the first page - should handle gracefully
+        mapping.prefault_index_page(0).unwrap();
+
+        let updated_stats = mapping.get_stats().unwrap();
+
+        // Should not increment pages_prefaulted for empty data section
+        assert_eq!(updated_stats.pages_prefaulted, initial_stats.pages_prefaulted);
+    }
+
+    #[test]
+    fn test_prefault_memory_touching() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("prefault_touching_test.dat");
+
+        // Create a file with real data to verify memory touching works
+        let header_size = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>();
+        let entry_count = 10;
+        let entry_size = std::mem::size_of::<DocumentTextEntry>();
+        let file_size = header_size + (entry_count * entry_size);
+
+        let mut index_file = MemoryMappedFile::create(&file_path, file_size).unwrap();
+
+        // Write some test data to ensure memory touching will find real content
+        let test_entry = DocumentTextEntry {
+            document_id: DocumentId::new(),
+            text_offset: 1000,
+            text_length: 500,
+        };
+
+        index_file.write_at(header_size, &test_entry).unwrap();
+
+        let mapping = OptimizedMemoryMapping::create_optimized(index_file, AccessPattern::Random, 10).unwrap();
+
+        let initial_stats = mapping.get_stats().unwrap();
+
+        // This should successfully prefault the page with real data
+        mapping.prefault_index_page(0).unwrap();
+
+        let updated_stats = mapping.get_stats().unwrap();
+
+        // Should have incremented the prefaulted pages count
+        assert_eq!(updated_stats.pages_prefaulted, initial_stats.pages_prefaulted + 1);
     }
 }
