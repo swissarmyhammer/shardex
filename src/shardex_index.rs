@@ -434,10 +434,7 @@ impl ShardexIndex {
     ///
     /// # Returns
     /// The ID of the nearest shard, or None if the index is empty
-    pub fn find_nearest_shard(
-        &self,
-        query_vector: &[f32],
-    ) -> Result<Option<ShardId>, ShardexError> {
+    pub fn find_nearest_shard(&self, query_vector: &[f32]) -> Result<Option<ShardId>, ShardexError> {
         // Validate query vector dimension
         if query_vector.len() != self.vector_size {
             return Err(ShardexError::InvalidDimension {
@@ -496,10 +493,7 @@ impl ShardexIndex {
     ///
     /// # Returns
     /// Vector of distances corresponding to each shard in index order
-    pub fn calculate_centroid_distances(
-        &self,
-        query_vector: &[f32],
-    ) -> Result<Vec<f32>, ShardexError> {
+    pub fn calculate_centroid_distances(&self, query_vector: &[f32]) -> Result<Vec<f32>, ShardexError> {
         use rayon::prelude::*;
 
         // Validate query vector dimension
@@ -543,11 +537,7 @@ impl ShardexIndex {
     /// # Arguments
     /// * `query_vector` - The vector to find nearest shards for
     /// * `slop_factor` - Maximum number of nearest shards to return
-    pub fn find_nearest_shards(
-        &self,
-        query_vector: &[f32],
-        slop_factor: usize,
-    ) -> Result<Vec<ShardId>, ShardexError> {
+    pub fn find_nearest_shards(&self, query_vector: &[f32], slop_factor: usize) -> Result<Vec<ShardId>, ShardexError> {
         // Validate query vector dimension
         if query_vector.len() != self.vector_size {
             return Err(ShardexError::InvalidDimension {
@@ -640,11 +630,7 @@ impl ShardexIndex {
     ///
     /// # Returns
     /// Vector of shard IDs selected based on the slop factor and adaptive logic
-    pub fn select_shards_with_slop(
-        &self,
-        query: &[f32],
-        slop: usize,
-    ) -> Result<Vec<ShardId>, ShardexError> {
+    pub fn select_shards_with_slop(&self, query: &[f32], slop: usize) -> Result<Vec<ShardId>, ShardexError> {
         // For now, this is equivalent to find_nearest_shards
         // Can be enhanced with more sophisticated selection logic
         self.find_nearest_shards(query, slop)
@@ -728,14 +714,13 @@ impl ShardexIndex {
                 // For now, we'll open shards directly to avoid borrowing conflicts
                 // Use the shards subdirectory for reading shard files
                 let shards_directory = self.directory.join("shards");
-                let shard = Shard::open_read_only(shard_id, &shards_directory).map_err(|e| {
-                    ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e))
-                })?;
+                let shard = Shard::open_read_only(shard_id, &shards_directory)
+                    .map_err(|e| ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e)))?;
 
                 // Perform search on this shard
-                let mut results = shard.search(query, per_shard_limit).map_err(|e| {
-                    ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
-                })?;
+                let mut results = shard
+                    .search(query, per_shard_limit)
+                    .map_err(|e| ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e)))?;
 
                 // Sort results by similarity score (highest first) for early termination potential
                 results.sort_by(|a, b| {
@@ -751,8 +736,7 @@ impl ShardexIndex {
         let all_shard_results = shard_results?;
 
         // Merge and rank results from all shards using configured deduplication policy
-        let final_results =
-            Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
+        let final_results = Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
 
         Ok(final_results)
     }
@@ -798,16 +782,13 @@ impl ShardexIndex {
                 // For now, we'll open shards directly to avoid borrowing conflicts
                 // Use the shards subdirectory for reading shard files
                 let shards_directory = self.directory.join("shards");
-                let shard = Shard::open_read_only(shard_id, &shards_directory).map_err(|e| {
-                    ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e))
-                })?;
+                let shard = Shard::open_read_only(shard_id, &shards_directory)
+                    .map_err(|e| ShardexError::Search(format!("Failed to open shard {}: {}", shard_id, e)))?;
 
                 // Perform search on this shard with the specified metric
                 let mut results = shard
                     .search_with_metric(query, per_shard_limit, metric)
-                    .map_err(|e| {
-                        ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e))
-                    })?;
+                    .map_err(|e| ShardexError::Search(format!("Search failed in shard {}: {}", shard_id, e)))?;
 
                 // Sort results by similarity score (highest first) for early termination potential
                 results.sort_by(|a, b| {
@@ -823,8 +804,7 @@ impl ShardexIndex {
         let all_shard_results = shard_results?;
 
         // Merge and rank results from all shards using configured deduplication policy
-        let final_results =
-            Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
+        let final_results = Self::merge_results_with_policy(all_shard_results, k, self.deduplication_policy);
 
         Ok(final_results)
     }
@@ -1232,8 +1212,7 @@ impl ShardexIndex {
                             // Parse the filename as a ULID
                             if let Ok(shard_id) = filename_str.parse::<ShardId>() {
                                 // Check if corresponding .postings file exists
-                                let posting_path =
-                                    shards_directory.join(format!("{}.postings", shard_id));
+                                let posting_path = shards_directory.join(format!("{}.postings", shard_id));
                                 if posting_path.exists() {
                                     // Load shard metadata
                                     self.load_shard_metadata(shard_id)?;
@@ -1300,12 +1279,12 @@ impl ShardexIndex {
             deleted_postings: 0,                   // Deleted postings tracking not implemented yet
             average_shard_utilization: stats.average_utilization,
             vector_dimension: stats.vector_dimension,
-            disk_usage: stats.total_memory_usage, // Approximate disk usage
+            disk_usage: stats.total_memory_usage,          // Approximate disk usage
             search_latency_p50: std::time::Duration::ZERO, // No performance data available here
             search_latency_p95: std::time::Duration::ZERO, // No performance data available here
             search_latency_p99: std::time::Duration::ZERO, // No performance data available here
-            write_throughput: 0.0,                // No performance data available here
-            bloom_filter_hit_rate: 0.0,           // No performance data available here
+            write_throughput: 0.0,                         // No performance data available here
+            bloom_filter_hit_rate: 0.0,                    // No performance data available here
         })
     }
 
@@ -1575,10 +1554,7 @@ impl ShardexIndex {
     ///
     /// # Arguments
     /// * `shard_id` - ID of the shard that was modified
-    pub fn update_shard_metadata_from_disk(
-        &mut self,
-        shard_id: ShardId,
-    ) -> Result<(), ShardexError> {
+    pub fn update_shard_metadata_from_disk(&mut self, shard_id: ShardId) -> Result<(), ShardexError> {
         // Load the shard to get updated metadata
         let shards_directory = self.directory.join("shards");
         let shard = Shard::open_read_only(shard_id, &shards_directory)?;
@@ -1613,33 +1589,24 @@ impl ShardexIndex {
     pub fn validate_metadata(&self) -> Result<(), ShardexError> {
         // Check if index directory exists
         if !self.directory.exists() {
-            return Err(ShardexError::Corruption(
-                "Index directory does not exist".to_string(),
-            ));
+            return Err(ShardexError::Corruption("Index directory does not exist".to_string()));
         }
 
         // Check if metadata file exists
         let metadata_path = self.directory.join("shardex.meta");
         if !metadata_path.exists() {
-            return Err(ShardexError::Corruption(
-                "Index metadata file is missing".to_string(),
-            ));
+            return Err(ShardexError::Corruption("Index metadata file is missing".to_string()));
         }
 
         // Validate that metadata file is not empty
         match std::fs::metadata(&metadata_path) {
             Ok(meta) => {
                 if meta.len() == 0 {
-                    return Err(ShardexError::Corruption(
-                        "Index metadata file is empty".to_string(),
-                    ));
+                    return Err(ShardexError::Corruption("Index metadata file is empty".to_string()));
                 }
             }
             Err(e) => {
-                return Err(ShardexError::Corruption(format!(
-                    "Cannot access metadata file: {}",
-                    e
-                )));
+                return Err(ShardexError::Corruption(format!("Cannot access metadata file: {}", e)));
             }
         }
 
@@ -1647,9 +1614,8 @@ impl ShardexIndex {
         let metadata_content = std::fs::read_to_string(&metadata_path)
             .map_err(|e| ShardexError::Corruption(format!("Cannot read metadata file: {}", e)))?;
 
-        let _metadata: IndexMetadata = serde_json::from_str(&metadata_content).map_err(|e| {
-            ShardexError::Corruption(format!("Invalid metadata file format: {}", e))
-        })?;
+        let _metadata: IndexMetadata = serde_json::from_str(&metadata_content)
+            .map_err(|e| ShardexError::Corruption(format!("Invalid metadata file format: {}", e)))?;
 
         // Basic structural validation passed
         Ok(())
@@ -1760,9 +1726,7 @@ impl ShardexIndex {
             None => Err(ShardexError::InvalidInput {
                 field: "text_storage".to_string(),
                 reason: "Text storage not enabled for this index".to_string(),
-                suggestion:
-                    "Enable text storage in configuration or use an index with text storage"
-                        .to_string(),
+                suggestion: "Enable text storage in configuration or use an index with text storage".to_string(),
             }),
         }
     }
@@ -1778,11 +1742,7 @@ impl ShardexIndex {
     /// # Returns
     /// * `Ok(())` - Text successfully stored
     /// * `Err(ShardexError)` - Text storage not enabled, text too large, or storage error
-    pub fn store_document_text(
-        &mut self,
-        document_id: DocumentId,
-        text: &str,
-    ) -> Result<(), ShardexError> {
+    pub fn store_document_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
         match &mut self.document_text_storage {
             Some(storage) => storage.store_text(document_id, text),
             None => Err(ShardexError::InvalidInput {
@@ -1806,9 +1766,7 @@ impl ShardexIndex {
     /// * `Err(ShardexError)` - Text storage not enabled, document not found, or invalid coordinates
     pub fn extract_text_from_posting(&self, posting: &Posting) -> Result<String, ShardexError> {
         match &self.document_text_storage {
-            Some(storage) => {
-                storage.extract_text_substring(posting.document_id, posting.start, posting.length)
-            }
+            Some(storage) => storage.extract_text_substring(posting.document_id, posting.start, posting.length),
             None => Err(ShardexError::InvalidInput {
                 field: "text_storage".to_string(),
                 reason: "Text storage not enabled for this index".to_string(),
@@ -1838,10 +1796,7 @@ impl ShardexIndex {
     ///
     /// * `Ok(String)` - The complete document text content
     /// * `Err(ShardexError)` - Text storage not enabled, document not found, or task execution error
-    pub async fn get_document_text_async(
-        &self,
-        document_id: DocumentId,
-    ) -> Result<String, ShardexError> {
+    pub async fn get_document_text_async(&self, document_id: DocumentId) -> Result<String, ShardexError> {
         match &self.document_text_storage {
             Some(storage) => {
                 // Since DocumentTextStorage methods are already safe and fast,
@@ -1872,10 +1827,7 @@ impl ShardexIndex {
     ///
     /// * `Ok(String)` - The extracted text substring
     /// * `Err(ShardexError)` - Text storage not enabled, invalid coordinates, or task execution error
-    pub async fn extract_text_from_posting_async(
-        &self,
-        posting: &Posting,
-    ) -> Result<String, ShardexError> {
+    pub async fn extract_text_from_posting_async(&self, posting: &Posting) -> Result<String, ShardexError> {
         match &self.document_text_storage {
             Some(storage) => {
                 // Memory-mapped file operations are fast, no need for spawn_blocking
@@ -2060,10 +2012,7 @@ impl ShardexIndex {
     }
 
     /// Create a new index with the provided layout and configuration
-    pub fn create_new(
-        layout: DirectoryLayout,
-        config: ShardexConfig,
-    ) -> Result<Self, ShardexError> {
+    pub fn create_new(layout: DirectoryLayout, config: ShardexConfig) -> Result<Self, ShardexError> {
         // Use the directory from the layout
         let directory = layout.root_path().to_path_buf();
 
@@ -2094,10 +2043,7 @@ impl ShardexIndex {
 
         // Create text storage if max_document_text_size is configured
         let document_text_storage = if config.max_document_text_size > 0 {
-            Some(DocumentTextStorage::create(
-                &directory,
-                config.max_document_text_size,
-            )?)
+            Some(DocumentTextStorage::create(&directory, config.max_document_text_size)?)
         } else {
             None
         };
@@ -2366,8 +2312,7 @@ mod tests {
         let base_metadata = BaseShardMetadata::new(false, 100).unwrap();
 
         let centroid = vec![0.1, 0.2, 0.3];
-        let metadata =
-            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid.clone(), 100);
+        let metadata = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid.clone(), 100);
 
         assert_eq!(metadata.id, shard_id);
         assert_eq!(metadata.centroid, centroid);
@@ -2491,8 +2436,7 @@ mod tests {
         assert_eq!(index.shard_count(), 3);
 
         // Try bulk add with wrong vector dimension
-        let wrong_shard =
-            Shard::create(ShardId::new(), 10, 8, temp_dir.path().to_path_buf()).unwrap();
+        let wrong_shard = Shard::create(ShardId::new(), 10, 8, temp_dir.path().to_path_buf()).unwrap();
         let result = index.bulk_add_shards(vec![wrong_shard]);
         assert!(result.is_err());
     }
@@ -2508,8 +2452,7 @@ mod tests {
 
         // Create shards with different utilization levels
         let high_util_id = ShardId::new();
-        let mut high_util_shard =
-            Shard::create(high_util_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut high_util_shard = Shard::create(high_util_id, 10, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Fill shard to high utilization (> 90%)
         for i in 0..10 {
@@ -2519,8 +2462,7 @@ mod tests {
         }
 
         let low_util_id = ShardId::new();
-        let mut low_util_shard =
-            Shard::create(low_util_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
+        let mut low_util_shard = Shard::create(low_util_id, 100, 2, temp_dir.path().to_path_buf()).unwrap();
 
         // Add just a few postings for low utilization
         let doc_id = DocumentId::new();
@@ -2611,8 +2553,7 @@ mod tests {
         let shard_id = ShardId::new();
         let base_metadata = BaseShardMetadata::new(false, 100).unwrap();
         let centroid = vec![1.0, 0.0, 0.0];
-        let metadata =
-            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid, 100);
+        let metadata = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, centroid, 100);
 
         // Test distance to same point (should be 0)
         let same_point = vec![1.0, 0.0, 0.0];
@@ -2653,18 +2594,15 @@ mod tests {
 
         // Test different utilization levels
         base_metadata.active_count = 50; // 50% utilization
-        let metadata1 =
-            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        let metadata1 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(!metadata1.should_split());
 
         base_metadata.active_count = 95; // 95% utilization
-        let metadata2 =
-            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        let metadata2 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(metadata2.should_split());
 
         base_metadata.active_count = 90; // Exactly 90% utilization
-        let metadata3 =
-            ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
+        let metadata3 = ShardexMetadata::from_shard_metadata(shard_id, &base_metadata, vec![0.0], 100);
         assert!(metadata3.should_split());
     }
 
@@ -2899,10 +2837,7 @@ mod tests {
             // Test different alignment scenarios
             (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]), // Length 3 (not aligned to 4)
             (vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]), // Length 4 (aligned)
-            (
-                vec![1.0, 2.0, 3.0, 4.0, 5.0],
-                vec![6.0, 7.0, 8.0, 9.0, 10.0],
-            ), // Length 5 (one remainder)
+            (vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![6.0, 7.0, 8.0, 9.0, 10.0]), // Length 5 (one remainder)
             (vec![0.0; 16], vec![1.0; 16]),             // Length 16 (multiple of 4)
             (vec![0.0; 17], vec![1.0; 17]),             // Length 17 (with remainder)
         ];
@@ -3249,11 +3184,7 @@ mod tests {
         let all_results = vec![shard1_results, shard2_results];
 
         // Test normal merging
-        let merged = ShardexIndex::merge_results_with_policy(
-            all_results.clone(),
-            3,
-            DeduplicationPolicy::default(),
-        );
+        let merged = ShardexIndex::merge_results_with_policy(all_results.clone(), 3, DeduplicationPolicy::default());
         assert_eq!(merged.len(), 3);
 
         // Should be sorted by similarity score
@@ -3262,24 +3193,15 @@ mod tests {
         assert_eq!(merged[2].similarity_score, 0.7); // doc_id2
 
         // Test with k larger than available results
-        let merged = ShardexIndex::merge_results_with_policy(
-            all_results.clone(),
-            10,
-            DeduplicationPolicy::default(),
-        );
+        let merged = ShardexIndex::merge_results_with_policy(all_results.clone(), 10, DeduplicationPolicy::default());
         assert_eq!(merged.len(), 4); // All unique results
 
         // Test with k = 0
-        let merged = ShardexIndex::merge_results_with_policy(
-            all_results.clone(),
-            0,
-            DeduplicationPolicy::default(),
-        );
+        let merged = ShardexIndex::merge_results_with_policy(all_results.clone(), 0, DeduplicationPolicy::default());
         assert!(merged.is_empty());
 
         // Test with empty input
-        let merged =
-            ShardexIndex::merge_results_with_policy(vec![], 5, DeduplicationPolicy::default());
+        let merged = ShardexIndex::merge_results_with_policy(vec![], 5, DeduplicationPolicy::default());
         assert!(merged.is_empty());
     }
 
@@ -4048,9 +3970,7 @@ mod tests {
         let mut index = ShardexIndex::create(config).unwrap();
         let doc_id = DocumentId::new();
 
-        let delete_op = WalOperation::DeleteDocumentText {
-            document_id: doc_id,
-        };
+        let delete_op = WalOperation::DeleteDocumentText { document_id: doc_id };
 
         // Operation should succeed (it's a no-op for now)
         index.apply_wal_operation(&delete_op).unwrap();

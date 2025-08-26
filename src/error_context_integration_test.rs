@@ -7,22 +7,18 @@
 mod tests {
     use crate::error::ShardexError;
     use crate::{
-        assert_error_contains, assert_error_type, 
+        assert_error_contains, assert_error_type,
         test_utils::error::{
-            assert_error_context, assert_error_causality, expect_error, 
-            expect_success, create_test_io_error
-        }
+            assert_error_causality, assert_error_context, create_test_io_error, expect_error, expect_success,
+        },
     };
     use std::path::Path;
-
 
     #[test]
     fn test_error_with_file_context_enhancement() {
         let base_error = ShardexError::Config("Missing vector_size parameter".to_string());
-        let enhanced_error = base_error.with_file_context(
-            Path::new("/etc/shardex/config.toml"),
-            "loading configuration"
-        );
+        let enhanced_error =
+            base_error.with_file_context(Path::new("/etc/shardex/config.toml"), "loading configuration");
 
         let error_msg = format!("{}", enhanced_error);
         assert!(error_msg.contains("loading configuration"));
@@ -33,10 +29,7 @@ mod tests {
     #[test]
     fn test_error_with_operation_context_enhancement() {
         let base_error = ShardexError::MemoryMapping("Failed to map file region".to_string());
-        let enhanced_error = base_error.with_operation_context(
-            "shard initialization",
-            "mapping vector storage"
-        );
+        let enhanced_error = base_error.with_operation_context("shard initialization", "mapping vector storage");
 
         let error_msg = format!("{}", enhanced_error);
         assert!(error_msg.contains("shard initialization"));
@@ -47,14 +40,9 @@ mod tests {
     #[test]
     fn test_error_chaining_with_context() {
         let base_error = ShardexError::Config("Parse error".to_string());
-        let file_context_error = base_error.with_file_context(
-            Path::new("/data/index.json"),
-            "reading metadata"
-        );
-        let operation_context_error = file_context_error.with_operation_context(
-            "index recovery",
-            "restoring from backup"
-        );
+        let file_context_error = base_error.with_file_context(Path::new("/data/index.json"), "reading metadata");
+        let operation_context_error =
+            file_context_error.with_operation_context("index recovery", "restoring from backup");
 
         let error_msg = format!("{}", operation_context_error);
         assert!(error_msg.contains("index recovery"));
@@ -70,11 +58,10 @@ mod tests {
         let config_error = ShardexError::Config("Cannot load configuration".to_string());
         let chained_error = config_error.chain_with_source(Box::new(io_error));
 
-        assert_error_causality(&chained_error, &[
-            "Cannot load configuration",
-            "caused by",
-            "Permission denied"
-        ]);
+        assert_error_causality(
+            &chained_error,
+            &["Cannot load configuration", "caused by", "Permission denied"],
+        );
     }
 
     #[test]
@@ -85,20 +72,22 @@ mod tests {
             suggestion: "Provide a non-empty vector with valid dimensions".to_string(),
         };
 
-        let enhanced_error = input_error.with_operation_context(
-            "vector similarity search",
-            "validating query parameters"
-        );
+        let enhanced_error =
+            input_error.with_operation_context("vector similarity search", "validating query parameters");
 
         // Verify the structure is preserved
         match enhanced_error {
-            ShardexError::InvalidInput { field, reason, suggestion } => {
+            ShardexError::InvalidInput {
+                field,
+                reason,
+                suggestion,
+            } => {
                 assert_eq!(field, "query_vector");
                 assert!(reason.contains("vector similarity search"));
                 assert!(reason.contains("validating query parameters"));
                 assert!(reason.contains("empty vector provided"));
                 assert_eq!(suggestion, "Provide a non-empty vector with valid dimensions");
-            },
+            }
             _ => panic!("Expected InvalidInput variant to be preserved"),
         }
     }
@@ -106,17 +95,13 @@ mod tests {
     #[test]
     fn test_file_operation_error_helper() {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "File not found");
-        let error = ShardexError::file_operation_failed(
-            Path::new("/data/shard_42.bin"),
-            "opening shard for reading",
-            io_error
-        );
+        let error =
+            ShardexError::file_operation_failed(Path::new("/data/shard_42.bin"), "opening shard for reading", io_error);
 
-        assert_error_context(&error, &[
-            "opening shard for reading",
-            "/data/shard_42.bin",
-            "File not found"
-        ]);
+        assert_error_context(
+            &error,
+            &["opening shard for reading", "/data/shard_42.bin", "File not found"],
+        );
     }
 
     #[test]
@@ -124,66 +109,50 @@ mod tests {
         let error = ShardexError::memory_mapping_failed(
             Path::new("/tmp/vectors.mmap"),
             "memory mapping vector storage",
-            "insufficient virtual address space"
+            "insufficient virtual address space",
         );
 
-        assert_error_context(&error, &[
-            "memory mapping vector storage failed",
-            "/tmp/vectors.mmap",
-            "insufficient virtual address space"
-        ]);
+        assert_error_context(
+            &error,
+            &[
+                "memory mapping vector storage failed",
+                "/tmp/vectors.mmap",
+                "insufficient virtual address space",
+            ],
+        );
     }
 
     #[test]
     fn test_wal_operation_error_helper() {
-        let error = ShardexError::wal_operation_failed(
-            "segment rotation",
-            "WAL segment 7",
-            "disk space exhausted"
-        );
+        let error = ShardexError::wal_operation_failed("segment rotation", "WAL segment 7", "disk space exhausted");
 
-        assert_error_context(&error, &[
-            "segment rotation",
-            "WAL segment 7",
-            "disk space exhausted"
-        ]);
+        assert_error_context(&error, &["segment rotation", "WAL segment 7", "disk space exhausted"]);
     }
 
     #[test]
     fn test_shard_operation_error_helper() {
-        let error = ShardexError::shard_operation_failed(
-            12345,
-            "splitting operation",
-            "insufficient data for clustering"
-        );
+        let error =
+            ShardexError::shard_operation_failed(12345, "splitting operation", "insufficient data for clustering");
 
-        assert_error_context(&error, &[
-            "Shard 12345",
-            "splitting operation",
-            "insufficient data for clustering"
-        ]);
+        assert_error_context(
+            &error,
+            &["Shard 12345", "splitting operation", "insufficient data for clustering"],
+        );
     }
 
     #[test]
     fn test_search_operation_error_helper() {
-        let error = ShardexError::search_operation_failed(
-            "k-nearest neighbors",
-            "shard 8",
-            "vector dimension mismatch"
-        );
+        let error =
+            ShardexError::search_operation_failed("k-nearest neighbors", "shard 8", "vector dimension mismatch");
 
-        assert_error_context(&error, &[
-            "k-nearest neighbors",
-            "shard 8", 
-            "vector dimension mismatch"
-        ]);
+        assert_error_context(&error, &["k-nearest neighbors", "shard 8", "vector dimension mismatch"]);
     }
 
     #[test]
     fn test_test_utilities_assert_error_type() {
         let config_error = ShardexError::Config("test error".to_string());
         let result: Result<(), ShardexError> = Err(config_error);
-        
+
         assert_error_type!(result, Config);
     }
 
@@ -191,7 +160,7 @@ mod tests {
     fn test_test_utilities_assert_error_contains() {
         let search_error = ShardexError::Search("query vector dimension mismatch".to_string());
         let result: Result<(), ShardexError> = Err(search_error);
-        
+
         assert_error_contains!(result, "query vector");
         assert_error_contains!(result, "dimension mismatch");
     }
@@ -200,12 +169,12 @@ mod tests {
     fn test_test_utilities_expect_error() {
         let corruption_error = ShardexError::Corruption("magic bytes invalid".to_string());
         let result: Result<(), ShardexError> = Err(corruption_error);
-        
+
         let error = expect_error(result, "corruption detection should fail");
         match error {
             ShardexError::Corruption(msg) => {
                 assert!(msg.contains("magic bytes invalid"));
-            },
+            }
             _ => panic!("Expected Corruption error"),
         }
     }
@@ -233,10 +202,7 @@ mod tests {
     fn test_io_error_context_enhancement() {
         let io_error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Access denied");
         let base_error = ShardexError::Io(io_error);
-        let enhanced_error = base_error.with_file_context(
-            Path::new("/secure/data.bin"),
-            "reading secure storage"
-        );
+        let enhanced_error = base_error.with_file_context(Path::new("/secure/data.bin"), "reading secure storage");
 
         let error_msg = format!("{}", enhanced_error);
         assert!(error_msg.contains("reading secure storage"));
@@ -248,24 +214,16 @@ mod tests {
     fn test_multiple_context_layering() {
         // Start with a basic error and layer multiple contexts
         let base_error = ShardexError::Config("Invalid setting value".to_string());
-        
-        let file_enhanced = base_error.with_file_context(
-            Path::new("/etc/shardex.toml"),
-            "parsing configuration file"
-        );
-        
-        let operation_enhanced = file_enhanced.with_operation_context(
-            "system startup",
-            "initializing search engine"
-        );
 
-        let final_enhanced = operation_enhanced.with_operation_context(
-            "service bootstrap",
-            "preparing application environment"
-        );
+        let file_enhanced = base_error.with_file_context(Path::new("/etc/shardex.toml"), "parsing configuration file");
+
+        let operation_enhanced = file_enhanced.with_operation_context("system startup", "initializing search engine");
+
+        let final_enhanced =
+            operation_enhanced.with_operation_context("service bootstrap", "preparing application environment");
 
         let error_msg = format!("{}", final_enhanced);
-        
+
         // Verify all context layers are present
         assert!(error_msg.contains("service bootstrap"));
         assert!(error_msg.contains("preparing application environment"));

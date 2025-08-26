@@ -4,9 +4,9 @@
 //! both individually and when composed together.
 
 use shardex::{
-    AsyncDocumentTextStorage, AsyncStorageConfig, ConcurrentDocumentTextStorage,
-    ConcurrentStorageConfig, DocumentId, DocumentTextOperation, DocumentTextStorage,
-    MemoryPoolConfig, MonitoringPerformanceMonitor, ShardexError, TextMemoryPool,
+    AsyncDocumentTextStorage, AsyncStorageConfig, ConcurrentDocumentTextStorage, ConcurrentStorageConfig, DocumentId,
+    DocumentTextOperation, DocumentTextStorage, MemoryPoolConfig, MonitoringPerformanceMonitor, ShardexError,
+    TextMemoryPool,
 };
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -29,11 +29,7 @@ mod integration_utils {
     pub fn generate_test_documents(count: usize, size: usize) -> Vec<(DocumentId, String)> {
         (0..count)
             .map(|i| {
-                let text = format!(
-                    "Test document {} content: {}",
-                    i,
-                    "Lorem ipsum ".repeat(size / 12)
-                );
+                let text = format!("Test document {} content: {}", i, "Lorem ipsum ".repeat(size / 12));
                 (DocumentId::new(), text)
             })
             .collect()
@@ -240,10 +236,7 @@ async fn test_text_memory_pool_integration() {
     );
 
     assert!(final_stats.hit_ratio() > 0.0, "Should have some cache hits");
-    assert!(
-        final_stats.total_requests > 100,
-        "Should have processed many requests"
-    );
+    assert!(final_stats.total_requests > 100, "Should have processed many requests");
 
     // Test memory pool cleanup
     pool.cleanup();
@@ -293,10 +286,7 @@ async fn test_async_storage_integration() {
     let _ = async_storage.get_text_async(doc_id).await.unwrap();
     let second_read_time = start_time.elapsed();
 
-    println!(
-        "First read: {:?}, Second read: {:?}",
-        first_read_time, second_read_time
-    );
+    println!("First read: {:?}, Second read: {:?}", first_read_time, second_read_time);
 
     // Test async batch operations
     let batch_documents: Vec<_> = documents[10..20]
@@ -498,18 +488,12 @@ async fn test_full_integration_stack() {
     let memory_pool_stats = memory_pool.get_stats();
 
     println!("Integration test results:");
-    println!(
-        "  Concurrent operations: {}",
-        concurrent_metrics.total_operations()
-    );
+    println!("  Concurrent operations: {}", concurrent_metrics.total_operations());
     println!(
         "  Concurrent success rate: {:.2}%",
         concurrent_metrics.read_success_ratio() * 100.0
     );
-    println!(
-        "  Memory pool hit rate: {:.2}%",
-        memory_pool_stats.hit_ratio() * 100.0
-    );
+    println!("  Memory pool hit rate: {:.2}%", memory_pool_stats.hit_ratio() * 100.0);
     println!(
         "  Cache hit ratio: {:.2}%",
         concurrent_metrics.metadata_cache_hit_ratio() * 100.0
@@ -540,8 +524,7 @@ async fn test_full_integration_stack() {
 #[tokio::test]
 async fn test_error_handling_integration() {
     let (_temp_dir, base_storage) = integration_utils::create_test_storage();
-    let concurrent_storage =
-        ConcurrentDocumentTextStorage::new(base_storage, ConcurrentStorageConfig::default());
+    let concurrent_storage = ConcurrentDocumentTextStorage::new(base_storage, ConcurrentStorageConfig::default());
     concurrent_storage
         .start_background_processor()
         .await
@@ -608,12 +591,7 @@ async fn test_performance_monitoring_integration() {
         let bytes = 1024 + (i * 100);
 
         monitor
-            .record_document_text_storage(
-                DocumentTextOperation::Store,
-                latency,
-                success,
-                Some(bytes),
-            )
+            .record_document_text_storage(DocumentTextOperation::Store, latency, success, Some(bytes))
             .await;
     }
 
@@ -662,16 +640,10 @@ async fn test_performance_monitoring_integration() {
     monitor.record_document_text_health_check(false, 3).await;
 
     let total_duration = start_time.elapsed();
-    println!(
-        "Monitoring integration test completed in: {:?}",
-        total_duration
-    );
+    println!("Monitoring integration test completed in: {:?}", total_duration);
 
     // Verify monitoring doesn't add significant overhead
-    assert!(
-        total_duration < Duration::from_secs(5),
-        "Monitoring should be fast"
-    );
+    assert!(total_duration < Duration::from_secs(5), "Monitoring should be fast");
 
     // Test that we can get detailed stats
     let stats = monitor.get_detailed_stats().await;
@@ -689,8 +661,7 @@ async fn test_component_compatibility() {
     let _memory_pool = TextMemoryPool::new_default();
 
     // Create concurrent storage
-    let concurrent_storage =
-        ConcurrentDocumentTextStorage::new(base_storage, ConcurrentStorageConfig::default());
+    let concurrent_storage = ConcurrentDocumentTextStorage::new(base_storage, ConcurrentStorageConfig::default());
     concurrent_storage
         .start_background_processor()
         .await

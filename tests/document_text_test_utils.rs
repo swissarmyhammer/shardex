@@ -26,8 +26,8 @@ pub struct DocumentTestEnvironment {
 impl DocumentTestEnvironment {
     /// Create a new test environment with specified limits
     pub fn new(test_name: &str, max_document_size: usize) -> Self {
-        let temp_dir = TempDir::new()
-            .unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
+        let temp_dir =
+            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
 
         let storage = DocumentTextStorage::create(&temp_dir, max_document_size)
             .unwrap_or_else(|e| panic!("Failed to create storage for test {}: {}", test_name, e));
@@ -61,12 +61,8 @@ impl DocumentTestEnvironment {
 
     /// Reopen the storage (simulates restart/crash recovery)
     pub fn reopen(&mut self) {
-        self.storage = DocumentTextStorage::open(&self.temp_dir).unwrap_or_else(|e| {
-            panic!(
-                "Failed to reopen storage for test {}: {}",
-                self.test_name, e
-            )
-        });
+        self.storage = DocumentTextStorage::open(&self.temp_dir)
+            .unwrap_or_else(|e| panic!("Failed to reopen storage for test {}: {}", self.test_name, e));
     }
 }
 
@@ -203,15 +199,27 @@ impl TextGenerator {
     /// Generate text with Unicode content
     pub fn generate_unicode_text(&mut self, language_type: UnicodeTestType) -> String {
         match language_type {
-            UnicodeTestType::Chinese => "你好世界！这是一个中文测试文档，用于验证UTF-8编码的正确处理。我们需要确保中文字符能够正确存储和检索。".to_string(),
-            UnicodeTestType::Japanese => "こんにちは世界！これは日本語のテスト文書です。UTF-8エンコーディングが正しく動作することを確認します。".to_string(),
-            UnicodeTestType::Arabic => "مرحبا بالعالم! هذا مستند اختبار باللغة العربية للتحقق من التعامل الصحيح مع ترميز UTF-8.".to_string(),
-            UnicodeTestType::Emoji => "Hello 🌍 World! 🚀 This document contains emojis 🎉✨ to test Unicode handling 🌟💫".to_string(),
+            UnicodeTestType::Chinese => {
+                "你好世界！这是一个中文测试文档，用于验证UTF-8编码的正确处理。我们需要确保中文字符能够正确存储和检索。"
+                    .to_string()
+            }
+            UnicodeTestType::Japanese => {
+                "こんにちは世界！これは日本語のテスト文書です。UTF-8エンコーディングが正しく動作することを確認します。"
+                    .to_string()
+            }
+            UnicodeTestType::Arabic => {
+                "مرحبا بالعالم! هذا مستند اختبار باللغة العربية للتحقق من التعامل الصحيح مع ترميز UTF-8.".to_string()
+            }
+            UnicodeTestType::Emoji => {
+                "Hello 🌍 World! 🚀 This document contains emojis 🎉✨ to test Unicode handling 🌟💫".to_string()
+            }
             UnicodeTestType::Mixed => {
                 let base_text = self.generate_text(20);
                 format!("{} 中文 🌍 العربية 🚀 日本語 ✨ Mixed content! 🎉", base_text)
-            },
-            UnicodeTestType::ControlCharacters => "Text with\ttabs\nand\rcarriage\x01returns\x02and\x03control\x1fcharacters.".to_string(),
+            }
+            UnicodeTestType::ControlCharacters => {
+                "Text with\ttabs\nand\rcarriage\x01returns\x02and\x03control\x1fcharacters.".to_string()
+            }
         }
     }
 
@@ -290,8 +298,7 @@ impl PostingGenerator {
             let length = max_length.clamp(1, 100) as u32;
 
             // Adjust start to respect UTF-8 boundaries
-            let (adjusted_start, adjusted_length) =
-                self.adjust_for_utf8_boundaries(text, start, length);
+            let (adjusted_start, adjusted_length) = self.adjust_for_utf8_boundaries(text, start, length);
 
             if adjusted_length == 0 {
                 continue; // Skip invalid postings
@@ -300,13 +307,7 @@ impl PostingGenerator {
             // Generate vector for this posting
             let vector = self.generate_vector(vector_dimension, i);
 
-            let posting = Posting::new(
-                document_id,
-                adjusted_start,
-                adjusted_length,
-                vector,
-                vector_dimension,
-            )?;
+            let posting = Posting::new(document_id, adjusted_start, adjusted_length, vector, vector_dimension)?;
             postings.push(posting);
         }
 
@@ -374,18 +375,11 @@ impl PostingGenerator {
                 break;
             }
 
-            let (adjusted_start, adjusted_length) =
-                self.adjust_for_utf8_boundaries(text, start, length);
+            let (adjusted_start, adjusted_length) = self.adjust_for_utf8_boundaries(text, start, length);
 
             if adjusted_length > 0 {
                 let vector = self.generate_vector(vector_dimension, i);
-                let posting = Posting::new(
-                    document_id,
-                    adjusted_start,
-                    adjusted_length,
-                    vector,
-                    vector_dimension,
-                )?;
+                let posting = Posting::new(document_id, adjusted_start, adjusted_length, vector, vector_dimension)?;
                 postings.push(posting);
             }
         }
@@ -402,8 +396,7 @@ impl PostingGenerator {
                 .rng_state
                 .wrapping_mul(1664525)
                 .wrapping_add(1013904223);
-            let value =
-                (self.rng_state.wrapping_add(seed_modifier as u32) as f32) / (u32::MAX as f32);
+            let value = (self.rng_state.wrapping_add(seed_modifier as u32) as f32) / (u32::MAX as f32);
             vector.push(value);
         }
 
@@ -518,10 +511,7 @@ pub struct ErrorTestHelper;
 
 impl ErrorTestHelper {
     /// Validate error type and message content
-    pub fn assert_error_type<T: std::fmt::Debug>(
-        result: Result<T, ShardexError>,
-        expected_type: ErrorType,
-    ) {
+    pub fn assert_error_type<T: std::fmt::Debug>(result: Result<T, ShardexError>, expected_type: ErrorType) {
         assert!(result.is_err(), "Expected error, got success");
 
         let error = result.unwrap_err();
@@ -553,9 +543,7 @@ impl ErrorTestHelper {
     pub fn generate_problematic_text(problem_type: ProblematicTextType) -> String {
         match problem_type {
             ProblematicTextType::NullBytes => "Hello\x00World\x00Test".to_string(),
-            ProblematicTextType::ControlCharacters => {
-                "Text\x01with\x02control\x03chars".to_string()
-            }
+            ProblematicTextType::ControlCharacters => "Text\x01with\x02control\x03chars".to_string(),
             ProblematicTextType::VeryLong => "A".repeat(1_000_000),
         }
     }
@@ -597,16 +585,9 @@ impl ValidationHelper {
 
         if storage.entry_count() == 0 {
             assert!(storage.is_empty(), "Empty storage should report as empty");
-            assert_eq!(
-                storage.total_text_size(),
-                0,
-                "Empty storage should have zero text size"
-            );
+            assert_eq!(storage.total_text_size(), 0, "Empty storage should have zero text size");
         } else {
-            assert!(
-                !storage.is_empty(),
-                "Non-empty storage should not report as empty"
-            );
+            assert!(!storage.is_empty(), "Non-empty storage should not report as empty");
         }
     }
 
@@ -710,10 +691,7 @@ impl TestScenario {
 
         for (doc_id, text) in &self.documents {
             storage.store_text_safe(*doc_id, text).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to store document in scenario '{}': {:?}",
-                    self.name, e
-                );
+                panic!("Failed to store document in scenario '{}': {:?}", self.name, e);
             });
 
             // Verify storage
@@ -751,8 +729,8 @@ impl TestScenario {
 pub fn create_test_document(size_category: DocumentSize) -> String {
     let mut generator = TextGenerator::new();
     match size_category {
-        DocumentSize::Tiny => generator.generate_text(10), // ~60 bytes
-        DocumentSize::Small => generator.generate_text(100), // ~600 bytes
+        DocumentSize::Tiny => generator.generate_text(10),     // ~60 bytes
+        DocumentSize::Small => generator.generate_text(100),   // ~600 bytes
         DocumentSize::Medium => generator.generate_text(1000), // ~6KB
         DocumentSize::Large => generator.generate_text(10000), // ~60KB
         DocumentSize::Huge => generator.generate_text(100000), // ~600KB

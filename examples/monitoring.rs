@@ -117,17 +117,14 @@ async fn collect_performance_metrics(index: &mut ShardexImpl) -> Result<(), Box<
     }
 
     // Calculate statistics
-    let avg_throughput = throughput_measurements.iter().map(|(_, t)| t).sum::<f64>()
-        / throughput_measurements.len() as f64;
+    let avg_throughput =
+        throughput_measurements.iter().map(|(_, t)| t).sum::<f64>() / throughput_measurements.len() as f64;
 
     println!("\nPerformance summary:");
     println!("  Average throughput: {:.0} docs/sec", avg_throughput);
 
     if let Some(&(_, fastest_search)) = search_times.iter().min_by_key(|(_, d)| d) {
-        println!(
-            "  Fastest search: {:.2}ms",
-            fastest_search.as_secs_f64() * 1000.0
-        );
+        println!("  Fastest search: {:.2}ms", fastest_search.as_secs_f64() * 1000.0);
     }
 
     Ok(())
@@ -142,12 +139,7 @@ async fn monitor_resource_usage(index: &mut ShardexImpl) -> Result<(), Box<dyn E
 
     for i in 0..10 {
         let stats = index.stats().await?;
-        measurements.push((
-            i,
-            stats.memory_usage,
-            stats.disk_usage,
-            stats.total_postings,
-        ));
+        measurements.push((i, stats.memory_usage, stats.disk_usage, stats.total_postings));
 
         // Add more data to see resource growth
         if i < 5 {
@@ -178,17 +170,13 @@ async fn monitor_resource_usage(index: &mut ShardexImpl) -> Result<(), Box<dyn E
     // Check resource efficiency
     let final_stats = index.stats().await?;
     if final_stats.total_postings > 0 {
-        let memory_per_posting =
-            final_stats.memory_usage as f64 / final_stats.total_postings as f64;
+        let memory_per_posting = final_stats.memory_usage as f64 / final_stats.total_postings as f64;
         let disk_per_posting = final_stats.disk_usage as f64 / final_stats.total_postings as f64;
 
         println!("\nResource efficiency:");
         println!("  Memory per posting: {:.0} bytes", memory_per_posting);
         println!("  Disk per posting: {:.0} bytes", disk_per_posting);
-        println!(
-            "  Compression ratio: {:.2}x",
-            memory_per_posting / disk_per_posting
-        );
+        println!("  Compression ratio: {:.2}x", memory_per_posting / disk_per_posting);
     }
 
     Ok(())
@@ -203,13 +191,9 @@ async fn analyze_detailed_statistics(index: &ShardexImpl) -> Result<(), Box<dyn 
 
     // Analyze shard distribution
     if detailed_stats.total_shards > 0 {
-        let avg_postings_per_shard =
-            detailed_stats.total_postings as f64 / detailed_stats.total_shards as f64;
+        let avg_postings_per_shard = detailed_stats.total_postings as f64 / detailed_stats.total_shards as f64;
         println!("\nShard analysis:");
-        println!(
-            "  Average postings per shard: {:.1}",
-            avg_postings_per_shard
-        );
+        println!("  Average postings per shard: {:.1}", avg_postings_per_shard);
         println!(
             "  Shard utilization: {:.1}%",
             detailed_stats.average_shard_utilization * 100.0
@@ -222,8 +206,7 @@ async fn analyze_detailed_statistics(index: &ShardexImpl) -> Result<(), Box<dyn 
 
     // Analyze deletion efficiency
     if detailed_stats.total_postings > 0 {
-        let deletion_ratio =
-            detailed_stats.deleted_postings as f64 / detailed_stats.total_postings as f64;
+        let deletion_ratio = detailed_stats.deleted_postings as f64 / detailed_stats.total_postings as f64;
         println!("\nDeletion analysis:");
         println!("  Active postings: {}", detailed_stats.active_postings);
         println!("  Deleted postings: {}", detailed_stats.deleted_postings);
@@ -284,8 +267,7 @@ async fn demonstrate_health_monitoring(index: &ShardexImpl) -> Result<(), Box<dy
 
     // Deletion ratio check
     if detailed_stats.total_postings > 0 {
-        let deletion_ratio =
-            detailed_stats.deleted_postings as f64 / detailed_stats.total_postings as f64;
+        let deletion_ratio = detailed_stats.deleted_postings as f64 / detailed_stats.total_postings as f64;
         if deletion_ratio > max_deletion_ratio {
             health_score -= 15.0;
             alerts.push(format!(
@@ -320,10 +302,7 @@ async fn demonstrate_health_monitoring(index: &ShardexImpl) -> Result<(), Box<dy
 
     println!("  Search performance: {:.2}ms", search_time_ms);
     if search_time_ms > max_search_time_ms {
-        println!(
-            "    ⚠ Search time exceeds threshold ({:.0}ms)",
-            max_search_time_ms
-        );
+        println!("    ⚠ Search time exceeds threshold ({:.0}ms)", max_search_time_ms);
     } else {
         println!("    ✓ Search performance within limits");
     }
@@ -381,10 +360,7 @@ async fn track_historical_data(index: &mut ShardexImpl) -> Result<(), Box<dyn Er
         let memory_growth = (last.memory_usage as i64) - (first.memory_usage as i64);
 
         println!("  Posting growth: +{} documents", posting_growth);
-        println!(
-            "  Memory growth: {:+.1}MB",
-            memory_growth as f64 / 1024.0 / 1024.0
-        );
+        println!("  Memory growth: {:+.1}MB", memory_growth as f64 / 1024.0 / 1024.0);
 
         // Calculate average operation time
         let avg_operation_time = history
@@ -393,10 +369,7 @@ async fn track_historical_data(index: &mut ShardexImpl) -> Result<(), Box<dyn Er
             .sum::<f64>()
             / history.len() as f64;
 
-        println!(
-            "  Average operation time: {:.0}ms",
-            avg_operation_time * 1000.0
-        );
+        println!("  Average operation time: {:.0}ms", avg_operation_time * 1000.0);
     }
 
     Ok(())
@@ -420,23 +393,14 @@ fn print_detailed_stats(stats: &DetailedIndexStats) {
     println!("  Active postings: {}", stats.active_postings);
     println!("  Deleted postings: {}", stats.deleted_postings);
     println!("  Vector dimension: {}", stats.vector_dimension);
-    println!(
-        "  Memory usage: {:.2} MB",
-        stats.memory_usage as f64 / 1024.0 / 1024.0
-    );
-    println!(
-        "  Disk usage: {:.2} MB",
-        stats.disk_usage as f64 / 1024.0 / 1024.0
-    );
+    println!("  Memory usage: {:.2} MB", stats.memory_usage as f64 / 1024.0 / 1024.0);
+    println!("  Disk usage: {:.2} MB", stats.disk_usage as f64 / 1024.0 / 1024.0);
     println!(
         "  Average shard utilization: {:.1}%",
         stats.average_shard_utilization * 100.0
     );
 
-    println!(
-        "  Bloom filter hit rate: {:.1}%",
-        stats.bloom_filter_hit_rate * 100.0
-    );
+    println!("  Bloom filter hit rate: {:.1}%", stats.bloom_filter_hit_rate * 100.0);
 }
 
 fn generate_test_postings(count: usize, vector_size: usize) -> Vec<Posting> {

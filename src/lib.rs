@@ -63,6 +63,7 @@ pub mod layout;
 pub mod memory;
 pub mod monitoring;
 pub mod posting_storage;
+pub mod prelude;
 pub mod search_coordinator;
 pub mod shard;
 pub mod shardex;
@@ -83,14 +84,10 @@ pub mod statistics_integration_test;
 #[cfg(test)]
 pub mod error_handling_integration_test;
 
-pub use async_document_text_storage::{
-    AsyncDocumentTextStorage, AsyncStorageConfig, AsyncStorageMetrics,
-};
+pub use async_document_text_storage::{AsyncDocumentTextStorage, AsyncStorageConfig, AsyncStorageMetrics};
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
-pub use concurrent::{
-    ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType,
-};
+pub use concurrent::{ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType};
 pub use concurrent_document_text_storage::{
     ConcurrentDocumentTextStorage, ConcurrentStorageConfig, ConcurrentStorageMetrics,
 };
@@ -101,8 +98,8 @@ pub use crash_recovery::{CrashRecovery, CrashRecoveryStats};
 pub use deduplication::{DeduplicationPolicy, DeduplicationStats, ResultDeduplicator};
 pub use distance::DistanceMetric;
 pub use document_text_entry::{
-    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
-    TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
+    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION, TEXT_INDEX_MAGIC,
+    TEXT_INDEX_VERSION,
 };
 pub use document_text_performance::{
     AccessPattern, CacheHealth, CacheHealthReport, OptimizedMappingStats, OptimizedMemoryMapping,
@@ -111,42 +108,31 @@ pub use document_text_storage::DocumentTextStorage;
 pub use document_transaction_coordinator::{DocumentTransactionCoordinator, TransactionStatistics};
 pub use error::ShardexError;
 pub use error_handling::{
-    BackupInfo, BackupManager, BackupRetentionPolicy, RecoveryConfig, RecoveryResult,
-    RecoveryStrategy, RestoreResult, TextStorageHealth, TextStorageHealthMonitor,
-    TextStorageRecoveryManager,
+    BackupInfo, BackupManager, BackupRetentionPolicy, RecoveryConfig, RecoveryResult, RecoveryStrategy, RestoreResult,
+    TextStorageHealth, TextStorageHealthMonitor, TextStorageRecoveryManager,
 };
 pub use identifiers::{DocumentId, ShardId, TransactionId};
 pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, ValidationResult};
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use monitoring::{
-    BloomFilterMetrics, DetailedIndexStats, DocumentTextMetrics, DocumentTextOperation,
-    HistoricalData, HistoricalDataPoint, PercentileCalculator,
-    PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics, TrendAnalysis,
-    WriteMetrics,
+    BloomFilterMetrics, DetailedIndexStats, DocumentTextMetrics, DocumentTextOperation, HistoricalData,
+    HistoricalDataPoint, PercentileCalculator, PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics,
+    TrendAnalysis, WriteMetrics,
 };
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
-pub use search_coordinator::{
-    PerformanceMonitor, SearchCoordinator, SearchCoordinatorConfig, SearchMetrics,
-};
+pub use search_coordinator::{PerformanceMonitor, SearchCoordinator, SearchCoordinatorConfig, SearchMetrics};
 pub use shard::{Shard, ShardMetadata};
 pub use shardex::{Shardex, ShardexImpl};
 pub use shardex_index::{IndexConfig, IndexStatistics, ShardexIndex, ShardexMetadata};
-pub use structures::{
-    FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader,
-};
-pub use text_memory_pool::{
-    MemoryPoolConfig, MemoryPoolStats, PooledBytes, PooledString, TextMemoryPool,
-};
+pub use structures::{FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader};
+pub use text_memory_pool::{MemoryPoolConfig, MemoryPoolStats, PooledBytes, PooledString, TextMemoryPool};
 pub use transactions::{
-    BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction,
-    WalTransactionHeader,
+    BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction, WalTransactionHeader,
 };
 pub use vector_storage::VectorStorage;
 pub use wal::{WalManager, WalSegment};
 pub use wal_replay::{RecoveryStats, WalReplayer};
-
-
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;

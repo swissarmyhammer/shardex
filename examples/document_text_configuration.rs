@@ -38,10 +38,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Memory-Constrained Configuration ===");
-    
+
     let index_dir = base_dir.join("memory_constrained");
     std::fs::create_dir_all(&index_dir)?;
-    
+
     // Optimized for minimal memory usage
     let config = ShardexConfig::new()
         .directory_path(&index_dir)
@@ -52,8 +52,8 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
         .wal_segment_size(64 * 1024)  // 64KB WAL segments
         .batch_write_interval_ms(200) // Less frequent batching
         .default_slop_factor(2)       // More focused search
-        .bloom_filter_size(1024);      // Smaller bloom filters
-    
+        .bloom_filter_size(1024); // Smaller bloom filters
+
     println!("Configuration for memory-constrained environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -63,9 +63,9 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
     println!("  Batch interval: {} ms", config.batch_write_interval_ms);
     println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
     println!("  Bloom filter size: {}", config.bloom_filter_size);
-    
+
     let mut index = ShardexImpl::create(config).await?;
-    
+
     // Test with small documents
     let small_documents = vec![
         "Short document about cats.",
@@ -74,7 +74,7 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
         "Small text about fish.",
         "Tiny document on pets.",
     ];
-    
+
     let start = Instant::now();
     for (i, text) in small_documents.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
@@ -84,27 +84,29 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
             length: text.len() as u32,
             vector: generate_simple_vector(&text.to_lowercase(), 64),
         };
-        
-        index.replace_document_with_postings(doc_id, text.to_string(), vec![posting]).await?;
+
+        index
+            .replace_document_with_postings(doc_id, text.to_string(), vec![posting])
+            .await?;
     }
     let processing_time = start.elapsed();
-    
+
     let stats = index.stats().await?;
     println!("\\nResults:");
     println!("  Processing time: {:?}", processing_time);
     println!("  Memory usage: {:.2} KB", stats.memory_usage as f64 / 1024.0);
     println!("  Total postings: {}", stats.total_postings);
     println!("  Total shards: {}", stats.total_shards);
-    
+
     // Test search performance
     let query_vector = generate_simple_vector("cats pets", 64);
     let search_start = Instant::now();
     let results = index.search(&query_vector, 3, None).await?;
     let search_time = search_start.elapsed();
-    
+
     println!("  Search time: {:?}", search_time);
     println!("  Search results: {}", results.len());
-    
+
     // Test document size limit
     let large_text = "x".repeat(300 * 1024); // 300KB - should exceed limit
     let doc_id = DocumentId::from_raw(100);
@@ -114,21 +116,24 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
         length: large_text.len() as u32,
         vector: generate_simple_vector("large", 64),
     };
-    
-    match index.replace_document_with_postings(doc_id, large_text, vec![posting]).await {
+
+    match index
+        .replace_document_with_postings(doc_id, large_text, vec![posting])
+        .await
+    {
         Ok(()) => println!("  ✗ Large document was accepted unexpectedly"),
         Err(e) => println!("  ✓ Large document correctly rejected: {}", e),
     }
-    
+
     Ok(())
 }
 
 async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== High-Capacity Configuration ===");
-    
+
     let index_dir = base_dir.join("high_capacity");
     std::fs::create_dir_all(&index_dir)?;
-    
+
     // Optimized for large-scale operations
     let config = ShardexConfig::new()
         .directory_path(&index_dir)
@@ -139,38 +144,47 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
         .wal_segment_size(10 * 1024 * 1024) // 10MB WAL segments
         .batch_write_interval_ms(50)  // Frequent batching for throughput
         .default_slop_factor(5)       // Broad search for accuracy
-        .bloom_filter_size(65_536);    // Large bloom filters
-    
+        .bloom_filter_size(65_536); // Large bloom filters
+
     println!("Configuration for high-capacity environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
-    println!("  Max document text size: {} MB", config.max_document_text_size / (1024 * 1024));
+    println!(
+        "  Max document text size: {} MB",
+        config.max_document_text_size / (1024 * 1024)
+    );
     println!("  Shard segment size: {}", config.shardex_segment_size);
     println!("  WAL segment size: {} MB", config.wal_segment_size / (1024 * 1024));
     println!("  Batch interval: {} ms", config.batch_write_interval_ms);
     println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
     println!("  Bloom filter size: {}", config.bloom_filter_size);
-    
+
     let mut index = ShardexImpl::create(config).await?;
-    
+
     // Test with larger documents
     let base_content = "This is a comprehensive research document covering advanced topics in artificial intelligence, machine learning, deep neural networks, natural language processing, computer vision, robotics, autonomous systems, and their applications in healthcare, finance, transportation, education, and scientific research. ";
-    
-    let large_documents: Vec<String> = (1..=10).map(|i| {
-        format!("Document {}: {}", i, base_content.repeat(i * 100))
-    }).collect();
-    
+
+    let large_documents: Vec<String> = (1..=10)
+        .map(|i| format!("Document {}: {}", i, base_content.repeat(i * 100)))
+        .collect();
+
     println!("\\nProcessing {} large documents...", large_documents.len());
     let start = Instant::now();
-    
+
     for (i, text) in large_documents.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         // Create multiple postings per document
         let mut postings = Vec::new();
-        let segments = ["artificial intelligence", "machine learning", "deep neural", 
-                       "natural language", "computer vision", "robotics"];
-        
+        let segments = [
+            "artificial intelligence",
+            "machine learning",
+            "deep neural",
+            "natural language",
+            "computer vision",
+            "robotics",
+        ];
+
         for (_j, segment) in segments.iter().enumerate() {
             if let Some(pos) = text.find(segment) {
                 postings.push(Posting {
@@ -181,7 +195,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
                 });
             }
         }
-        
+
         // Add full document posting
         postings.push(Posting {
             document_id: doc_id,
@@ -189,52 +203,67 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
             length: text.len() as u32,
             vector: generate_simple_vector(&format!("document {}", i + 1), 768),
         });
-        
-        index.replace_document_with_postings(doc_id, text.clone(), postings).await?;
-        
+
+        index
+            .replace_document_with_postings(doc_id, text.clone(), postings)
+            .await?;
+
         if (i + 1) % 3 == 0 {
-            println!("  Processed {} documents ({:.1} MB total)", 
-                     i + 1, 
-                     large_documents.iter().take(i + 1).map(|d| d.len()).sum::<usize>() as f64 / (1024.0 * 1024.0));
+            println!(
+                "  Processed {} documents ({:.1} MB total)",
+                i + 1,
+                large_documents
+                    .iter()
+                    .take(i + 1)
+                    .map(|d| d.len())
+                    .sum::<usize>() as f64
+                    / (1024.0 * 1024.0)
+            );
         }
     }
-    
+
     let processing_time = start.elapsed();
     let stats = index.stats().await?;
-    
+
     println!("\\nResults:");
     println!("  Processing time: {:?}", processing_time);
-    println!("  Memory usage: {:.2} MB", stats.memory_usage as f64 / (1024.0 * 1024.0));
+    println!(
+        "  Memory usage: {:.2} MB",
+        stats.memory_usage as f64 / (1024.0 * 1024.0)
+    );
     println!("  Total postings: {}", stats.total_postings);
     println!("  Total shards: {}", stats.total_shards);
-    println!("  Average shard utilization: {:.1}%", stats.average_shard_utilization * 100.0);
-    
+    println!(
+        "  Average shard utilization: {:.1}%",
+        stats.average_shard_utilization * 100.0
+    );
+
     // Test complex search
     let complex_queries = vec![
         ("AI research", "artificial intelligence research"),
         ("ML applications", "machine learning applications"),
         ("computer vision", "computer vision systems"),
     ];
-    
+
     println!("\\nTesting complex search performance:");
     for (desc, query_terms) in complex_queries {
         let query_vector = generate_simple_vector(query_terms, 768);
         let search_start = Instant::now();
         let results = index.search(&query_vector, 10, Some(5)).await?;
         let search_time = search_start.elapsed();
-        
+
         println!("  '{}': {} results in {:?}", desc, results.len(), search_time);
     }
-    
+
     Ok(())
 }
 
 async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Performance-Optimized Configuration ===");
-    
+
     let index_dir = base_dir.join("performance_optimized");
     std::fs::create_dir_all(&index_dir)?;
-    
+
     // Balanced configuration for optimal performance
     let config = ShardexConfig::new()
         .directory_path(&index_dir)
@@ -245,25 +274,31 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         .wal_segment_size(2 * 1024 * 1024) // 2MB WAL segments
         .batch_write_interval_ms(75)  // Balanced batching
         .default_slop_factor(3)       // Good accuracy/speed tradeoff
-        .bloom_filter_size(8_192);     // Optimal bloom filter size
-    
+        .bloom_filter_size(8_192); // Optimal bloom filter size
+
     println!("Configuration optimized for balanced performance:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
-    println!("  Max document text size: {} MB", config.max_document_text_size / (1024 * 1024));
-    
+    println!(
+        "  Max document text size: {} MB",
+        config.max_document_text_size / (1024 * 1024)
+    );
+
     let mut index = ShardexImpl::create(config).await?;
-    
+
     // Performance test with realistic workload
     let test_documents = create_realistic_documents(50); // 50 realistic documents
-    
-    println!("\\nPerformance testing with {} realistic documents...", test_documents.len());
-    
+
+    println!(
+        "\\nPerformance testing with {} realistic documents...",
+        test_documents.len()
+    );
+
     // Bulk insert performance
     let insert_start = Instant::now();
     for (i, (text, keywords)) in test_documents.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         let mut postings = Vec::new();
         for keyword in keywords {
             if let Some(pos) = text.find(keyword) {
@@ -275,25 +310,29 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
                 });
             }
         }
-        
-        index.replace_document_with_postings(doc_id, text.clone(), postings).await?;
+
+        index
+            .replace_document_with_postings(doc_id, text.clone(), postings)
+            .await?;
     }
     let insert_time = insert_start.elapsed();
-    
+
     // Force flush and measure
     let flush_start = Instant::now();
     let flush_stats = index.flush_with_stats().await?;
     let flush_time = flush_start.elapsed();
-    
+
     let stats = index.stats().await?;
-    
+
     println!("\\nInsert Performance:");
-    println!("  Bulk insert time: {:?} ({:.1} docs/sec)", 
-             insert_time, 
-             test_documents.len() as f64 / insert_time.as_secs_f64());
+    println!(
+        "  Bulk insert time: {:?} ({:.1} docs/sec)",
+        insert_time,
+        test_documents.len() as f64 / insert_time.as_secs_f64()
+    );
     println!("  Flush time: {:?}", flush_time);
     println!("  Operations flushed: {}", flush_stats.operations_applied);
-    
+
     // Search performance testing
     let search_queries = vec![
         "technology innovation",
@@ -302,40 +341,46 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         "artificial intelligence",
         "machine learning",
     ];
-    
+
     println!("\\nSearch Performance:");
     let mut total_search_time = std::time::Duration::new(0, 0);
     let mut total_results = 0;
-    
+
     for query in &search_queries {
         let query_vector = generate_simple_vector(query, 256);
-        
+
         let search_start = Instant::now();
         let results = index.search(&query_vector, 20, None).await?;
         let search_time = search_start.elapsed();
-        
+
         total_search_time += search_time;
         total_results += results.len();
-        
+
         println!("  '{}': {} results in {:?}", query, results.len(), search_time);
     }
-    
-    println!("  Average search time: {:?}", total_search_time / search_queries.len() as u32);
-    println!("  Average results per query: {:.1}", total_results as f64 / search_queries.len() as f64);
-    
+
+    println!(
+        "  Average search time: {:?}",
+        total_search_time / search_queries.len() as u32
+    );
+    println!(
+        "  Average results per query: {:.1}",
+        total_results as f64 / search_queries.len() as f64
+    );
+
     // Text extraction performance
     println!("\\nText Extraction Performance:");
     let extract_start = Instant::now();
     let mut extracted_count = 0;
-    
+
     for i in 1..=std::cmp::min(test_documents.len(), 20) {
         let doc_id = DocumentId::from_raw(i as u128);
-        
+
         // Test full document extraction
         if let Ok(_text) = index.get_document_text(doc_id).await {
             extracted_count += 1;
         }
-        
+
         // Test partial extraction
         let partial_posting = Posting {
             document_id: doc_id,
@@ -343,30 +388,35 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
             length: 50,
             vector: generate_simple_vector("test", 256),
         };
-        
+
         if index.extract_text(&partial_posting).await.is_ok() {
             extracted_count += 1;
         }
     }
-    
+
     let extract_time = extract_start.elapsed();
-    println!("  {} extractions in {:?} ({:.1} μs/extraction)",
-             extracted_count,
-             extract_time,
-             extract_time.as_micros() as f64 / extracted_count as f64);
-    
+    println!(
+        "  {} extractions in {:?} ({:.1} μs/extraction)",
+        extracted_count,
+        extract_time,
+        extract_time.as_micros() as f64 / extracted_count as f64
+    );
+
     println!("\\nFinal Statistics:");
-    println!("  Memory usage: {:.2} MB", stats.memory_usage as f64 / (1024.0 * 1024.0));
+    println!(
+        "  Memory usage: {:.2} MB",
+        stats.memory_usage as f64 / (1024.0 * 1024.0)
+    );
     println!("  Total postings: {}", stats.total_postings);
     println!("  Active postings: {}", stats.active_postings);
     println!("  Total shards: {}", stats.total_shards);
-    
+
     Ok(())
 }
 
 async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Use Case Specific Configurations ===");
-    
+
     // Chat/Conversation History
     println!("\\n--- Chat/Conversation History Use Case ---");
     let chat_config = ShardexConfig::new()
@@ -375,10 +425,10 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .max_document_text_size(16 * 1024) // 16KB per message
         .shard_size(25_000)
         .batch_write_interval_ms(25)  // Fast response for real-time
-        .default_slop_factor(2);       // Focus on recent/relevant
-    
+        .default_slop_factor(2); // Focus on recent/relevant
+
     demonstrate_chat_use_case(chat_config).await?;
-    
+
     // Academic Papers/Research
     println!("\\n--- Academic Papers Use Case ---");
     let academic_config = ShardexConfig::new()
@@ -387,10 +437,10 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .max_document_text_size(50 * 1024 * 1024) // 50MB per paper
         .shard_size(75_000)
         .batch_write_interval_ms(100) // Can tolerate some latency
-        .default_slop_factor(4);       // Broad search for comprehensive results
-    
+        .default_slop_factor(4); // Broad search for comprehensive results
+
     demonstrate_academic_use_case(academic_config).await?;
-    
+
     // Code Search
     println!("\\n--- Code Search Use Case ---");
     let code_config = ShardexConfig::new()
@@ -399,16 +449,16 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .max_document_text_size(1024 * 1024) // 1MB per file
         .shard_size(30_000)
         .batch_write_interval_ms(50)  // Balance responsiveness and efficiency
-        .default_slop_factor(2);       // Precise matching for code
-    
+        .default_slop_factor(2); // Precise matching for code
+
     demonstrate_code_search_use_case(code_config).await?;
-    
+
     Ok(())
 }
 
 async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
-    
+
     let chat_messages = vec![
         "Hi there! How can I help you today?",
         "I'm looking for information about machine learning algorithms.",
@@ -418,10 +468,10 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
         "Can you tell me more about decision trees?",
         "Decision trees are intuitive algorithms that make decisions by asking a series of questions about the data features.",
     ];
-    
+
     println!("  Storing {} chat messages...", chat_messages.len());
     let start = Instant::now();
-    
+
     for (i, message) in chat_messages.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
         let posting = Posting {
@@ -430,48 +480,60 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
             length: message.len() as u32,
             vector: generate_simple_vector(message, 384),
         };
-        
-        index.replace_document_with_postings(doc_id, message.to_string(), vec![posting]).await?;
+
+        index
+            .replace_document_with_postings(doc_id, message.to_string(), vec![posting])
+            .await?;
     }
-    
+
     let storage_time = start.elapsed();
     println!("  Storage time: {:?}", storage_time);
-    
+
     // Search for relevant conversation context
     let query = "machine learning classification";
     let query_vector = generate_simple_vector(query, 384);
     let search_results = index.search(&query_vector, 5, None).await?;
-    
-    println!("  Search for '{}' found {} relevant messages", query, search_results.len());
+
+    println!(
+        "  Search for '{}' found {} relevant messages",
+        query,
+        search_results.len()
+    );
     for result in search_results.iter().take(3) {
         if let Ok(message) = index.get_document_text(result.document_id).await {
-            println!("    '{}' (score: {:.3})", 
-                     if message.len() > 50 { format!("{}...", &message[..50]) } else { message },
-                     result.similarity_score);
+            println!(
+                "    '{}' (score: {:.3})",
+                if message.len() > 50 {
+                    format!("{}...", &message[..50])
+                } else {
+                    message
+                },
+                result.similarity_score
+            );
         }
     }
-    
+
     Ok(())
 }
 
 async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
-    
+
     let academic_abstracts = vec![
         "This paper presents a novel deep learning approach for natural language understanding in conversational AI systems. We propose a transformer-based architecture that achieves state-of-the-art performance on multiple dialogue benchmarks.",
         "We investigate the application of reinforcement learning to autonomous vehicle navigation in complex urban environments. Our experimental results demonstrate significant improvements in safety and efficiency compared to traditional rule-based approaches.",
         "This study examines the effectiveness of federated learning for privacy-preserving machine learning in healthcare applications. We evaluate our approach on real-world medical datasets while maintaining patient privacy constraints.",
     ];
-    
+
     println!("  Processing {} academic abstracts...", academic_abstracts.len());
-    
+
     for (i, abstract_text) in academic_abstracts.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         // Extract key terms and concepts
         let key_terms = extract_academic_terms(abstract_text);
         let mut postings = Vec::new();
-        
+
         for term in &key_terms {
             if let Some(pos) = abstract_text.find(term) {
                 postings.push(Posting {
@@ -482,7 +544,7 @@ async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<
                 });
             }
         }
-        
+
         // Full abstract posting
         postings.push(Posting {
             document_id: doc_id,
@@ -490,45 +552,56 @@ async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<
             length: abstract_text.len() as u32,
             vector: generate_simple_vector(abstract_text, 768),
         });
-        
-        index.replace_document_with_postings(doc_id, abstract_text.to_string(), postings).await?;
+
+        index
+            .replace_document_with_postings(doc_id, abstract_text.to_string(), postings)
+            .await?;
     }
-    
+
     // Search for research topics
     let research_queries = vec![
         "deep learning natural language",
         "reinforcement learning autonomous",
         "federated learning privacy healthcare",
     ];
-    
+
     println!("  Testing academic search:");
     for query in research_queries {
         let query_vector = generate_simple_vector(query, 768);
         let results = index.search(&query_vector, 2, None).await?;
         println!("    '{}': {} relevant papers found", query, results.len());
     }
-    
+
     Ok(())
 }
 
 async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
-    
+
     let code_snippets = vec![
-        ("function_definitions.rs", "pub fn calculate_similarity(vec1: &[f32], vec2: &[f32]) -> f32 {\n    let dot_product: f32 = vec1.iter().zip(vec2.iter()).map(|(a, b)| a * b).sum();\n    let magnitude1: f32 = vec1.iter().map(|x| x * x).sum::<f32>().sqrt();\n    let magnitude2: f32 = vec2.iter().map(|x| x * x).sum::<f32>().sqrt();\n    dot_product / (magnitude1 * magnitude2)\n}"),
-        ("error_handling.rs", "match result {\n    Ok(value) => println!(\"Success: {}\", value),\n    Err(ShardexError::InvalidDimension { expected, actual }) => {\n        eprintln!(\"Dimension mismatch: expected {}, got {}\", expected, actual);\n    }\n    Err(e) => eprintln!(\"Other error: {}\", e),\n}"),
-        ("async_operations.rs", "async fn process_batch(documents: Vec<Document>) -> Result<(), ShardexError> {\n    for doc in documents {\n        let postings = generate_postings(&doc).await?;\n        index.replace_document_with_postings(doc.id, doc.text, postings).await?;\n    }\n    Ok(())\n}"),
+        (
+            "function_definitions.rs",
+            "pub fn calculate_similarity(vec1: &[f32], vec2: &[f32]) -> f32 {\n    let dot_product: f32 = vec1.iter().zip(vec2.iter()).map(|(a, b)| a * b).sum();\n    let magnitude1: f32 = vec1.iter().map(|x| x * x).sum::<f32>().sqrt();\n    let magnitude2: f32 = vec2.iter().map(|x| x * x).sum::<f32>().sqrt();\n    dot_product / (magnitude1 * magnitude2)\n}",
+        ),
+        (
+            "error_handling.rs",
+            "match result {\n    Ok(value) => println!(\"Success: {}\", value),\n    Err(ShardexError::InvalidDimension { expected, actual }) => {\n        eprintln!(\"Dimension mismatch: expected {}, got {}\", expected, actual);\n    }\n    Err(e) => eprintln!(\"Other error: {}\", e),\n}",
+        ),
+        (
+            "async_operations.rs",
+            "async fn process_batch(documents: Vec<Document>) -> Result<(), ShardexError> {\n    for doc in documents {\n        let postings = generate_postings(&doc).await?;\n        index.replace_document_with_postings(doc.id, doc.text, postings).await?;\n    }\n    Ok(())\n}",
+        ),
     ];
-    
+
     println!("  Indexing {} code files...", code_snippets.len());
-    
+
     for (i, (filename, code)) in code_snippets.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         // Extract code elements (functions, types, keywords)
         let code_elements = extract_code_elements(code);
         let mut postings = Vec::new();
-        
+
         for element in &code_elements {
             if let Some(pos) = code.find(element) {
                 postings.push(Posting {
@@ -539,7 +612,7 @@ async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), B
                 });
             }
         }
-        
+
         // Full file posting
         postings.push(Posting {
             document_id: doc_id,
@@ -547,56 +620,61 @@ async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), B
             length: code.len() as u32,
             vector: generate_simple_vector(&format!("file:{}", filename), 512),
         });
-        
-        index.replace_document_with_postings(doc_id, code.to_string(), postings).await?;
+
+        index
+            .replace_document_with_postings(doc_id, code.to_string(), postings)
+            .await?;
         println!("    Indexed {} with {} code elements", filename, code_elements.len());
     }
-    
+
     // Search for code patterns
     let code_queries = vec![
         "similarity calculation function",
         "error handling pattern",
         "async document processing",
     ];
-    
+
     println!("  Testing code search:");
     for query in code_queries {
         let query_vector = generate_simple_vector(&format!("code:{}", query), 512);
         let results = index.search(&query_vector, 2, None).await?;
-        
+
         println!("    '{}': {} matches found", query, results.len());
         if let Some(result) = results.first() {
-            if let Ok(code_snippet) = index.extract_text(&Posting {
-                document_id: result.document_id,
-                start: result.start,
-                length: std::cmp::min(result.length, 100), // First 100 chars
-                vector: result.vector.clone(),
-            }).await {
+            if let Ok(code_snippet) = index
+                .extract_text(&Posting {
+                    document_id: result.document_id,
+                    start: result.start,
+                    length: std::cmp::min(result.length, 100), // First 100 chars
+                    vector: result.vector.clone(),
+                })
+                .await
+            {
                 println!("      Match: '{}'", code_snippet.replace('\n', " "));
             }
         }
     }
-    
+
     Ok(())
 }
 
 async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Migration Scenarios ===");
-    
+
     // Scenario 1: Upgrading existing index to include text storage
     println!("\\n--- Enabling Text Storage for Existing Index ---");
-    
+
     let index_dir = base_dir.join("migration_scenario");
     std::fs::create_dir_all(&index_dir)?;
-    
+
     // Create index without text storage first
     let initial_config = ShardexConfig::new()
         .directory_path(&index_dir)
         .vector_size(128)
         .max_document_text_size(0); // Text storage disabled
-    
+
     let mut initial_index = ShardexImpl::create(initial_config).await?;
-    
+
     // Add some postings without text
     let doc_id = DocumentId::from_raw(1);
     let posting = Posting {
@@ -605,29 +683,29 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         length: 20,
         vector: generate_simple_vector("sample text", 128),
     };
-    
+
     initial_index.add_postings(vec![posting]).await?;
     println!("  Created initial index without text storage");
-    
+
     // Try to access text (should fail)
     match initial_index.get_document_text(doc_id).await {
         Ok(_) => println!("  ✗ Unexpected success accessing text"),
         Err(e) => println!("  ✓ Text access correctly failed: {}", e),
     }
-    
+
     // Simulate index closure and reopening with text storage enabled
     drop(initial_index);
-    
+
     // Reopen with text storage enabled
     let upgraded_config = ShardexConfig::new()
         .directory_path(&index_dir)
         .vector_size(128)
         .max_document_text_size(1024 * 1024); // Enable text storage
-    
-    // Note: In a real scenario, you'd use ShardexImpl::open(), 
+
+    // Note: In a real scenario, you'd use ShardexImpl::open(),
     // but for this demo we'll create a new index
     let mut upgraded_index = ShardexImpl::create(upgraded_config).await?;
-    
+
     // Now we can add documents with text
     let doc_with_text = "This is a document with text storage enabled.";
     let new_doc_id = DocumentId::from_raw(2);
@@ -637,73 +715,101 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         length: doc_with_text.len() as u32,
         vector: generate_simple_vector(doc_with_text, 128),
     };
-    
-    upgraded_index.replace_document_with_postings(
-        new_doc_id, 
-        doc_with_text.to_string(), 
-        vec![new_posting]
-    ).await?;
-    
+
+    upgraded_index
+        .replace_document_with_postings(new_doc_id, doc_with_text.to_string(), vec![new_posting])
+        .await?;
+
     // Verify text storage is working
     match upgraded_index.get_document_text(new_doc_id).await {
         Ok(text) => println!("  ✓ Text storage working: '{}'", text),
         Err(e) => println!("  ✗ Text storage failed: {}", e),
     }
-    
+
     println!("  Migration to text-enabled index completed");
-    
+
     Ok(())
 }
 
 fn create_realistic_documents(count: usize) -> Vec<(String, Vec<&'static str>)> {
     let templates = vec![
-        ("Our latest software update includes significant improvements to performance, security, and user experience. The development team has worked tirelessly to address user feedback and implement new features.", 
-         vec!["software", "performance", "security", "development", "features"]),
-        ("The quarterly financial report shows strong growth across all business segments. Revenue increased by 15% compared to the previous quarter, driven by expansion in emerging markets.",
-         vec!["financial", "growth", "revenue", "business", "markets"]),
-        ("Research findings indicate that machine learning applications in healthcare are showing promising results. Early trials demonstrate improved diagnostic accuracy and patient outcomes.",
-         vec!["research", "machine learning", "healthcare", "diagnostic", "patients"]),
-        ("The new marketing campaign focuses on digital channels and social media engagement. Initial metrics suggest improved brand awareness and customer acquisition rates.",
-         vec!["marketing", "digital", "social media", "brand", "customer"]),
-        ("Environmental sustainability initiatives have been implemented across all company operations. These measures aim to reduce carbon footprint and promote renewable energy adoption.",
-         vec!["environmental", "sustainability", "carbon", "renewable energy", "operations"]),
+        (
+            "Our latest software update includes significant improvements to performance, security, and user experience. The development team has worked tirelessly to address user feedback and implement new features.",
+            vec!["software", "performance", "security", "development", "features"],
+        ),
+        (
+            "The quarterly financial report shows strong growth across all business segments. Revenue increased by 15% compared to the previous quarter, driven by expansion in emerging markets.",
+            vec!["financial", "growth", "revenue", "business", "markets"],
+        ),
+        (
+            "Research findings indicate that machine learning applications in healthcare are showing promising results. Early trials demonstrate improved diagnostic accuracy and patient outcomes.",
+            vec!["research", "machine learning", "healthcare", "diagnostic", "patients"],
+        ),
+        (
+            "The new marketing campaign focuses on digital channels and social media engagement. Initial metrics suggest improved brand awareness and customer acquisition rates.",
+            vec!["marketing", "digital", "social media", "brand", "customer"],
+        ),
+        (
+            "Environmental sustainability initiatives have been implemented across all company operations. These measures aim to reduce carbon footprint and promote renewable energy adoption.",
+            vec![
+                "environmental",
+                "sustainability",
+                "carbon",
+                "renewable energy",
+                "operations",
+            ],
+        ),
     ];
-    
-    (0..count).map(|i| {
-        let template_idx = i % templates.len();
-        let (base_text, keywords) = &templates[template_idx];
-        let document_text = format!("Document {}: {}", i + 1, base_text);
-        (document_text, keywords.clone())
-    }).collect()
+
+    (0..count)
+        .map(|i| {
+            let template_idx = i % templates.len();
+            let (base_text, keywords) = &templates[template_idx];
+            let document_text = format!("Document {}: {}", i + 1, base_text);
+            (document_text, keywords.clone())
+        })
+        .collect()
 }
 
 fn extract_academic_terms(text: &str) -> Vec<&str> {
     let academic_keywords = vec![
-        "deep learning", "neural networks", "machine learning", "artificial intelligence",
-        "natural language", "reinforcement learning", "federated learning", "transformer",
-        "autonomous", "privacy", "healthcare", "algorithm", "performance", "experimental"
+        "deep learning",
+        "neural networks",
+        "machine learning",
+        "artificial intelligence",
+        "natural language",
+        "reinforcement learning",
+        "federated learning",
+        "transformer",
+        "autonomous",
+        "privacy",
+        "healthcare",
+        "algorithm",
+        "performance",
+        "experimental",
     ];
-    
-    academic_keywords.into_iter()
+
+    academic_keywords
+        .into_iter()
         .filter(|keyword| text.to_lowercase().contains(&keyword.to_lowercase()))
         .collect()
 }
 
 fn extract_code_elements(code: &str) -> Vec<&str> {
     let mut elements = Vec::new();
-    
+
     // Simple extraction of function names, types, and keywords
     let patterns = vec![
-        "pub fn", "async fn", "fn", "struct", "enum", "impl", "match",
-        "Ok", "Err", "Result", "Vec", "String", "async", "await"
+        "pub fn", "async fn", "fn", "struct", "enum", "impl", "match", "Ok", "Err", "Result", "Vec", "String", "async",
+        "await",
     ];
-    
+
     for pattern in patterns {
         if code.contains(pattern) {
             elements.push(pattern);
         }
     }
-    
+
     elements
 }
 
@@ -711,13 +817,13 @@ fn generate_simple_vector(text: &str, dimension: usize) -> Vec<f32> {
     let mut vector = vec![0.0; dimension];
     let lowercase_text = text.to_lowercase();
     let words: Vec<&str> = lowercase_text.split_whitespace().collect();
-    
+
     for (i, word) in words.iter().enumerate() {
         let hash = simple_hash(word);
         let index = (hash % dimension as u32) as usize;
         vector[index] += 1.0 / (i + 1) as f32;
     }
-    
+
     // Normalize
     let magnitude: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
     if magnitude > 0.0 {
@@ -725,12 +831,11 @@ fn generate_simple_vector(text: &str, dimension: usize) -> Vec<f32> {
             *value /= magnitude;
         }
     }
-    
+
     vector
 }
 
 fn simple_hash(s: &str) -> u32 {
-    s.bytes().fold(0u32, |acc, byte| {
-        acc.wrapping_mul(31).wrapping_add(byte as u32)
-    })
+    s.bytes()
+        .fold(0u32, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as u32))
 }

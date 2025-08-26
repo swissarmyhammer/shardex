@@ -79,10 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Flush to ensure all data is written
     let flush_stats = index.flush_with_stats().await?;
-    println!(
-        "Flushed to disk - Operations: {}",
-        flush_stats.operations_applied
-    );
+    println!("Flushed to disk - Operations: {}", flush_stats.operations_applied);
 
     // Get index statistics
     let stats = index.stats().await?;
@@ -91,10 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("- Total postings: {}", stats.total_postings);
     println!("- Active postings: {}", stats.active_postings);
     println!("- Vector dimension: {}", stats.vector_dimension);
-    println!(
-        "- Memory usage: {:.2} MB",
-        stats.memory_usage as f64 / 1024.0 / 1024.0
-    );
+    println!("- Memory usage: {:.2} MB", stats.memory_usage as f64 / 1024.0 / 1024.0);
 
     // Perform some searches
     println!("\nPerforming similarity searches:");
@@ -102,10 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let search_queries = vec![
         ("pets and animals", "cats dogs pets animals"),
-        (
-            "artificial intelligence",
-            "artificial intelligence machine learning",
-        ),
+        ("artificial intelligence", "artificial intelligence machine learning"),
         ("cooking and food", "cooking food recipes"),
         ("travel and tourism", "travel tourism destinations"),
         ("software engineering", "programming software engineering"),
@@ -175,7 +166,6 @@ fn generate_text_vector(text: &str) -> Vec<f32> {
 
 /// Simple hash function for demonstration purposes
 fn simple_hash(s: &str) -> u32 {
-    s.bytes().fold(0u32, |acc, byte| {
-        acc.wrapping_mul(31).wrapping_add(byte as u32)
-    })
+    s.bytes()
+        .fold(0u32, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as u32))
 }

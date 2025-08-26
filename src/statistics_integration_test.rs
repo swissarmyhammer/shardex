@@ -77,10 +77,7 @@ mod tests {
         assert_eq!(detailed_stats.total_operations, 0);
 
         println!("DetailedIndexStats uptime: {:?}", detailed_stats.uptime);
-        println!(
-            "DetailedIndexStats FD count: {}",
-            detailed_stats.file_descriptor_count
-        );
+        println!("DetailedIndexStats FD count: {}", detailed_stats.file_descriptor_count);
     }
 
     #[tokio::test]

@@ -480,9 +480,7 @@ impl IntegrityIssue {
     fn is_auto_repairable(corruption: &CorruptionReport) -> bool {
         matches!(
             corruption.corruption_type,
-            CorruptionType::DataCorruption
-                | CorruptionType::PartialCorruption
-                | CorruptionType::CrossValidationFailure
+            CorruptionType::DataCorruption | CorruptionType::PartialCorruption | CorruptionType::CrossValidationFailure
         ) && corruption.is_recoverable
     }
 }
@@ -549,9 +547,7 @@ impl IntegrityChecker {
         let pattern_str = search_pattern.to_string_lossy();
 
         let mut files = Vec::new();
-        for entry in glob(&pattern_str)
-            .map_err(|e| ShardexError::Corruption(format!("Glob pattern error: {}", e)))?
-        {
+        for entry in glob(&pattern_str).map_err(|e| ShardexError::Corruption(format!("Glob pattern error: {}", e)))? {
             match entry {
                 Ok(path) => files.push(path),
                 Err(e) => {
@@ -596,10 +592,7 @@ impl IntegrityChecker {
     }
 
     /// Verify integrity of specific components incrementally
-    pub async fn verify_incremental(
-        &mut self,
-        components: &[ComponentType],
-    ) -> Result<IntegrityReport, ShardexError> {
+    pub async fn verify_incremental(&mut self, components: &[ComponentType]) -> Result<IntegrityReport, ShardexError> {
         let start_time = Instant::now();
 
         // Ensure we have component paths discovered
@@ -652,13 +645,9 @@ impl IntegrityChecker {
             // Enhanced validation with component-specific checks
             let result = match component_type {
                 ComponentType::VectorStorage => self.verify_vector_storage_file(file_path).await?,
-                ComponentType::PostingStorage => {
-                    self.verify_posting_storage_file(file_path).await?
-                }
+                ComponentType::PostingStorage => self.verify_posting_storage_file(file_path).await?,
                 ComponentType::WalSegments => self.verify_wal_segment_file(file_path).await?,
-                ComponentType::ShardexSegments => {
-                    self.verify_shardex_segment_file(file_path).await?
-                }
+                ComponentType::ShardexSegments => self.verify_shardex_segment_file(file_path).await?,
                 ComponentType::BloomFilters => self.verify_bloom_filter_file(file_path).await?,
                 ComponentType::CrossReferences => {
                     // Cross-references are handled separately
@@ -683,13 +672,8 @@ impl IntegrityChecker {
                 file_path: PathBuf::from("unknown"),
                 corruption_offset: None,
                 corruption_size: None,
-                description: format!(
-                    "Component {} validation failed",
-                    component_type_name(component_type)
-                ),
-                recovery_recommendations: vec![
-                    "Check individual files for specific issues".to_string()
-                ],
+                description: format!("Component {} validation failed", component_type_name(component_type)),
+                recovery_recommendations: vec!["Check individual files for specific issues".to_string()],
                 severity: 0.5,
                 is_recoverable: self.repair_enabled,
                 detected_at: SystemTime::now(),
@@ -711,10 +695,7 @@ impl IntegrityChecker {
     }
 
     /// Verify a vector storage file with enhanced checksum validation
-    async fn verify_vector_storage_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<ValidationResult, ShardexError> {
+    async fn verify_vector_storage_file(&mut self, file_path: &Path) -> Result<ValidationResult, ShardexError> {
         let start_time = Instant::now();
         let mmf = MemoryMappedFile::open_read_only(file_path)?;
 
@@ -742,10 +723,7 @@ impl IntegrityChecker {
     }
 
     /// Verify a posting storage file with enhanced checksum validation
-    async fn verify_posting_storage_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<ValidationResult, ShardexError> {
+    async fn verify_posting_storage_file(&mut self, file_path: &Path) -> Result<ValidationResult, ShardexError> {
         let start_time = Instant::now();
         let mmf = MemoryMappedFile::open_read_only(file_path)?;
 
@@ -773,40 +751,28 @@ impl IntegrityChecker {
     }
 
     /// Verify WAL segment file
-    async fn verify_wal_segment_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<ValidationResult, ShardexError> {
+    async fn verify_wal_segment_file(&mut self, file_path: &Path) -> Result<ValidationResult, ShardexError> {
         let result = self.manager.validate_file_path(file_path)?;
         // WAL validation could be enhanced with transaction consistency checks
         Ok(result)
     }
 
     /// Verify Shardex segment file
-    async fn verify_shardex_segment_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<ValidationResult, ShardexError> {
+    async fn verify_shardex_segment_file(&mut self, file_path: &Path) -> Result<ValidationResult, ShardexError> {
         let result = self.manager.validate_file_path(file_path)?;
         // Shardex segment validation could be enhanced with centroid consistency checks
         Ok(result)
     }
 
     /// Verify bloom filter file
-    async fn verify_bloom_filter_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<ValidationResult, ShardexError> {
+    async fn verify_bloom_filter_file(&mut self, file_path: &Path) -> Result<ValidationResult, ShardexError> {
         let result = self.manager.validate_file_path(file_path)?;
         // Bloom filter validation could be enhanced with false positive rate checks
         Ok(result)
     }
 
     /// Enhanced checksum verification for vector storage
-    async fn verify_vector_storage_checksums(
-        &self,
-        mmf: &MemoryMappedFile,
-    ) -> Result<(), Box<CorruptionReport>> {
+    async fn verify_vector_storage_checksums(&self, mmf: &MemoryMappedFile) -> Result<(), Box<CorruptionReport>> {
         use crate::vector_storage::VectorStorageHeader;
 
         let header: VectorStorageHeader = mmf.read_at(0).map_err(|e| CorruptionReport {
@@ -814,10 +780,7 @@ impl IntegrityChecker {
             file_path: PathBuf::from("vector_storage"),
             corruption_offset: Some(0),
             corruption_size: None,
-            description: format!(
-                "Failed to read vector storage header for checksum verification: {}",
-                e
-            ),
+            description: format!("Failed to read vector storage header for checksum verification: {}", e),
             recovery_recommendations: vec!["Check file integrity".to_string()],
             severity: 0.9,
             is_recoverable: false,
@@ -826,9 +789,8 @@ impl IntegrityChecker {
 
         // Verify vector data region checksum
         let vector_data_start = header.vector_data_offset as usize;
-        let vector_data_size = (header.capacity as usize)
-            * (header.vector_dimension as usize)
-            * std::mem::size_of::<f32>();
+        let vector_data_size =
+            (header.capacity as usize) * (header.vector_dimension as usize) * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, header.simd_alignment as usize);
 
         let file_data = mmf.as_slice();
@@ -847,19 +809,13 @@ impl IntegrityChecker {
         }
 
         // Verify that active vectors have reasonable values (not all NaN or infinity)
-        self.verify_vector_data_quality(
-            &file_data[vector_data_start..vector_data_start + aligned_size],
-            &header,
-        )?;
+        self.verify_vector_data_quality(&file_data[vector_data_start..vector_data_start + aligned_size], &header)?;
 
         Ok(())
     }
 
     /// Enhanced checksum verification for posting storage
-    async fn verify_posting_storage_checksums(
-        &self,
-        mmf: &MemoryMappedFile,
-    ) -> Result<(), Box<CorruptionReport>> {
+    async fn verify_posting_storage_checksums(&self, mmf: &MemoryMappedFile) -> Result<(), Box<CorruptionReport>> {
         use crate::posting_storage::PostingStorageHeader;
 
         let header: PostingStorageHeader = mmf.read_at(0).map_err(|e| CorruptionReport {
@@ -867,10 +823,7 @@ impl IntegrityChecker {
             file_path: PathBuf::from("posting_storage"),
             corruption_offset: Some(0),
             corruption_size: None,
-            description: format!(
-                "Failed to read posting storage header for checksum verification: {}",
-                e
-            ),
+            description: format!("Failed to read posting storage header for checksum verification: {}", e),
             recovery_recommendations: vec!["Check file integrity".to_string()],
             severity: 0.9,
             is_recoverable: false,
@@ -897,10 +850,7 @@ impl IntegrityChecker {
         }
 
         // Verify individual posting structure validity
-        self.verify_posting_data_quality(
-            &file_data[posting_data_start..posting_data_end],
-            &header,
-        )?;
+        self.verify_posting_data_quality(&file_data[posting_data_start..posting_data_end], &header)?;
 
         Ok(())
     }
@@ -1221,31 +1171,29 @@ impl IntegrityChecker {
         use crate::vector_storage::VectorStorageHeader;
 
         // Read headers
-        let posting_header: PostingStorageHeader =
-            posting_mmf.read_at(0).map_err(|e| CorruptionReport {
-                corruption_type: CorruptionType::CrossValidationFailure,
-                file_path: PathBuf::from("posting_file"),
-                corruption_offset: Some(0),
-                corruption_size: None,
-                description: format!("Failed to read posting storage header: {}", e),
-                recovery_recommendations: vec!["Check file integrity".to_string()],
-                severity: 0.8,
-                is_recoverable: false,
-                detected_at: SystemTime::now(),
-            })?;
+        let posting_header: PostingStorageHeader = posting_mmf.read_at(0).map_err(|e| CorruptionReport {
+            corruption_type: CorruptionType::CrossValidationFailure,
+            file_path: PathBuf::from("posting_file"),
+            corruption_offset: Some(0),
+            corruption_size: None,
+            description: format!("Failed to read posting storage header: {}", e),
+            recovery_recommendations: vec!["Check file integrity".to_string()],
+            severity: 0.8,
+            is_recoverable: false,
+            detected_at: SystemTime::now(),
+        })?;
 
-        let vector_header: VectorStorageHeader =
-            vector_mmf.read_at(0).map_err(|e| CorruptionReport {
-                corruption_type: CorruptionType::CrossValidationFailure,
-                file_path: PathBuf::from("vector_file"),
-                corruption_offset: Some(0),
-                corruption_size: None,
-                description: format!("Failed to read vector storage header: {}", e),
-                recovery_recommendations: vec!["Check file integrity".to_string()],
-                severity: 0.8,
-                is_recoverable: false,
-                detected_at: SystemTime::now(),
-            })?;
+        let vector_header: VectorStorageHeader = vector_mmf.read_at(0).map_err(|e| CorruptionReport {
+            corruption_type: CorruptionType::CrossValidationFailure,
+            file_path: PathBuf::from("vector_file"),
+            corruption_offset: Some(0),
+            corruption_size: None,
+            description: format!("Failed to read vector storage header: {}", e),
+            recovery_recommendations: vec!["Check file integrity".to_string()],
+            severity: 0.8,
+            is_recoverable: false,
+            detected_at: SystemTime::now(),
+        })?;
 
         // Verify capacity consistency
         if posting_header.capacity != vector_header.capacity {
@@ -1302,31 +1250,29 @@ impl IntegrityChecker {
         use crate::posting_storage::PostingStorageHeader;
         use crate::vector_storage::VectorStorageHeader;
 
-        let posting_header: PostingStorageHeader =
-            posting_mmf.read_at(0).map_err(|_| CorruptionReport {
-                corruption_type: CorruptionType::CrossValidationFailure,
-                file_path: PathBuf::from("posting_file"),
-                corruption_offset: Some(0),
-                corruption_size: None,
-                description: "Failed to read posting storage header for capacity check".to_string(),
-                recovery_recommendations: vec!["Check file integrity".to_string()],
-                severity: 0.8,
-                is_recoverable: false,
-                detected_at: SystemTime::now(),
-            })?;
+        let posting_header: PostingStorageHeader = posting_mmf.read_at(0).map_err(|_| CorruptionReport {
+            corruption_type: CorruptionType::CrossValidationFailure,
+            file_path: PathBuf::from("posting_file"),
+            corruption_offset: Some(0),
+            corruption_size: None,
+            description: "Failed to read posting storage header for capacity check".to_string(),
+            recovery_recommendations: vec!["Check file integrity".to_string()],
+            severity: 0.8,
+            is_recoverable: false,
+            detected_at: SystemTime::now(),
+        })?;
 
-        let vector_header: VectorStorageHeader =
-            vector_mmf.read_at(0).map_err(|_| CorruptionReport {
-                corruption_type: CorruptionType::CrossValidationFailure,
-                file_path: PathBuf::from("vector_file"),
-                corruption_offset: Some(0),
-                corruption_size: None,
-                description: "Failed to read vector storage header for capacity check".to_string(),
-                recovery_recommendations: vec!["Check file integrity".to_string()],
-                severity: 0.8,
-                is_recoverable: false,
-                detected_at: SystemTime::now(),
-            })?;
+        let vector_header: VectorStorageHeader = vector_mmf.read_at(0).map_err(|_| CorruptionReport {
+            corruption_type: CorruptionType::CrossValidationFailure,
+            file_path: PathBuf::from("vector_file"),
+            corruption_offset: Some(0),
+            corruption_size: None,
+            description: "Failed to read vector storage header for capacity check".to_string(),
+            recovery_recommendations: vec!["Check file integrity".to_string()],
+            severity: 0.8,
+            is_recoverable: false,
+            detected_at: SystemTime::now(),
+        })?;
 
         // Check that the current counts are reasonable
         if posting_header.current_count > posting_header.capacity {
@@ -1395,10 +1341,7 @@ impl IntegrityChecker {
     }
 
     /// Attempt to repair detected integrity issues
-    pub async fn attempt_repair(
-        &mut self,
-        issues: &[IntegrityIssue],
-    ) -> Result<RepairReport, ShardexError> {
+    pub async fn attempt_repair(&mut self, issues: &[IntegrityIssue]) -> Result<RepairReport, ShardexError> {
         if !self.repair_enabled {
             return Err(ShardexError::Corruption(
                 "Repair operations are disabled for this IntegrityChecker".to_string(),
@@ -1420,10 +1363,7 @@ impl IntegrityChecker {
     }
 
     /// Repair a single integrity issue
-    async fn repair_single_issue(
-        &mut self,
-        issue: &IntegrityIssue,
-    ) -> Result<RepairResult, ShardexError> {
+    async fn repair_single_issue(&mut self, issue: &IntegrityIssue) -> Result<RepairResult, ShardexError> {
         let start_time = Instant::now();
 
         if !issue.auto_repairable {
@@ -1438,15 +1378,9 @@ impl IntegrityChecker {
 
         // Attempt repair based on corruption type
         let (success, action, notes) = match issue.corruption.corruption_type {
-            CorruptionType::DataCorruption => {
-                self.repair_data_corruption(&issue.corruption).await?
-            }
-            CorruptionType::PartialCorruption => {
-                self.repair_partial_corruption(&issue.corruption).await?
-            }
-            CorruptionType::CrossValidationFailure => {
-                self.repair_cross_validation(&issue.corruption).await?
-            }
+            CorruptionType::DataCorruption => self.repair_data_corruption(&issue.corruption).await?,
+            CorruptionType::PartialCorruption => self.repair_partial_corruption(&issue.corruption).await?,
+            CorruptionType::CrossValidationFailure => self.repair_cross_validation(&issue.corruption).await?,
             _ => (
                 false,
                 "Repair not implemented for this corruption type".to_string(),
@@ -1477,8 +1411,7 @@ impl IntegrityChecker {
                 return self.repair_checksum_mismatch(corruption).await;
             }
 
-            if corruption.description.contains("NaN") || corruption.description.contains("infinite")
-            {
+            if corruption.description.contains("NaN") || corruption.description.contains("infinite") {
                 return self.repair_vector_quality_issues(corruption).await;
             }
         }
@@ -1526,10 +1459,7 @@ impl IntegrityChecker {
 
             // For demonstration, we'll validate that the file structure is intact
             if file_data.len() >= FileHeader::SIZE {
-                notes.push(
-                    "File structure appears intact, checksum can potentially be recalculated"
-                        .to_string(),
-                );
+                notes.push("File structure appears intact, checksum can potentially be recalculated".to_string());
 
                 // In a real implementation, this would:
                 // 1. Recalculate the expected checksum
@@ -1548,11 +1478,7 @@ impl IntegrityChecker {
         }
 
         notes.push("File not accessible for checksum repair".to_string());
-        Ok((
-            false,
-            "Cannot access file for checksum repair".to_string(),
-            notes,
-        ))
+        Ok((false, "Cannot access file for checksum repair".to_string(), notes))
     }
 
     /// Repair vector quality issues (NaN, infinite values)
@@ -1572,11 +1498,7 @@ impl IntegrityChecker {
             // 3. Recalculate checksums
             // 4. Update centroids if affected
 
-            return Ok((
-                false,
-                "NaN repair requires vector data rebuilding".to_string(),
-                notes,
-            ));
+            return Ok((false, "NaN repair requires vector data rebuilding".to_string(), notes));
         }
 
         if corruption.description.contains("infinite") {
@@ -1609,13 +1531,8 @@ impl IntegrityChecker {
     ) -> Result<(bool, String, Vec<String>), ShardexError> {
         let mut notes = Vec::new();
 
-        if let (Some(offset), Some(size)) =
-            (corruption.corruption_offset, corruption.corruption_size)
-        {
-            notes.push(format!(
-                "Partial corruption at offset {} size {}",
-                offset, size
-            ));
+        if let (Some(offset), Some(size)) = (corruption.corruption_offset, corruption.corruption_size) {
+            notes.push(format!("Partial corruption at offset {} size {}", offset, size));
 
             // Small corruptions might be repairable
             if size < 4096 {
@@ -1625,16 +1542,9 @@ impl IntegrityChecker {
                 // Attempt to isolate and replace the corrupted region
                 if self.can_isolate_corruption(corruption).await {
                     notes.push("Corruption region can be isolated".to_string());
-                    notes.push(
-                        "Region can be zero-filled or reconstructed from redundant data"
-                            .to_string(),
-                    );
+                    notes.push("Region can be zero-filled or reconstructed from redundant data".to_string());
 
-                    return Ok((
-                        true,
-                        "Isolated and repaired corrupted region".to_string(),
-                        notes,
-                    ));
+                    return Ok((true, "Isolated and repaired corrupted region".to_string(), notes));
                 }
             } else {
                 notes.push("Large corruption region, repair may not be feasible".to_string());
@@ -1645,19 +1555,13 @@ impl IntegrityChecker {
         notes.push("Restore from redundant data if available".to_string());
         notes.push("Consider partial data recovery".to_string());
 
-        Ok((
-            false,
-            "Partial corruption repair not available".to_string(),
-            notes,
-        ))
+        Ok((false, "Partial corruption repair not available".to_string(), notes))
     }
 
     /// Check if a corruption region can be isolated for repair
     async fn can_isolate_corruption(&self, corruption: &CorruptionReport) -> bool {
         // Simple heuristic - small corruptions in the middle of files are more likely to be repairable
-        if let (Some(offset), Some(size)) =
-            (corruption.corruption_offset, corruption.corruption_size)
-        {
+        if let (Some(offset), Some(size)) = (corruption.corruption_offset, corruption.corruption_size) {
             // Check if corruption is not at critical locations (headers, etc.)
             let is_header_corruption = offset < 1024; // Assume headers are in first 1KB
             let is_small_corruption = size < 1024;
@@ -1744,11 +1648,7 @@ impl IntegrityChecker {
             notes.push("Low severity count mismatch can be automatically repaired".to_string());
             notes.push("Count repair would scan actual data and update headers".to_string());
 
-            return Ok((
-                true,
-                "Count mismatch can be automatically repaired".to_string(),
-                notes,
-            ));
+            return Ok((true, "Count mismatch can be automatically repaired".to_string(), notes));
         }
 
         notes.push("High severity count mismatch requires manual verification".to_string());
@@ -1773,11 +1673,7 @@ impl IntegrityChecker {
             notes.push("Missing vector storage file for posting storage".to_string());
             notes.push("Can create empty vector storage with matching capacity".to_string());
 
-            return Ok((
-                true,
-                "Can create missing vector storage file".to_string(),
-                notes,
-            ));
+            return Ok((true, "Can create missing vector storage file".to_string(), notes));
         }
 
         if corruption
@@ -1787,11 +1683,7 @@ impl IntegrityChecker {
             notes.push("Missing posting storage file for vector storage".to_string());
             notes.push("Can create empty posting storage with matching capacity".to_string());
 
-            return Ok((
-                true,
-                "Can create missing posting storage file".to_string(),
-                notes,
-            ));
+            return Ok((true, "Can create missing posting storage file".to_string(), notes));
         }
 
         notes.push("Missing file repair depends on the specific component".to_string());
@@ -1905,10 +1797,7 @@ impl IntegrityManager {
     }
 
     /// Validate the integrity of a memory-mapped file
-    pub fn validate_file(
-        &mut self,
-        mmf: &MemoryMappedFile,
-    ) -> Result<ValidationResult, ShardexError> {
+    pub fn validate_file(&mut self, mmf: &MemoryMappedFile) -> Result<ValidationResult, ShardexError> {
         let start_time = Instant::now();
         let file_data = mmf.as_slice();
 
@@ -1924,9 +1813,7 @@ impl IntegrityManager {
                     file_data.len(),
                     FileHeader::SIZE
                 ),
-                recovery_recommendations: vec![
-                    "File may be truncated. Restore from backup.".to_string()
-                ],
+                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -1955,9 +1842,9 @@ impl IntegrityManager {
                 }
                 _ => {
                     // Try to read as basic FileHeader (for simple test files or other storage types)
-                    let header: FileHeader = mmf.read_at(0).map_err(|e| {
-                        ShardexError::Corruption(format!("Failed to read file header: {}", e))
-                    })?;
+                    let header: FileHeader = mmf
+                        .read_at(0)
+                        .map_err(|e| ShardexError::Corruption(format!("Failed to read file header: {}", e)))?;
 
                     // Validate header checksum against data
                     let data_start = FileHeader::SIZE;
@@ -1974,8 +1861,7 @@ impl IntegrityManager {
                             recovery_recommendations: vec![
                                 "Data may be corrupted. Check for partial writes.".to_string(),
                                 "Restore from known good backup if available.".to_string(),
-                                "Run detailed corruption analysis if recovery is needed."
-                                    .to_string(),
+                                "Run detailed corruption analysis if recovery is needed.".to_string(),
                             ],
                             severity: 0.8,
                             is_recoverable: self.config.enable_recovery,
@@ -2012,9 +1898,7 @@ impl IntegrityManager {
                 corruption_offset: None,
                 corruption_size: Some(file_data.len() as u64),
                 description: "File too small to contain magic bytes".to_string(),
-                recovery_recommendations: vec![
-                    "File may be truncated. Restore from backup.".to_string()
-                ],
+                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -2045,8 +1929,11 @@ impl IntegrityManager {
                 file_path: PathBuf::from("unknown"),
                 corruption_offset: None,
                 corruption_size: Some(file_data.len() as u64),
-                description: format!("File too small: {} bytes, expected at least {} bytes for PostingStorage header", 
-                                   file_data.len(), PostingStorageHeader::SIZE),
+                description: format!(
+                    "File too small: {} bytes, expected at least {} bytes for PostingStorage header",
+                    file_data.len(),
+                    PostingStorageHeader::SIZE
+                ),
                 recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
@@ -2061,9 +1948,9 @@ impl IntegrityManager {
             ));
         }
 
-        let header: PostingStorageHeader = mmf.read_at(0).map_err(|e| {
-            ShardexError::Corruption(format!("Failed to read PostingStorage header: {}", e))
-        })?;
+        let header: PostingStorageHeader = mmf
+            .read_at(0)
+            .map_err(|e| ShardexError::Corruption(format!("Failed to read PostingStorage header: {}", e)))?;
 
         // Validate using the header's validate method
         if let Err(e) = header.validate() {
@@ -2101,9 +1988,7 @@ impl IntegrityManager {
                 corruption_offset: Some(data_start as u64),
                 corruption_size: Some(data_size as u64),
                 description: "PostingStorage file truncated before end of data section".to_string(),
-                recovery_recommendations: vec![
-                    "File may be truncated. Restore from backup.".to_string()
-                ],
+                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -2176,9 +2061,7 @@ impl IntegrityManager {
                     file_data.len(),
                     VectorStorageHeader::SIZE
                 ),
-                recovery_recommendations: vec![
-                    "File may be truncated. Restore from backup.".to_string()
-                ],
+                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -2192,9 +2075,9 @@ impl IntegrityManager {
             ));
         }
 
-        let header: VectorStorageHeader = mmf.read_at(0).map_err(|e| {
-            ShardexError::Corruption(format!("Failed to read VectorStorage header: {}", e))
-        })?;
+        let header: VectorStorageHeader = mmf
+            .read_at(0)
+            .map_err(|e| ShardexError::Corruption(format!("Failed to read VectorStorage header: {}", e)))?;
 
         // Validate using the header's validate method
         if let Err(e) = header.validate() {
@@ -2223,9 +2106,8 @@ impl IntegrityManager {
 
         // Validate data checksum
         let vector_data_start = header.vector_data_offset as usize;
-        let vector_data_size = (header.capacity as usize)
-            * (header.vector_dimension as usize)
-            * std::mem::size_of::<f32>();
+        let vector_data_size =
+            (header.capacity as usize) * (header.vector_dimension as usize) * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, header.simd_alignment as usize);
 
         if vector_data_start + aligned_size > file_data.len() {
@@ -2235,9 +2117,7 @@ impl IntegrityManager {
                 corruption_offset: Some(vector_data_start as u64),
                 corruption_size: Some(aligned_size as u64),
                 description: "VectorStorage file truncated before end of vector data".to_string(),
-                recovery_recommendations: vec![
-                    "File may be truncated. Restore from backup.".to_string()
-                ],
+                recovery_recommendations: vec!["File may be truncated. Restore from backup.".to_string()],
                 severity: 1.0,
                 is_recoverable: false,
                 detected_at: SystemTime::now(),
@@ -2295,10 +2175,7 @@ impl IntegrityManager {
     }
 
     /// Validate a file by path, opening it temporarily
-    pub fn validate_file_path<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-    ) -> Result<ValidationResult, ShardexError> {
+    pub fn validate_file_path<P: AsRef<Path>>(&mut self, path: P) -> Result<ValidationResult, ShardexError> {
         let path = path.as_ref();
         let mmf = MemoryMappedFile::open_read_only(path)?;
         let mut result = self.validate_file(&mmf)?;
@@ -2425,10 +2302,7 @@ impl IntegrityManager {
     }
 
     /// Attempt to recover from corruption if recovery is enabled
-    pub fn attempt_recovery(
-        &mut self,
-        corruption_report: &CorruptionReport,
-    ) -> Result<bool, ShardexError> {
+    pub fn attempt_recovery(&mut self, corruption_report: &CorruptionReport) -> Result<bool, ShardexError> {
         if !self.config.enable_recovery || !corruption_report.is_recoverable {
             return Ok(false);
         }
@@ -2506,12 +2380,7 @@ mod tests {
             detected_at: SystemTime::now(),
         };
 
-        let result = ValidationResult::failure(
-            corruption_report,
-            Duration::from_millis(200),
-            1024,
-            0x87654321,
-        );
+        let result = ValidationResult::failure(corruption_report, Duration::from_millis(200), 1024, 0x87654321);
 
         assert!(!result.is_valid());
         assert!(result.corruption_report().is_some());
@@ -2721,10 +2590,7 @@ mod tests {
             corruption_offset: Some(1024),
             corruption_size: Some(256),
             description: "Test corruption for serialization".to_string(),
-            recovery_recommendations: vec![
-                "Restore from backup".to_string(),
-                "Run data recovery tools".to_string(),
-            ],
+            recovery_recommendations: vec!["Restore from backup".to_string(), "Run data recovery tools".to_string()],
             severity: 0.75,
             is_recoverable: true,
             detected_at: SystemTime::now(),
@@ -2902,15 +2768,13 @@ mod tests {
         let vector_path = temp_dir.path().join("vectors.dat");
 
         // Create posting storage
-        let mut posting_storage =
-            crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
+        let mut posting_storage = crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
         let doc_id = crate::identifiers::DocumentId::new();
         posting_storage.add_posting(doc_id, 0, 3).unwrap(); // References first vector
         posting_storage.sync().unwrap();
 
         // Create vector storage
-        let mut vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 3, 10).unwrap();
+        let mut vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 3, 10).unwrap();
         let vector = vec![1.0, 2.0, 3.0];
         vector_storage.add_vector(&vector).unwrap();
         vector_storage.sync().unwrap();
@@ -2966,8 +2830,7 @@ mod tests {
         assert!(report.cross_reference_issues.is_empty());
 
         // Add a successful component result
-        let success_result =
-            ValidationResult::success(Duration::from_millis(100), 1024, 0x12345678);
+        let success_result = ValidationResult::success(Duration::from_millis(100), 1024, 0x12345678);
         report.add_component_result(ComponentType::VectorStorage, success_result);
         assert!(report.is_valid);
         assert_eq!(report.component_results.len(), 1);
@@ -2984,12 +2847,8 @@ mod tests {
             is_recoverable: true,
             detected_at: SystemTime::now(),
         };
-        let failure_result = ValidationResult::failure(
-            corruption.clone(),
-            Duration::from_millis(200),
-            2048,
-            0x87654321,
-        );
+        let failure_result =
+            ValidationResult::failure(corruption.clone(), Duration::from_millis(200), 2048, 0x87654321);
         report.add_component_result(ComponentType::PostingStorage, failure_result);
         assert!(!report.is_valid);
 
@@ -3150,16 +3009,14 @@ mod tests {
 
         // Create valid vector storage
         let vector_path = temp_dir.path().join("shards/test_shard.vectors");
-        let mut vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
+        let mut vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
         let vector = vec![0.5; 128];
         vector_storage.add_vector(&vector).unwrap();
         vector_storage.sync().unwrap();
 
         // Create valid posting storage
         let posting_path = temp_dir.path().join("shards/test_shard.postings");
-        let mut posting_storage =
-            crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
+        let mut posting_storage = crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
         let doc_id = DocumentId::new();
         posting_storage.add_posting(doc_id, 100, 50).unwrap();
         posting_storage.sync().unwrap();
@@ -3188,8 +3045,7 @@ mod tests {
         // Create test files
         fs::create_dir_all(temp_dir.path().join("shards")).unwrap();
         let vector_path = temp_dir.path().join("shards/test_shard.vectors");
-        let _vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
+        let _vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
 
         let config = ShardexConfig::new()
             .directory_path(temp_dir.path().to_path_buf())
@@ -3221,14 +3077,12 @@ mod tests {
             .path()
             .join(format!("shards/{}.postings", shard_id));
 
-        let mut vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
+        let mut vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
         let vector = vec![0.5; 128];
         vector_storage.add_vector(&vector).unwrap();
         vector_storage.sync().unwrap();
 
-        let mut posting_storage =
-            crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
+        let mut posting_storage = crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
         let doc_id = DocumentId::new();
         posting_storage.add_posting(doc_id, 100, 50).unwrap();
         posting_storage.sync().unwrap();
@@ -3266,8 +3120,7 @@ mod tests {
 
         // Create only vector storage without corresponding posting storage
         let vector_path = temp_dir.path().join("shards/orphan_shard.vectors");
-        let _vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
+        let _vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 128, 10).unwrap();
 
         let config = ShardexConfig::new()
             .directory_path(temp_dir.path().to_path_buf())
@@ -3283,10 +3136,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!issues.is_empty());
-        assert_eq!(
-            issues[0].corruption_type,
-            CorruptionType::CrossValidationFailure
-        );
+        assert_eq!(issues[0].corruption_type, CorruptionType::CrossValidationFailure);
         assert!(issues[0]
             .description
             .contains("no corresponding posting storage"));
@@ -3335,8 +3185,7 @@ mod tests {
         let vector_path = temp_dir.path().join("test_vectors.dat");
 
         // Create vector storage with some problematic data
-        let mut vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 4, 10).unwrap();
+        let mut vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 4, 10).unwrap();
 
         // Add normal vector
         let normal_vector = vec![1.0, 2.0, 3.0, 4.0];
@@ -3366,30 +3215,12 @@ mod tests {
 
     #[test]
     fn test_component_type_name() {
-        assert_eq!(
-            component_type_name(ComponentType::VectorStorage),
-            "VectorStorage"
-        );
-        assert_eq!(
-            component_type_name(ComponentType::PostingStorage),
-            "PostingStorage"
-        );
-        assert_eq!(
-            component_type_name(ComponentType::WalSegments),
-            "WalSegments"
-        );
-        assert_eq!(
-            component_type_name(ComponentType::BloomFilters),
-            "BloomFilters"
-        );
-        assert_eq!(
-            component_type_name(ComponentType::ShardexSegments),
-            "ShardexSegments"
-        );
-        assert_eq!(
-            component_type_name(ComponentType::CrossReferences),
-            "CrossReferences"
-        );
+        assert_eq!(component_type_name(ComponentType::VectorStorage), "VectorStorage");
+        assert_eq!(component_type_name(ComponentType::PostingStorage), "PostingStorage");
+        assert_eq!(component_type_name(ComponentType::WalSegments), "WalSegments");
+        assert_eq!(component_type_name(ComponentType::BloomFilters), "BloomFilters");
+        assert_eq!(component_type_name(ComponentType::ShardexSegments), "ShardexSegments");
+        assert_eq!(component_type_name(ComponentType::CrossReferences), "CrossReferences");
     }
 
     #[tokio::test]
@@ -3450,13 +3281,11 @@ mod tests {
 
         // Create posting storage with capacity 10
         let posting_path = temp_dir.path().join("test_shard.postings");
-        let _posting_storage =
-            crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
+        let _posting_storage = crate::posting_storage::PostingStorage::create(&posting_path, 10).unwrap();
 
         // Create vector storage with different capacity
         let vector_path = temp_dir.path().join("test_shard.vectors");
-        let _vector_storage =
-            crate::vector_storage::VectorStorage::create(&vector_path, 128, 5).unwrap(); // Different capacity
+        let _vector_storage = crate::vector_storage::VectorStorage::create(&vector_path, 128, 5).unwrap(); // Different capacity
 
         let config = ShardexConfig::new()
             .directory_path(temp_dir.path().to_path_buf())
@@ -3474,10 +3303,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(
-            error.corruption_type,
-            CorruptionType::CrossValidationFailure
-        );
+        assert_eq!(error.corruption_type, CorruptionType::CrossValidationFailure);
         assert!(error.description.contains("Capacity mismatch"));
     }
 

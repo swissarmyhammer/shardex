@@ -124,10 +124,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n3. Conservative Document Removal");
     println!("================================");
 
-    println!(
-        "Before removal - Active postings: {}",
-        final_stats.active_postings
-    );
+    println!("Before removal - Active postings: {}", final_stats.active_postings);
 
     // Remove a few documents (every 5th document)
     let mut docs_to_remove = Vec::new();

@@ -4,8 +4,8 @@
 //! crash detection, WAL replay, consistency validation, and various crash scenarios.
 
 use shardex::{
-    CrashRecovery, DirectoryLayout, DocumentId, Posting, Shard, ShardId, ShardexConfig,
-    ShardexIndex, TransactionId, WalOperation, WalSegment, WalTransaction,
+    CrashRecovery, DirectoryLayout, DocumentId, Posting, Shard, ShardId, ShardexConfig, ShardexIndex, TransactionId,
+    WalOperation, WalSegment, WalTransaction,
 };
 use std::time::Duration;
 use tempfile::TempDir;
@@ -38,10 +38,7 @@ async fn test_basic_crash_recovery_workflow() {
 
     // Detect crash (should be false for clean index)
     let crash_detected = recovery.detect_crash().await.unwrap();
-    assert!(
-        !crash_detected,
-        "No crash should be detected for clean index"
-    );
+    assert!(!crash_detected, "No crash should be detected for clean index");
 
     // Recovery stats should indicate no crash
     let stats = recovery.recovery_stats();
@@ -67,10 +64,7 @@ async fn test_crash_detection_with_lock_file() {
     let mut recovery = CrashRecovery::new(config);
     let crash_detected = recovery.detect_crash().await.unwrap();
 
-    assert!(
-        crash_detected,
-        "Crash should be detected due to recovery lock file"
-    );
+    assert!(crash_detected, "Crash should be detected due to recovery lock file");
     assert!(recovery.recovery_stats().crash_detected);
 }
 
@@ -92,10 +86,7 @@ async fn test_crash_detection_empty_metadata() {
     let mut recovery = CrashRecovery::new(config);
     let crash_detected = recovery.detect_crash().await.unwrap();
 
-    assert!(
-        crash_detected,
-        "Crash should be detected due to empty metadata file"
-    );
+    assert!(crash_detected, "Crash should be detected due to empty metadata file");
     assert!(recovery.recovery_stats().crash_detected);
 }
 
@@ -118,10 +109,7 @@ async fn test_crash_detection_wal_without_metadata() {
     let mut recovery = CrashRecovery::new(config);
     let crash_detected = recovery.detect_crash().await.unwrap();
 
-    assert!(
-        crash_detected,
-        "Crash should be detected - WAL exists but no metadata"
-    );
+    assert!(crash_detected, "Crash should be detected - WAL exists but no metadata");
     assert!(recovery.recovery_stats().crash_detected);
 }
 
@@ -179,10 +167,7 @@ async fn test_complete_crash_recovery_with_wal() {
     assert!(stats.total_recovery_duration > Duration::from_nanos(0));
 
     // Verify the recovered index
-    assert!(
-        recovered_index.shard_count() > 0,
-        "Should have recovered shards"
-    );
+    assert!(recovered_index.shard_count() > 0, "Should have recovered shards");
 
     // Verify lock file was cleaned up
     assert!(!lock_path.exists(), "Recovery lock should be cleaned up");

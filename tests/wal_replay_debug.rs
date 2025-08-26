@@ -26,10 +26,7 @@ async fn test_wal_segment_transaction_roundtrip() {
 
     let original_transaction = WalTransaction::new(operations).unwrap();
     println!("Original transaction ID: {}", original_transaction.id);
-    println!(
-        "Original operations count: {}",
-        original_transaction.operations.len()
-    );
+    println!("Original operations count: {}", original_transaction.operations.len());
 
     // Append the transaction to the segment
     let data_offset = segment.append_transaction(&original_transaction).unwrap();
@@ -37,10 +34,7 @@ async fn test_wal_segment_transaction_roundtrip() {
 
     // Check segment state
     println!("Segment write pointer: {}", segment.write_pointer());
-    println!(
-        "Initial write position: {}",
-        shardex::wal::initial_write_position()
-    );
+    println!("Initial write position: {}", shardex::wal::initial_write_position());
 
     // Now read back the segment data and try to parse
     let segment_data = segment.read_segment_data().unwrap();
@@ -69,18 +63,8 @@ async fn test_wal_segment_transaction_roundtrip() {
     let header_bytes = &segment_data[current_pos..current_pos + header_size];
 
     // Manually read the fields to avoid alignment issues
-    let data_length = u32::from_le_bytes([
-        header_bytes[0],
-        header_bytes[1],
-        header_bytes[2],
-        header_bytes[3],
-    ]);
-    let checksum = u32::from_le_bytes([
-        header_bytes[4],
-        header_bytes[5],
-        header_bytes[6],
-        header_bytes[7],
-    ]);
+    let data_length = u32::from_le_bytes([header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]]);
+    let checksum = u32::from_le_bytes([header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]]);
 
     // Create a mock record header for validation
     struct MockRecordHeader {
@@ -98,10 +82,7 @@ async fn test_wal_segment_transaction_roundtrip() {
         }
     }
 
-    let record_header = MockRecordHeader {
-        data_length,
-        checksum,
-    };
+    let record_header = MockRecordHeader { data_length, checksum };
 
     println!("Record header data length: {}", record_header.data_length());
 
@@ -133,10 +114,7 @@ async fn test_wal_segment_transaction_roundtrip() {
     match WalTransaction::deserialize(record_data) {
         Ok(deserialized_transaction) => {
             println!("Successfully deserialized transaction!");
-            println!(
-                "Deserialized transaction ID: {}",
-                deserialized_transaction.id
-            );
+            println!("Deserialized transaction ID: {}", deserialized_transaction.id);
             println!(
                 "Deserialized operations count: {}",
                 deserialized_transaction.operations.len()

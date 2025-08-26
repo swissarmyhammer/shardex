@@ -129,8 +129,7 @@ fn test_many_documents_performance() {
         let start_doc_count = storage.entry_count();
 
         let mut doc_ids = Vec::with_capacity(document_count);
-        let document_text =
-            "Performance test document with unique content for scalability testing.".to_string();
+        let document_text = "Performance test document with unique content for scalability testing.".to_string();
 
         // Measure bulk storage time
         let start = Instant::now();
@@ -157,10 +156,7 @@ fn test_many_documents_performance() {
         );
 
         // Verify storage statistics
-        assert_eq!(
-            storage.entry_count(),
-            start_doc_count + document_count as u32
-        );
+        assert_eq!(storage.entry_count(), start_doc_count + document_count as u32);
 
         // Measure random access performance
         let sample_size = std::cmp::min(100, document_count);
@@ -202,10 +198,7 @@ fn test_many_documents_performance() {
 
         println!("  Total entries: {}", storage.entry_count());
         println!("  Total text size: {} bytes", storage.total_text_size());
-        println!(
-            "  Utilization ratio: {:.2}%\n",
-            storage.utilization_ratio() * 100.0
-        );
+        println!("  Utilization ratio: {:.2}%\n", storage.utilization_ratio() * 100.0);
     }
 }
 
@@ -313,8 +306,7 @@ fn test_file_growth_performance() {
         (2000, "Growth phase 3"),
     ];
 
-    let document_text =
-        "File growth test document with consistent content for performance measurement.";
+    let document_text = "File growth test document with consistent content for performance measurement.";
     let mut all_docs = Vec::new();
 
     for (target_count, phase_desc) in growth_phases {
@@ -340,10 +332,7 @@ fn test_file_growth_performance() {
         let docs_added = all_docs.len() - start_count;
 
         println!("  Added {} documents in {:?}", docs_added, phase_duration);
-        println!(
-            "  Average time per document: {:?}",
-            phase_duration / docs_added as u32
-        );
+        println!("  Average time per document: {:?}", phase_duration / docs_added as u32);
 
         // Test random access performance at this scale
         let access_start = Instant::now();
@@ -361,10 +350,7 @@ fn test_file_growth_performance() {
             "  Random access time for {} samples: {:?}",
             sample_size, access_duration
         );
-        println!(
-            "  Average access time: {:?}",
-            access_duration / sample_size as u32
-        );
+        println!("  Average access time: {:?}", access_duration / sample_size as u32);
 
         // Report storage statistics
         println!("  Total entries: {}", storage.entry_count());
@@ -373,10 +359,7 @@ fn test_file_growth_performance() {
             storage.total_text_size(),
             storage.total_text_size() as f64 / 1024.0
         );
-        println!(
-            "  Utilization ratio: {:.2}%\n",
-            storage.utilization_ratio() * 100.0
-        );
+        println!("  Utilization ratio: {:.2}%\n", storage.utilization_ratio() * 100.0);
 
         assert!(
             phase_duration < config.bulk_operations_timeout,
@@ -400,10 +383,7 @@ fn test_memory_usage_scaling() {
     ];
 
     for (word_count, doc_count) in document_sizes {
-        println!(
-            "Testing {} documents of ~{} words each",
-            doc_count, word_count
-        );
+        println!("Testing {} documents of ~{} words each", doc_count, word_count);
 
         let base_entries = storage.entry_count();
         let base_size = storage.total_text_size();
@@ -433,10 +413,7 @@ fn test_memory_usage_scaling() {
         let final_size = storage.total_text_size();
 
         println!("  Total time: {:?}", total_duration);
-        println!(
-            "  Average time per document: {:?}",
-            total_duration / doc_count as u32
-        );
+        println!("  Average time per document: {:?}", total_duration / doc_count as u32);
         println!("  Entries added: {}", final_entries - base_entries);
         println!("  Text size added: {} bytes", final_size - base_size);
         println!("  Expected size: {} bytes", expected_total_chars);
@@ -536,10 +513,7 @@ fn test_update_performance() {
     println!("Final storage statistics:");
     println!("  Total entries: {}", storage.entry_count());
     println!("  Total text size: {} bytes", storage.total_text_size());
-    println!(
-        "  Utilization ratio: {:.2}%",
-        storage.utilization_ratio() * 100.0
-    );
+    println!("  Utilization ratio: {:.2}%", storage.utilization_ratio() * 100.0);
 }
 
 #[test]

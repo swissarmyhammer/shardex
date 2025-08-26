@@ -31,9 +31,7 @@ async fn test_replay_segment_integration() {
             length: 100,
             vector: vec![1.0, 2.0, 3.0],
         },
-        WalOperation::RemoveDocument {
-            document_id: doc_id,
-        },
+        WalOperation::RemoveDocument { document_id: doc_id },
     ];
 
     let transaction = WalTransaction::new(operations).unwrap();
@@ -210,9 +208,7 @@ async fn test_replay_all_segments() {
     segment2.append_transaction(&transaction2a).unwrap();
 
     let doc_id3 = DocumentId::new();
-    let operations2b = vec![WalOperation::RemoveDocument {
-        document_id: doc_id3,
-    }];
+    let operations2b = vec![WalOperation::RemoveDocument { document_id: doc_id3 }];
     let transaction2b = WalTransaction::new(operations2b).unwrap();
     segment2.append_transaction(&transaction2b).unwrap();
     segment2.sync().unwrap();

@@ -96,11 +96,7 @@ pub struct WalManager {
 
 impl WalSegment {
     /// Create a new WAL segment with the specified ID and capacity
-    pub fn create(
-        segment_id: u64,
-        file_path: PathBuf,
-        capacity: usize,
-    ) -> Result<Self, ShardexError> {
+    pub fn create(segment_id: u64, file_path: PathBuf, capacity: usize) -> Result<Self, ShardexError> {
         if capacity < StandardHeader::SIZE {
             return Err(ShardexError::Wal(format!(
                 "Segment capacity {} is too small, must be at least {} bytes",
@@ -112,11 +108,7 @@ impl WalSegment {
         let mut memory_map = MemoryMappedFile::create(&file_path, capacity)?;
 
         // Write header with initial metadata
-        let header = StandardHeader::new_without_checksum(
-            WAL_MAGIC,
-            WAL_VERSION,
-            StandardHeader::SIZE as u64,
-        );
+        let header = StandardHeader::new_without_checksum(WAL_MAGIC, WAL_VERSION, StandardHeader::SIZE as u64);
         memory_map.write_at(0, &header)?;
         memory_map.sync()?;
 
@@ -150,14 +142,11 @@ impl WalSegment {
 
         let segment_id = if file_name.starts_with("wal_") && file_name.ends_with(".log") {
             let id_str = &file_name[4..file_name.len() - 4];
-            id_str.parse::<u64>().map_err(|_| {
-                ShardexError::Wal(format!("Invalid segment ID in filename: {}", file_name))
-            })?
+            id_str
+                .parse::<u64>()
+                .map_err(|_| ShardexError::Wal(format!("Invalid segment ID in filename: {}", file_name)))?
         } else {
-            return Err(ShardexError::Wal(format!(
-                "Invalid WAL filename format: {}",
-                file_name
-            )));
+            return Err(ShardexError::Wal(format!("Invalid WAL filename format: {}", file_name)));
         };
 
         // Recover write position by following record structure
@@ -173,10 +162,7 @@ impl WalSegment {
     }
 
     /// Recover write position by following record boundaries (efficient O(log n) approach)
-    fn recover_write_position(
-        memory_map: &MemoryMappedFile,
-        capacity: usize,
-    ) -> Result<usize, ShardexError> {
+    fn recover_write_position(memory_map: &MemoryMappedFile, capacity: usize) -> Result<usize, ShardexError> {
         let data_slice = memory_map.as_slice();
         let mut current_pos = initial_write_position(); // Account for header and reserved space
 
@@ -285,8 +271,7 @@ impl WalSegment {
 
         // Write header
         let header_bytes = record_header.as_bytes();
-        mut_slice[current_pointer..current_pointer + WalRecordHeader::SIZE]
-            .copy_from_slice(&header_bytes);
+        mut_slice[current_pointer..current_pointer + WalRecordHeader::SIZE].copy_from_slice(&header_bytes);
 
         // Write data
         let data_start = current_pointer + WalRecordHeader::SIZE;
@@ -300,10 +285,7 @@ impl WalSegment {
     }
 
     /// Append a WAL transaction to the segment
-    pub fn append_transaction(
-        &self,
-        transaction: &crate::transactions::WalTransaction,
-    ) -> Result<usize, ShardexError> {
+    pub fn append_transaction(&self, transaction: &crate::transactions::WalTransaction) -> Result<usize, ShardexError> {
         // Serialize the transaction
         let serialized = transaction.serialize()?;
 
@@ -313,25 +295,28 @@ impl WalSegment {
 
     /// Sync segment to disk
     pub fn sync(&self) -> Result<(), ShardexError> {
-        let memory_map = self.memory_map.lock().map_err(|_| {
-            ShardexError::Wal("Failed to acquire memory map lock for sync".to_string())
-        })?;
+        let memory_map = self
+            .memory_map
+            .lock()
+            .map_err(|_| ShardexError::Wal("Failed to acquire memory map lock for sync".to_string()))?;
         memory_map.sync()
     }
 
     /// Get a copy of the segment data for reading (used during replay)
     pub fn read_segment_data(&self) -> Result<Vec<u8>, ShardexError> {
-        let memory_map = self.memory_map.lock().map_err(|_| {
-            ShardexError::Wal("Failed to acquire memory map lock for reading".to_string())
-        })?;
+        let memory_map = self
+            .memory_map
+            .lock()
+            .map_err(|_| ShardexError::Wal("Failed to acquire memory map lock for reading".to_string()))?;
         Ok(memory_map.as_slice().to_vec())
     }
 
     /// Read a specific range of data from the segment
     pub fn read_range(&self, start: usize, length: usize) -> Result<Vec<u8>, ShardexError> {
-        let memory_map = self.memory_map.lock().map_err(|_| {
-            ShardexError::Wal("Failed to acquire memory map lock for reading".to_string())
-        })?;
+        let memory_map = self
+            .memory_map
+            .lock()
+            .map_err(|_| ShardexError::Wal("Failed to acquire memory map lock for reading".to_string()))?;
 
         let data_slice = memory_map.as_slice();
         if start + length > data_slice.len() {
@@ -348,11 +333,10 @@ impl WalSegment {
 
     /// Validate segment integrity
     pub fn validate_integrity(&self) -> Result<(), ShardexError> {
-        let memory_map = self.memory_map.lock().map_err(|_| {
-            ShardexError::Wal(
-                "Failed to acquire memory map lock for integrity validation".to_string(),
-            )
-        })?;
+        let memory_map = self
+            .memory_map
+            .lock()
+            .map_err(|_| ShardexError::Wal("Failed to acquire memory map lock for integrity validation".to_string()))?;
 
         // Read and validate header with full structure validation including checksums
         let header: StandardHeader = memory_map.read_at(0)?;
@@ -370,9 +354,7 @@ impl WalSegment {
         }
 
         if write_pos > self.capacity {
-            return Err(ShardexError::Wal(
-                "Write pointer exceeds segment capacity".to_string(),
-            ));
+            return Err(ShardexError::Wal("Write pointer exceeds segment capacity".to_string()));
         }
 
         // Validate all records for integrity
@@ -599,11 +581,7 @@ mod tests {
         let offset = segment.append(data).unwrap();
 
         // The offset should be where the data starts (after header)
-        assert_eq!(
-            offset, 97,
-            "Expected data offset to be 97, but got {}",
-            offset
-        );
+        assert_eq!(offset, 97, "Expected data offset to be 97, but got {}", offset);
 
         // After append, write_pointer should have advanced by record header + data
         // WalRecordHeader is 8 bytes (u32 + u32)
@@ -656,8 +634,7 @@ mod tests {
         assert_eq!(segment.capacity(), capacity);
         // Account for record header in write pointer calculation
         // After writing data, write pointer should advance by header + data
-        let expected_pos =
-            initial_write_position() + WalRecordHeader::SIZE + "persistent data".len();
+        let expected_pos = initial_write_position() + WalRecordHeader::SIZE + "persistent data".len();
         assert_eq!(segment.write_pointer(), expected_pos);
     }
 

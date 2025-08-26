@@ -182,31 +182,17 @@ impl MemoryMappedFile {
             .create(true)
             .truncate(true)
             .open(path)
-            .map_err(|e| {
-                ShardexError::MemoryMapping(format!(
-                    "Failed to create file {}: {}",
-                    path.display(),
-                    e
-                ))
-            })?;
+            .map_err(|e| ShardexError::MemoryMapping(format!("Failed to create file {}: {}", path.display(), e)))?;
 
         // Set file size
         file.set_len(size as u64).map_err(|e| {
-            ShardexError::MemoryMapping(format!(
-                "Failed to set file size for {}: {}",
-                path.display(),
-                e
-            ))
+            ShardexError::MemoryMapping(format!("Failed to set file size for {}: {}", path.display(), e))
         })?;
 
         // Create memory mapping
         let mmap = unsafe {
             MmapOptions::new().map_mut(&file).map_err(|e| {
-                ShardexError::MemoryMapping(format!(
-                    "Failed to create memory mapping for {}: {}",
-                    path.display(),
-                    e
-                ))
+                ShardexError::MemoryMapping(format!("Failed to create memory mapping for {}: {}", path.display(), e))
             })?
         };
 
@@ -223,18 +209,13 @@ impl MemoryMappedFile {
     pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self, ShardexError> {
         let path = path.as_ref();
 
-        let file = File::open(path).map_err(|e| {
-            ShardexError::MemoryMapping(format!("Failed to open file {}: {}", path.display(), e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| ShardexError::MemoryMapping(format!("Failed to open file {}: {}", path.display(), e)))?;
 
         let len = file
             .metadata()
             .map_err(|e| {
-                ShardexError::MemoryMapping(format!(
-                    "Failed to get file metadata for {}: {}",
-                    path.display(),
-                    e
-                ))
+                ShardexError::MemoryMapping(format!("Failed to get file metadata for {}: {}", path.display(), e))
             })?
             .len() as usize;
 
@@ -266,21 +247,13 @@ impl MemoryMappedFile {
             .write(true)
             .open(path)
             .map_err(|e| {
-                ShardexError::MemoryMapping(format!(
-                    "Failed to open file {} for read-write: {}",
-                    path.display(),
-                    e
-                ))
+                ShardexError::MemoryMapping(format!("Failed to open file {} for read-write: {}", path.display(), e))
             })?;
 
         let len = file
             .metadata()
             .map_err(|e| {
-                ShardexError::MemoryMapping(format!(
-                    "Failed to get file metadata for {}: {}",
-                    path.display(),
-                    e
-                ))
+                ShardexError::MemoryMapping(format!("Failed to get file metadata for {}: {}", path.display(), e))
             })?
             .len() as usize;
 
@@ -415,11 +388,7 @@ impl MemoryMappedFile {
     }
 
     /// Write multiple Pod values to the specified offset
-    pub fn write_slice_at<T: Pod>(
-        &mut self,
-        offset: usize,
-        values: &[T],
-    ) -> Result<(), ShardexError> {
+    pub fn write_slice_at<T: Pod>(&mut self, offset: usize, values: &[T]) -> Result<(), ShardexError> {
         let size = std::mem::size_of_val(values);
 
         if offset + size > self.len {
@@ -450,9 +419,10 @@ impl MemoryMappedFile {
     /// Creates a new mapping with the specified size. Data is preserved
     /// up to the minimum of the old and new sizes.
     pub fn resize(&mut self, new_size: usize) -> Result<(), ShardexError> {
-        let file = self.file.as_ref().ok_or_else(|| {
-            ShardexError::MemoryMapping("No file handle available for resize".to_string())
-        })?;
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| ShardexError::MemoryMapping("No file handle available for resize".to_string()))?;
 
         // Check if we're in read-write mode
         if matches!(self.mmap, MmapVariant::ReadOnly(_)) {
@@ -462,9 +432,10 @@ impl MemoryMappedFile {
         }
 
         // Drop the current mapping before resizing
-        self.mmap = MmapVariant::ReadWrite(MmapMut::map_anon(0).map_err(|e| {
-            ShardexError::MemoryMapping(format!("Failed to create temporary mapping: {}", e))
-        })?);
+        self.mmap = MmapVariant::ReadWrite(
+            MmapMut::map_anon(0)
+                .map_err(|e| ShardexError::MemoryMapping(format!("Failed to create temporary mapping: {}", e)))?,
+        );
 
         // Resize the file
         file.set_len(new_size as u64)
@@ -472,9 +443,9 @@ impl MemoryMappedFile {
 
         // Create new mapping
         let new_mmap = unsafe {
-            MmapOptions::new().map_mut(file).map_err(|e| {
-                ShardexError::MemoryMapping(format!("Failed to create new memory mapping: {}", e))
-            })?
+            MmapOptions::new()
+                .map_mut(file)
+                .map_err(|e| ShardexError::MemoryMapping(format!("Failed to create new memory mapping: {}", e)))?
         };
 
         self.mmap = MmapVariant::ReadWrite(new_mmap);
@@ -490,9 +461,8 @@ impl MemoryMappedFile {
         match &self.mmap {
             MmapVariant::ReadOnly(_) => Ok(()), // Read-only mappings don't need syncing
             MmapVariant::ReadWrite(mmap) => {
-                mmap.flush().map_err(|e| {
-                    ShardexError::MemoryMapping(format!("Failed to sync memory mapping: {}", e))
-                })?;
+                mmap.flush()
+                    .map_err(|e| ShardexError::MemoryMapping(format!("Failed to sync memory mapping: {}", e)))?;
                 Ok(())
             }
         }
@@ -663,9 +633,7 @@ impl StandardHeader {
 
         // Check reserved bytes are zero
         if self.reserved != [0; 32] {
-            return Err(ShardexError::Corruption(
-                "Reserved bytes are not zero".to_string(),
-            ));
+            return Err(ShardexError::Corruption("Reserved bytes are not zero".to_string()));
         }
 
         Ok(())
@@ -938,8 +906,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_update_checksum() {
-        let mut header =
-            StandardHeader::new_without_checksum(b"TEST", 1, StandardHeader::SIZE as u64);
+        let mut header = StandardHeader::new_without_checksum(b"TEST", 1, StandardHeader::SIZE as u64);
         assert_eq!(header.checksum, 0);
 
         let data = b"Some data";
@@ -1106,14 +1073,8 @@ mod tests {
     #[test]
     fn test_standard_header_update_for_modification() {
         let initial_data = b"initial data";
-        let mut header = StandardHeader::new_with_timestamps(
-            b"TEST",
-            1,
-            StandardHeader::SIZE as u64,
-            1000,
-            1000,
-            initial_data,
-        );
+        let mut header =
+            StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, initial_data);
 
         // Simulate some time passing and data changing
         let new_data = b"modified data";
@@ -1136,14 +1097,8 @@ mod tests {
         let modified = 2000;
         let data = b"test data";
 
-        let header = StandardHeader::new_with_timestamps(
-            b"TEST",
-            1,
-            StandardHeader::SIZE as u64,
-            created,
-            modified,
-            data,
-        );
+        let header =
+            StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, created, modified, data);
 
         assert_eq!(header.created_at, created);
         assert_eq!(header.modified_at, modified);
@@ -1164,8 +1119,7 @@ mod tests {
     #[test]
     fn test_file_header_compatibility() {
         // Test that FileHeader is an alias for StandardHeader
-        let header: FileHeader =
-            StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let header: FileHeader = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
         assert_eq!(header.magic, *b"TEST");
         assert_eq!(header.version, 1);
 
@@ -1190,33 +1144,12 @@ mod tests {
 
         // Headers with identical header metadata and same data should have same checksum
         // Use explicit timestamps to ensure headers are identical
-        let header1 = StandardHeader::new_with_timestamps(
-            b"TEST",
-            1,
-            StandardHeader::SIZE as u64,
-            1000,
-            1000,
-            data1,
-        );
-        let header2 = StandardHeader::new_with_timestamps(
-            b"TEST",
-            1,
-            StandardHeader::SIZE as u64,
-            1000,
-            1000,
-            data2,
-        );
+        let header1 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data1);
+        let header2 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data2);
         assert_eq!(header1.checksum, header2.checksum);
 
         // Different data should produce different checksums
-        let header3 = StandardHeader::new_with_timestamps(
-            b"TEST",
-            1,
-            StandardHeader::SIZE as u64,
-            1000,
-            1000,
-            data3,
-        );
+        let header3 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data3);
         assert_ne!(header1.checksum, header3.checksum);
     }
 

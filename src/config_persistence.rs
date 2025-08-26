@@ -69,20 +69,15 @@ impl PersistedConfig {
         self.create_backup(path).await?;
 
         // Serialize to JSON with pretty printing for readability
-        let json_content = serde_json::to_string_pretty(self).map_err(|e| {
-            ShardexError::Config(format!("Failed to serialize configuration: {}", e))
-        })?;
+        let json_content = serde_json::to_string_pretty(self)
+            .map_err(|e| ShardexError::Config(format!("Failed to serialize configuration: {}", e)))?;
 
         // Write atomically using temporary file
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, json_content).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
                 e.kind(),
-                format!(
-                    "Failed to write configuration to {}: {}",
-                    temp_path.display(),
-                    e
-                ),
+                format!("Failed to write configuration to {}: {}", temp_path.display(), e),
             ))
         })?;
 
@@ -109,20 +104,12 @@ impl PersistedConfig {
         let content = fs::read_to_string(path).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
                 e.kind(),
-                format!(
-                    "Failed to read configuration file {}: {}",
-                    path.display(),
-                    e
-                ),
+                format!("Failed to read configuration file {}: {}", path.display(), e),
             ))
         })?;
 
         let mut config: Self = serde_json::from_str(&content).map_err(|e| {
-            ShardexError::Corruption(format!(
-                "Failed to parse configuration file {}: {}",
-                path.display(),
-                e
-            ))
+            ShardexError::Corruption(format!("Failed to parse configuration file {}: {}", path.display(), e))
         })?;
 
         // Verify checksum
@@ -267,9 +254,8 @@ impl PersistedConfig {
         self.checksum = 0;
 
         // Serialize configuration for checksum calculation
-        let config_bytes = serde_json::to_vec(&self.config).map_err(|e| {
-            ShardexError::Config(format!("Failed to serialize config for checksum: {}", e))
-        })?;
+        let config_bytes = serde_json::to_vec(&self.config)
+            .map_err(|e| ShardexError::Config(format!("Failed to serialize config for checksum: {}", e)))?;
 
         // Calculate CRC32 checksum
         self.checksum = crc32fast::hash(&config_bytes);

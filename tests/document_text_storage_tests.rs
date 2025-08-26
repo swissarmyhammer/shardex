@@ -85,10 +85,7 @@ fn test_multiple_documents() {
     let documents = vec![
         (DocumentId::new(), "First document text."),
         (DocumentId::new(), "Second document with different content."),
-        (
-            DocumentId::new(),
-            "Third document for multiple storage test.",
-        ),
+        (DocumentId::new(), "Third document for multiple storage test."),
     ];
 
     // Store all documents
@@ -252,7 +249,10 @@ fn test_file_growth_and_resize() {
     let mut doc_ids = Vec::new();
     for i in 0..100 {
         let doc_id = DocumentId::new();
-        let text = format!("Document {} with substantial content to fill space and potentially trigger file growth operations.", i);
+        let text = format!(
+            "Document {} with substantial content to fill space and potentially trigger file growth operations.",
+            i
+        );
 
         storage.store_text(doc_id, &text).unwrap();
         doc_ids.push((doc_id, text));
@@ -287,10 +287,7 @@ fn test_backward_search_finds_latest() {
 
     // Should retrieve the latest (last stored) version
     let retrieved = storage.get_text(doc_id).unwrap();
-    assert_eq!(
-        retrieved,
-        "Version 3 - final version with even more content"
-    );
+    assert_eq!(retrieved, "Version 3 - final version with even more content");
 
     // Should have 3 entries (append-only)
     assert_eq!(storage.entry_count(), 3);
@@ -464,9 +461,7 @@ fn test_mixed_document_sizes() {
     let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
-    let medium_text =
-        "This is a medium-sized document with more content to test various document sizes. "
-            .repeat(10);
+    let medium_text = "This is a medium-sized document with more content to test various document sizes. ".repeat(10);
     let large_text = "This is a large document with substantial content. ".repeat(1000);
     let long_line_text = "A".repeat(10000);
 
@@ -491,11 +486,7 @@ fn test_mixed_document_sizes() {
     // Verify all are retrievable regardless of size
     for (doc_id, name, expected_text) in stored_docs {
         let retrieved = storage.get_text(doc_id).unwrap();
-        assert_eq!(
-            retrieved, expected_text,
-            "Failed for document type: {}",
-            name
-        );
+        assert_eq!(retrieved, expected_text, "Failed for document type: {}", name);
     }
 }
 
@@ -585,10 +576,7 @@ fn test_storage_statistics() {
     storage.store_text(doc2, text2).unwrap();
 
     assert_eq!(storage.entry_count(), 2);
-    assert_eq!(
-        storage.total_text_size(),
-        (text1.len() + text2.len()) as u64
-    );
+    assert_eq!(storage.total_text_size(), (text1.len() + text2.len()) as u64);
 
     // Update first document (creates new entry)
     let text1_updated = "First document updated";
@@ -610,15 +598,9 @@ fn test_text_with_special_characters() {
         ("Newlines", "Line 1\nLine 2\nLine 3"),
         ("Tabs", "Column 1\tColumn 2\tColumn 3"),
         ("Mixed whitespace", "Space Tab\tNewline\nCarriage\rReturn"),
-        (
-            "Unicode whitespace",
-            "En\u{2002}space\u{2003}various\u{2009}spaces",
-        ),
+        ("Unicode whitespace", "En\u{2002}space\u{2003}various\u{2009}spaces"),
         ("Control chars", "Start\x01Control\x02Characters\x03End"),
-        (
-            "High Unicode",
-            "Math: ∀x∈ℝ, Arrows: ← → ↑ ↓, Symbols: ∞ ∑ ∏",
-        ),
+        ("High Unicode", "Math: ∀x∈ℝ, Arrows: ← → ↑ ↓, Symbols: ∞ ∑ ∏"),
         ("Combining chars", "é (e+accent) vs é (precomposed)"),
         ("Right-to-left", "English ← עברית → English"),
     ];
@@ -634,17 +616,8 @@ fn test_text_with_special_characters() {
     // Verify all special texts are stored and retrieved correctly
     for (doc_id, name, expected_text) in documents {
         let retrieved = storage.get_text(doc_id).unwrap();
-        assert_eq!(
-            retrieved, expected_text,
-            "Failed for special text: {}",
-            name
-        );
-        assert_eq!(
-            retrieved.len(),
-            expected_text.len(),
-            "Length mismatch for: {}",
-            name
-        );
+        assert_eq!(retrieved, expected_text, "Failed for special text: {}", name);
+        assert_eq!(retrieved.len(), expected_text.len(), "Length mismatch for: {}", name);
     }
 }
 
@@ -721,10 +694,7 @@ fn test_file_system_stress() {
     // Rapid storage and retrieval operations
     for i in 0..iterations {
         let doc_id = DocumentId::new();
-        let text = format!(
-            "Stress test document {} with content for file system testing",
-            i
-        );
+        let text = format!("Stress test document {} with content for file system testing", i);
 
         // Store
         storage.store_text(doc_id, &text).unwrap();

@@ -81,9 +81,7 @@ impl BatchProcessor {
     /// Start the batch processor background task
     pub async fn start(&mut self) -> Result<(), ShardexError> {
         if self.timer_handle.is_some() {
-            return Err(ShardexError::Wal(
-                "Batch processor already started".to_string(),
-            ));
+            return Err(ShardexError::Wal("Batch processor already started".to_string()));
         }
 
         // Create communication channels
@@ -92,8 +90,7 @@ impl BatchProcessor {
         self.command_sender = Some(command_sender);
 
         // Create batch manager and WAL manager
-        let mut batch_manager =
-            WalBatchManager::new(self.batch_config.clone(), self.expected_vector_dimension);
+        let mut batch_manager = WalBatchManager::new(self.batch_config.clone(), self.expected_vector_dimension);
         let mut wal_manager = WalManager::new(self.layout.clone(), self.wal_segment_size);
         wal_manager.initialize()?;
 
@@ -113,9 +110,7 @@ impl BatchProcessor {
                 match batch_manager.add_operation(operation) {
                     Ok(should_flush) => {
                         if should_flush {
-                            if let Err(e) =
-                                Self::flush_batch(&mut batch_manager, &mut wal_manager).await
-                            {
+                            if let Err(e) = Self::flush_batch(&mut batch_manager, &mut wal_manager).await {
                                 error!("Failed to flush batch from pending operations: {}", e);
                             }
                         }
@@ -249,9 +244,7 @@ impl BatchProcessor {
             command_sender
                 .send(BatchProcessorCommand::AddOperation(_operation))
                 .await
-                .map_err(|_| {
-                    ShardexError::Wal("Failed to send add operation command".to_string())
-                })?;
+                .map_err(|_| ShardexError::Wal("Failed to send add operation command".to_string()))?;
         } else {
             // If not started, add to pending operations
             self.pending_operations.push(_operation);
@@ -349,8 +342,7 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Should start successfully
         let result = processor.start().await;
@@ -382,8 +374,7 @@ mod tests {
             max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(50);
-        let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone(), 8192);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout.clone(), 8192);
 
         // Start the processor
         processor.start().await.unwrap();
@@ -398,9 +389,7 @@ mod tests {
                 length: 100,
                 vector: vec![1.0, 2.0, 3.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id },
         ];
 
         for operation in operations {
@@ -433,8 +422,7 @@ mod tests {
             max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(20);
-        let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -457,8 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_processor_graceful_shutdown_with_pending_operations() {
-        let _test_env =
-            TestEnvironment::new("test_batch_processor_graceful_shutdown_with_pending_operations");
+        let _test_env = TestEnvironment::new("test_batch_processor_graceful_shutdown_with_pending_operations");
         let layout = DirectoryLayout::new(_test_env.path());
         layout.create_directories().unwrap();
 
@@ -469,8 +456,7 @@ mod tests {
             max_document_text_size: 10 * 1024 * 1024,
         };
         let batch_interval = Duration::from_millis(1000);
-        let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(3), layout, 8192);
 
         processor.start().await.unwrap();
 
@@ -499,8 +485,7 @@ mod tests {
 
         let batch_interval = Duration::from_millis(50);
         let batch_config = BatchConfig::default();
-        let mut processor =
-            BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
+        let mut processor = BatchProcessor::new(batch_interval, batch_config, Some(128), layout, 8192);
 
         // Start processor
         processor.start().await.unwrap();

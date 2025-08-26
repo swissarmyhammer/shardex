@@ -129,10 +129,7 @@ async fn demonstrate_input_validation(index: &mut ShardexImpl) {
     match index.add_postings(vec![posting_wrong_dim]).await {
         Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
         Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!(
-                "✓ Caught dimension error: expected {}, got {}",
-                expected, actual
-            );
+            println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
         }
         Err(e) => println!("✗ Unexpected error type: {}", e),
     }
@@ -195,10 +192,7 @@ async fn demonstrate_search_errors(index: &ShardexImpl) {
     match index.search(&wrong_query, 5, None).await {
         Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
         Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!(
-                "✓ Caught search dimension error: expected {}, got {}",
-                expected, actual
-            );
+            println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
         }
         Err(e) => println!("✗ Unexpected error type: {}", e),
     }
@@ -295,10 +289,7 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
                 continue;
             }
             Err(e) => {
-                println!(
-                    "    ✗ Failed to create index after {} attempts: {}",
-                    attempts, e
-                );
+                println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
                 return Err(e.into());
             }
         }

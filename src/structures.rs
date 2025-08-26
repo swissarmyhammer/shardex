@@ -327,9 +327,7 @@ impl SearchResult {
         }
 
         if !(0.0..=1.0).contains(&similarity_score) || similarity_score.is_nan() {
-            return Err(ShardexError::invalid_similarity_score_with_suggestion(
-                similarity_score,
-            ));
+            return Err(ShardexError::invalid_similarity_score_with_suggestion(similarity_score));
         }
 
         Ok(Self {
@@ -898,14 +896,10 @@ mod tests {
         assert!(SearchResult::from_posting(posting.clone(), 0.8).is_ok());
 
         let result = SearchResult::from_posting(posting.clone(), 2.0);
-        assert!(
-            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == 2.0)
-        );
+        assert!(matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == 2.0));
 
         let result = SearchResult::from_posting(posting, -1.0);
-        assert!(
-            matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == -1.0)
-        );
+        assert!(matches!(result.unwrap_err(), ShardexError::InvalidSimilarityScore { score } if score == -1.0));
     }
 
     #[test]

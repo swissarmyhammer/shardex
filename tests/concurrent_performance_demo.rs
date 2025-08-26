@@ -19,8 +19,8 @@ struct TestEnvironment {
 
 impl TestEnvironment {
     fn new(test_name: &str) -> Self {
-        let temp_dir = TempDir::new()
-            .unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
+        let temp_dir =
+            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
 
         Self {
             temp_dir,
@@ -120,16 +120,12 @@ async fn test_concurrent_throughput_demonstration() {
 
     let total_duration = start_time.elapsed();
     let total_successful = successful_operations.load(Ordering::SeqCst);
-    let expected_operations =
-        (NUM_READERS * OPERATIONS_PER_READER) + (NUM_WRITERS * OPERATIONS_PER_WRITER);
+    let expected_operations = (NUM_READERS * OPERATIONS_PER_READER) + (NUM_WRITERS * OPERATIONS_PER_WRITER);
 
     // Display results
     println!("\n=== Concurrent Performance Demonstration ===");
     println!("Duration: {:?}", total_duration);
-    println!(
-        "Total operations: {}/{}",
-        total_successful, expected_operations
-    );
+    println!("Total operations: {}/{}", total_successful, expected_operations);
     println!(
         "Throughput: {:.1} ops/sec",
         total_successful as f64 / total_duration.as_secs_f64()
@@ -168,14 +164,8 @@ async fn test_concurrent_throughput_demonstration() {
 
     // Final system state should be consistent
     let final_metrics = concurrent.concurrency_metrics();
-    assert_eq!(
-        final_metrics.active_readers, 0,
-        "No readers should remain active"
-    );
-    assert_eq!(
-        final_metrics.active_writers, 0,
-        "No writers should remain active"
-    );
+    assert_eq!(final_metrics.active_readers, 0, "No readers should remain active");
+    assert_eq!(final_metrics.active_writers, 0, "No writers should remain active");
 
     println!(
         "Final system state: epoch={}, no active operations",
@@ -212,23 +202,11 @@ async fn test_basic_coordination_functionality() {
 
     // Verify system metrics
     let metrics = concurrent.concurrency_metrics();
-    assert_eq!(
-        metrics.active_readers, 0,
-        "No active readers after operations"
-    );
-    assert_eq!(
-        metrics.active_writers, 0,
-        "No active writers after operations"
-    );
-    assert!(
-        metrics.current_epoch > 1,
-        "Epoch should advance after write operations"
-    );
+    assert_eq!(metrics.active_readers, 0, "No active readers after operations");
+    assert_eq!(metrics.active_writers, 0, "No active writers after operations");
+    assert!(metrics.current_epoch > 1, "Epoch should advance after write operations");
 
-    println!(
-        "Basic coordination test passed: epoch={}",
-        metrics.current_epoch
-    );
+    println!("Basic coordination test passed: epoch={}", metrics.current_epoch);
 }
 
 #[tokio::test]
@@ -312,11 +290,7 @@ async fn test_concurrent_readers_non_blocking() {
     let total_duration = start_time.elapsed();
 
     // All readers should complete successfully
-    assert_eq!(
-        results.len(),
-        NUM_CONCURRENT_READERS,
-        "All readers should complete"
-    );
+    assert_eq!(results.len(), NUM_CONCURRENT_READERS, "All readers should complete");
 
     // The total time should be reasonable for concurrent readers
     // Allow generous timing as system load, async overhead, and test environment can vary

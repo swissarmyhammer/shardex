@@ -91,10 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "  - Memory usage: {:.2} MB",
         stats.memory_usage as f64 / 1024.0 / 1024.0
     );
-    println!(
-        "  - Disk usage: {:.2} MB",
-        stats.disk_usage as f64 / 1024.0 / 1024.0
-    );
+    println!("  - Disk usage: {:.2} MB", stats.disk_usage as f64 / 1024.0 / 1024.0);
     println!(
         "  - Avg shard utilization: {:.1}%",
         stats.average_shard_utilization * 100.0
@@ -163,10 +160,7 @@ fn print_config(config: &ShardexConfig) {
     println!("  Shardex segment size: {}", config.shardex_segment_size);
     println!("  WAL segment size: {} bytes", config.wal_segment_size);
     println!("  Batch interval: {}ms", config.batch_write_interval_ms);
-    println!(
-        "  Default slop factor: {}",
-        config.slop_factor_config.default_factor
-    );
+    println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
     println!("  Bloom filter size: {}", config.bloom_filter_size);
 }
 

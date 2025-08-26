@@ -232,8 +232,7 @@ impl ResultDeduplicator {
 
     /// Deduplicate keeping only one result per document (highest scoring)
     fn deduplicate_by_document_id(&mut self, results: Vec<SearchResult>) -> Vec<SearchResult> {
-        let mut document_best: std::collections::HashMap<u128, SearchResult> =
-            std::collections::HashMap::new();
+        let mut document_best: std::collections::HashMap<u128, SearchResult> = std::collections::HashMap::new();
 
         for result in results {
             let doc_id = result.document_id.raw();
@@ -344,13 +343,7 @@ mod tests {
     use super::*;
     use crate::identifiers::DocumentId;
 
-    fn create_test_result(
-        doc_id: DocumentId,
-        start: u32,
-        length: u32,
-        vector: Vec<f32>,
-        score: f32,
-    ) -> SearchResult {
+    fn create_test_result(doc_id: DocumentId, start: u32, length: u32, vector: Vec<f32>, score: f32) -> SearchResult {
         let vector_len = vector.len();
         SearchResult::new(doc_id, start, length, vector, score, vector_len).unwrap()
     }

@@ -249,14 +249,14 @@ impl OptimizedMemoryMapping {
         if let Some(entry) = entry {
             // Add to cache
             {
-                let mut cache =
-                    self.entry_cache
-                        .write()
-                        .map_err(|_| ShardexError::InvalidInput {
-                            field: "cache_lock".to_string(),
-                            reason: "Failed to acquire cache write lock".to_string(),
-                            suggestion: "Retry the operation".to_string(),
-                        })?;
+                let mut cache = self
+                    .entry_cache
+                    .write()
+                    .map_err(|_| ShardexError::InvalidInput {
+                        field: "cache_lock".to_string(),
+                        reason: "Failed to acquire cache write lock".to_string(),
+                        suggestion: "Retry the operation".to_string(),
+                    })?;
                 cache.put(document_id, entry);
             }
         }
@@ -269,10 +269,7 @@ impl OptimizedMemoryMapping {
     }
 
     /// Search for document entry in the index file
-    fn search_index_file(
-        &self,
-        document_id: DocumentId,
-    ) -> Result<Option<DocumentTextEntry>, ShardexError> {
+    fn search_index_file(&self, document_id: DocumentId) -> Result<Option<DocumentTextEntry>, ShardexError> {
         let index_file = self
             .index_file
             .read()
@@ -302,8 +299,8 @@ impl OptimizedMemoryMapping {
 
             // Search within the page backwards
             for entry_idx in (start_entry..end_entry).rev() {
-                let offset = std::mem::size_of::<crate::document_text_entry::TextIndexHeader>()
-                    + (entry_idx * entry_size);
+                let offset =
+                    std::mem::size_of::<crate::document_text_entry::TextIndexHeader>() + (entry_idx * entry_size);
                 let entry: DocumentTextEntry = index_file.read_at(offset)?;
 
                 if entry.document_id == document_id {
@@ -351,9 +348,8 @@ impl OptimizedMemoryMapping {
         if total_ops == 1 {
             stats.avg_lookup_latency_us = latency_us;
         } else {
-            stats.avg_lookup_latency_us = ((stats.avg_lookup_latency_us * (total_ops - 1) as f64)
-                + latency_us)
-                / total_ops as f64;
+            stats.avg_lookup_latency_us =
+                ((stats.avg_lookup_latency_us * (total_ops - 1) as f64) + latency_us) / total_ops as f64;
         }
 
         Ok(())
@@ -437,8 +433,7 @@ impl OptimizedMemoryMapping {
             suggestions.push("Cache may be oversized for current workload".to_string());
         }
         if stats.avg_lookup_latency_us > 1000.0 {
-            suggestions
-                .push("High lookup latency detected, consider memory optimization".to_string());
+            suggestions.push("High lookup latency detected, consider memory optimization".to_string());
         }
 
         Ok(CacheHealthReport {
@@ -561,11 +556,7 @@ mod tests {
     #[test]
     fn test_access_pattern_variants() {
         // Test that all access patterns are valid
-        let patterns = [
-            AccessPattern::Sequential,
-            AccessPattern::Random,
-            AccessPattern::Mixed,
-        ];
+        let patterns = [AccessPattern::Sequential, AccessPattern::Random, AccessPattern::Mixed];
 
         for pattern in patterns {
             assert!(matches!(

@@ -1,0 +1,32 @@
+# Rustfmt configuration for consistent code formatting
+# Resolves import organization and dependency pattern issues
+# Using stable-compatible options only
+
+# General formatting settings
+max_width = 120
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+use_small_heuristics = "Default"
+
+# Function and control flow formatting
+fn_params_layout = "Tall"
+
+# Import organization (stable features only)
+reorder_imports = true
+reorder_modules = true
+
+# Misc formatting options
+remove_nested_parens = true
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Chain formatting
+chain_width = 60
+single_line_if_else_max_width = 50
+
+# Match formatting
+match_block_trailing_comma = false
+
+# Edition
+edition = "2021"

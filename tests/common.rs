@@ -14,7 +14,6 @@ pub mod test_constants {
     pub const DEFAULT_VECTOR_SIZE: usize = 128;
 
     pub const DEFAULT_SHARD_SIZE: usize = 100;
-
 }
 
 /// Error messages for consistent test error reporting
@@ -57,8 +56,6 @@ impl TestSetupBuilder {
         self
     }
 
-
-
     /// Build a test setup with a ShardexIndex ready for use
     pub fn build_with_index(self) -> Result<(TempDir, ShardexConfig, ShardexIndex), ShardexError> {
         let temp_dir = create_temp_dir_for_test();
@@ -66,10 +63,15 @@ impl TestSetupBuilder {
             .directory_path(temp_dir.path())
             .vector_size(self.vector_size)
             .shard_size(self.shard_size);
-        
-        let index = ShardexIndex::create(config.clone())
-            .map_err(|e| ShardexError::config_error("test_index", format!("Failed to create test index: {}", e), "Check configuration parameters"))?;
-        
+
+        let index = ShardexIndex::create(config.clone()).map_err(|e| {
+            ShardexError::config_error(
+                "test_index",
+                format!("Failed to create test index: {}", e),
+                "Check configuration parameters",
+            )
+        })?;
+
         Ok((temp_dir, config, index))
     }
 }

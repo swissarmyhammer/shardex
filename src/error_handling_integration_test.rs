@@ -60,8 +60,7 @@ async fn test_error_handling_system_integration() {
     };
 
     // Create a new storage instance for the mutex since we can't move from Arc
-    let storage_for_mutex =
-        DocumentTextStorage::create(temp_dir.path().join("recovery"), 10 * 1024 * 1024).unwrap();
+    let storage_for_mutex = DocumentTextStorage::create(temp_dir.path().join("recovery"), 10 * 1024 * 1024).unwrap();
     let storage_mutex = Arc::new(Mutex::new(storage_for_mutex));
     let mut recovery_manager = TextStorageRecoveryManager::new(
         storage_mutex,
@@ -104,9 +103,7 @@ async fn test_health_monitoring_scenarios() {
 
     // Test with empty storage
     {
-        let storage = Arc::new(
-            DocumentTextStorage::create(temp_dir.path().join("empty"), 1024 * 1024).unwrap(),
-        );
+        let storage = Arc::new(DocumentTextStorage::create(temp_dir.path().join("empty"), 1024 * 1024).unwrap());
 
         let mut monitor = TextStorageHealthMonitor::new(storage, Duration::from_millis(100), None);
 
@@ -116,8 +113,7 @@ async fn test_health_monitoring_scenarios() {
 
     // Test with storage containing data
     {
-        let mut storage =
-            DocumentTextStorage::create(temp_dir.path().join("with_data"), 1024 * 1024).unwrap();
+        let mut storage = DocumentTextStorage::create(temp_dir.path().join("with_data"), 1024 * 1024).unwrap();
 
         // Add multiple documents
         for i in 0..100 {
@@ -127,8 +123,7 @@ async fn test_health_monitoring_scenarios() {
         }
 
         let storage_arc = Arc::new(storage);
-        let mut monitor =
-            TextStorageHealthMonitor::new(storage_arc, Duration::from_millis(100), None);
+        let mut monitor = TextStorageHealthMonitor::new(storage_arc, Duration::from_millis(100), None);
 
         let health = monitor.check_health().await.unwrap();
         assert!(matches!(health, TextStorageHealth::Healthy));
@@ -168,10 +163,7 @@ async fn test_backup_restore_system() {
 
     // Test backup listing
     let backups = backup_manager.list_backups().await.unwrap();
-    println!(
-        "Found {} backups after creating test_backup + emergency",
-        backups.len()
-    );
+    println!("Found {} backups after creating test_backup + emergency", backups.len());
 
     // Test restore (will create another emergency backup)
     let restore_result = backup_manager
@@ -342,11 +334,8 @@ async fn test_health_monitor_performance_integration() {
     let storage = Arc::new(DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap());
     let performance_monitor = Arc::new(PerformanceMonitor::new());
 
-    let mut health_monitor = TextStorageHealthMonitor::new(
-        storage,
-        Duration::from_millis(50),
-        Some(performance_monitor.clone()),
-    );
+    let mut health_monitor =
+        TextStorageHealthMonitor::new(storage, Duration::from_millis(50), Some(performance_monitor.clone()));
 
     // Perform multiple health checks to test integration
     for _ in 0..5 {
@@ -453,19 +442,10 @@ mod recovery_system_tests {
             ..RecoveryConfig::default()
         };
 
-        assert_eq!(
-            conservative_config.recovery_strategy,
-            RecoveryStrategy::Conservative
-        );
-        assert_eq!(
-            aggressive_config.recovery_strategy,
-            RecoveryStrategy::Aggressive
-        );
+        assert_eq!(conservative_config.recovery_strategy, RecoveryStrategy::Conservative);
+        assert_eq!(aggressive_config.recovery_strategy, RecoveryStrategy::Aggressive);
         assert_eq!(aggressive_config.max_recovery_attempts, 5);
-        assert_eq!(
-            interactive_config.recovery_strategy,
-            RecoveryStrategy::Interactive
-        );
+        assert_eq!(interactive_config.recovery_strategy, RecoveryStrategy::Interactive);
         assert!(interactive_config.backup_before_recovery);
     }
 

@@ -372,10 +372,7 @@ mod tests {
             .count();
 
         // At least 80% should be in order due to timestamp component
-        assert!(
-            shard_matches >= 8,
-            "Shard IDs should be mostly ordered by timestamp"
-        );
+        assert!(shard_matches >= 8, "Shard IDs should be mostly ordered by timestamp");
         assert!(
             document_matches >= 8,
             "Document IDs should be mostly ordered by timestamp"
@@ -393,10 +390,7 @@ mod tests {
             let document_id = DocumentId::new();
 
             assert!(shard_set.insert(shard_id), "Shard ID should be unique");
-            assert!(
-                document_set.insert(document_id),
-                "Document ID should be unique"
-            );
+            assert!(document_set.insert(document_id), "Document ID should be unique");
         }
 
         assert_eq!(shard_set.len(), 10000);

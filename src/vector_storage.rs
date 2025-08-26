@@ -134,9 +134,7 @@ impl VectorStorageHeader {
     /// Create a new vector storage header
     pub fn new(vector_dimension: usize, capacity: usize) -> Result<Self, ShardexError> {
         if vector_dimension == 0 {
-            return Err(ShardexError::Config(
-                "Vector dimension cannot be zero".to_string(),
-            ));
+            return Err(ShardexError::Config("Vector dimension cannot be zero".to_string()));
         }
         if capacity == 0 {
             return Err(ShardexError::Config("Capacity cannot be zero".to_string()));
@@ -188,8 +186,7 @@ impl VectorStorageHeader {
         }
 
         // Validate field consistency
-        let expected_vector_size =
-            (self.vector_dimension as usize * std::mem::size_of::<f32>()) as u32;
+        let expected_vector_size = (self.vector_dimension as usize * std::mem::size_of::<f32>()) as u32;
         if self.vector_size_bytes != expected_vector_size {
             return Err(ShardexError::Corruption(format!(
                 "Vector size mismatch: expected {} bytes, found {}",
@@ -227,11 +224,7 @@ impl VectorStorage {
     /// * `path` - Path where the storage file will be created
     /// * `vector_dimension` - Number of dimensions per vector
     /// * `capacity` - Initial capacity (number of vectors)
-    pub fn create<P: AsRef<Path>>(
-        path: P,
-        vector_dimension: usize,
-        capacity: usize,
-    ) -> Result<Self, ShardexError> {
+    pub fn create<P: AsRef<Path>>(path: P, vector_dimension: usize, capacity: usize) -> Result<Self, ShardexError> {
         let path = path.as_ref();
 
         // Calculate total file size needed
@@ -291,9 +284,8 @@ impl VectorStorage {
 
         // Validate checksum
         let vector_data_start = header.vector_data_offset as usize;
-        let vector_data_size = (header.capacity as usize)
-            * (header.vector_dimension as usize)
-            * std::mem::size_of::<f32>();
+        let vector_data_size =
+            (header.capacity as usize) * (header.vector_dimension as usize) * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, header.simd_alignment as usize);
 
         if vector_data_start + aligned_size > mmap_file.len() {
@@ -302,8 +294,7 @@ impl VectorStorage {
             ));
         }
 
-        let vector_data =
-            &mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
+        let vector_data = &mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
         header.file_header.validate_checksum(vector_data)?;
 
         let vector_dimension = header.vector_dimension as usize;
@@ -373,9 +364,7 @@ impl VectorStorage {
 
         // Check capacity
         if self.is_full() {
-            return Err(ShardexError::Config(
-                "Vector storage is at capacity".to_string(),
-            ));
+            return Err(ShardexError::Config("Vector storage is at capacity".to_string()));
         }
 
         let index = self.current_count();
@@ -518,9 +507,8 @@ impl VectorStorage {
 
         // Validate file header checksum against data
         let vector_data_start = self.header.vector_data_offset as usize;
-        let vector_data_size = (self.header.capacity as usize)
-            * (self.header.vector_dimension as usize)
-            * std::mem::size_of::<f32>();
+        let vector_data_size =
+            (self.header.capacity as usize) * (self.header.vector_dimension as usize) * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, self.header.simd_alignment as usize);
 
         if vector_data_start + aligned_size > self.mmap_file.len() {
@@ -529,8 +517,7 @@ impl VectorStorage {
             ));
         }
 
-        let vector_data =
-            &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
+        let vector_data = &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
         self.header.file_header.validate_checksum(vector_data)?;
 
         // Validate vector data consistency
@@ -587,10 +574,7 @@ impl VectorStorage {
         if total_accounted != self.header.current_count {
             return Err(ShardexError::Corruption(format!(
                 "Count mismatch: header claims {} total, but found {} active + {} deleted = {}",
-                self.header.current_count,
-                actual_active_count,
-                actual_deleted_count,
-                total_accounted
+                self.header.current_count, actual_active_count, actual_deleted_count, total_accounted
             )));
         }
 
@@ -606,12 +590,10 @@ impl VectorStorage {
     fn update_header(&mut self) -> Result<(), ShardexError> {
         // Update checksum
         let vector_data_start = self.header.vector_data_offset as usize;
-        let vector_data_size = (self.header.capacity as usize)
-            * (self.header.vector_dimension as usize)
-            * std::mem::size_of::<f32>();
+        let vector_data_size =
+            (self.header.capacity as usize) * (self.header.vector_dimension as usize) * std::mem::size_of::<f32>();
         let aligned_size = Self::align_size(vector_data_size, self.header.simd_alignment as usize);
-        let vector_data =
-            &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
+        let vector_data = &self.mmap_file.as_slice()[vector_data_start..vector_data_start + aligned_size];
 
         self.header.file_header.update_checksum(vector_data);
 
@@ -811,11 +793,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let storage_path = temp_file.path();
 
-        let vectors_to_add = vec![
-            vec![1.0, 2.0, 3.0],
-            vec![4.0, 5.0, 6.0],
-            vec![7.0, 8.0, 9.0],
-        ];
+        let vectors_to_add = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], vec![7.0, 8.0, 9.0]];
 
         // Create and populate storage
         {
@@ -953,10 +931,7 @@ mod tests {
 
         assert_eq!(retrieved.len(), dimension);
         assert_eq!(retrieved[0], 0.0);
-        assert_eq!(
-            retrieved[dimension - 1],
-            (dimension - 1) as f32 / dimension as f32
-        );
+        assert_eq!(retrieved[dimension - 1], (dimension - 1) as f32 / dimension as f32);
 
         // Verify all values
         for (i, &value) in retrieved.iter().enumerate() {
@@ -987,10 +962,7 @@ mod tests {
         assert_eq!(vector_ref[3], 4.0);
 
         // The slice should be directly backed by the memory-mapped file
-        assert_eq!(
-            std::mem::size_of_val(vector_ref),
-            4 * std::mem::size_of::<f32>()
-        );
+        assert_eq!(std::mem::size_of_val(vector_ref), 4 * std::mem::size_of::<f32>());
     }
 
     #[test]

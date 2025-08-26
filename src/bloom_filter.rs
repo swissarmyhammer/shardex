@@ -201,8 +201,7 @@ impl BloomFilter {
             ));
         }
 
-        let (bit_array_size, hash_functions) =
-            Self::calculate_parameters(capacity, false_positive_rate);
+        let (bit_array_size, hash_functions) = Self::calculate_parameters(capacity, false_positive_rate);
         let bit_array = vec![0u64; (bit_array_size + 63) / 64]; // Round up to u64 boundaries
 
         Ok(Self {
@@ -486,10 +485,7 @@ impl BloomFilterHeader {
 
     /// Check if this header represents a valid bloom filter
     pub fn is_valid(&self) -> bool {
-        self.hash_functions > 0
-            && self.capacity > 0
-            && self.bit_array_size > 0
-            && self.bit_array_bytes > 0
+        self.hash_functions > 0 && self.capacity > 0 && self.bit_array_size > 0 && self.bit_array_bytes > 0
     }
 
     /// Get the false positive rate from the stored micros value
@@ -537,11 +533,7 @@ mod tests {
         let (bits, hash_funcs) = BloomFilter::calculate_parameters(1000, 0.01);
 
         // For 1000 elements with 1% false positive rate, should need roughly 9600 bits
-        assert!(
-            (9000..=10000).contains(&bits),
-            "Expected ~9600 bits, got {}",
-            bits
-        );
+        assert!((9000..=10000).contains(&bits), "Expected ~9600 bits, got {}", bits);
 
         // Should use multiple hash functions for good distribution
         assert!(
@@ -579,10 +571,7 @@ mod tests {
 
         // All inserted IDs must be found (no false negatives)
         for doc_id in inserted_ids {
-            assert!(
-                filter.contains(doc_id),
-                "False negative detected for document ID"
-            );
+            assert!(filter.contains(doc_id), "False negative detected for document ID");
         }
     }
 
@@ -787,10 +776,7 @@ mod tests {
         // Hash values should be different (very high probability)
         for i in 0..hashes.len() {
             for j in (i + 1)..hashes.len() {
-                assert_ne!(
-                    hashes[i], hashes[j],
-                    "Hash functions should produce different values"
-                );
+                assert_ne!(hashes[i], hashes[j], "Hash functions should produce different values");
             }
         }
     }

@@ -359,10 +359,7 @@ impl TextStorageRecoveryManager {
     }
 
     /// Attempt automatic recovery from error
-    pub async fn attempt_recovery(
-        &mut self,
-        error: &ShardexError,
-    ) -> Result<RecoveryResult, ShardexError> {
+    pub async fn attempt_recovery(&mut self, error: &ShardexError) -> Result<RecoveryResult, ShardexError> {
         match error {
             ShardexError::TextCorruption(msg) => self.recover_from_corruption(msg).await,
 
@@ -390,10 +387,7 @@ impl TextStorageRecoveryManager {
     }
 
     /// Recover from text corruption
-    async fn recover_from_corruption(
-        &mut self,
-        corruption_msg: &str,
-    ) -> Result<RecoveryResult, ShardexError> {
+    async fn recover_from_corruption(&mut self, corruption_msg: &str) -> Result<RecoveryResult, ShardexError> {
         tracing::warn!("Attempting recovery from corruption: {}", corruption_msg);
 
         // Create backup if configured
@@ -438,10 +432,7 @@ impl TextStorageRecoveryManager {
     }
 
     /// Recover from I/O errors
-    async fn recover_from_io_error(
-        &mut self,
-        _io_error: &std::io::Error,
-    ) -> Result<RecoveryResult, ShardexError> {
+    async fn recover_from_io_error(&mut self, _io_error: &std::io::Error) -> Result<RecoveryResult, ShardexError> {
         // For I/O errors, we primarily check if it's a transient issue
         Ok(RecoveryResult::RequiresManualIntervention {
             reason: "I/O error detected".to_string(),
@@ -561,10 +552,7 @@ pub struct BackupManager {
 
 impl BackupManager {
     /// Create new backup manager
-    pub fn new(
-        backup_directory: PathBuf,
-        retention_policy: BackupRetentionPolicy,
-    ) -> Result<Self, ShardexError> {
+    pub fn new(backup_directory: PathBuf, retention_policy: BackupRetentionPolicy) -> Result<Self, ShardexError> {
         // Create backup directory if it doesn't exist
         std::fs::create_dir_all(&backup_directory).map_err(ShardexError::Io)?;
 
@@ -588,10 +576,7 @@ impl BackupManager {
     }
 
     /// Create full backup of text storage
-    pub async fn create_backup(
-        &self,
-        backup_name: Option<String>,
-    ) -> Result<BackupInfo, ShardexError> {
+    pub async fn create_backup(&self, backup_name: Option<String>) -> Result<BackupInfo, ShardexError> {
         let backup_id = backup_name.unwrap_or_else(|| {
             format!(
                 "backup_{}",
@@ -617,19 +602,14 @@ impl BackupManager {
 
         // Save backup metadata
         let metadata_path = backup_path.join("backup_info.json");
-        let metadata_json = serde_json::to_string_pretty(&backup_info).map_err(|e| {
-            ShardexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })?;
+        let metadata_json = serde_json::to_string_pretty(&backup_info)
+            .map_err(|e| ShardexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
         std::fs::write(metadata_path, metadata_json)?;
 
         // Apply retention policy
         self.apply_retention_policy().await?;
 
-        tracing::info!(
-            "Created backup: {} ({} bytes)",
-            backup_info.id,
-            backup_info.size
-        );
+        tracing::info!("Created backup: {} ({} bytes)", backup_info.id, backup_info.size);
         Ok(backup_info)
     }
 
@@ -647,9 +627,7 @@ impl BackupManager {
 
                 if metadata_path.exists() {
                     if let Ok(metadata_content) = std::fs::read_to_string(&metadata_path) {
-                        if let Ok(backup_info) =
-                            serde_json::from_str::<BackupInfo>(&metadata_content)
-                        {
+                        if let Ok(backup_info) = serde_json::from_str::<BackupInfo>(&metadata_content) {
                             backups.push((backup_path, backup_info));
                         }
                     }
@@ -692,9 +670,7 @@ impl BackupManager {
                 let metadata_path = entry.path().join("backup_info.json");
                 if metadata_path.exists() {
                     if let Ok(metadata_content) = std::fs::read_to_string(&metadata_path) {
-                        if let Ok(backup_info) =
-                            serde_json::from_str::<BackupInfo>(&metadata_content)
-                        {
+                        if let Ok(backup_info) = serde_json::from_str::<BackupInfo>(&metadata_content) {
                             backups.push(backup_info);
                         }
                     }
@@ -709,10 +685,7 @@ impl BackupManager {
     }
 
     /// Restore from backup
-    pub async fn restore_from_backup(
-        &self,
-        backup_id: &str,
-    ) -> Result<RestoreResult, ShardexError> {
+    pub async fn restore_from_backup(&self, backup_id: &str) -> Result<RestoreResult, ShardexError> {
         let backup_path = self.backup_directory.join(backup_id);
 
         if !backup_path.exists() {
@@ -751,10 +724,7 @@ mod tests {
 
         let monitor = TextStorageHealthMonitor::new(storage, Duration::from_secs(60), None);
 
-        assert!(matches!(
-            monitor.current_health(),
-            TextStorageHealth::Healthy
-        ));
+        assert!(matches!(monitor.current_health(), TextStorageHealth::Healthy));
     }
 
     #[tokio::test]

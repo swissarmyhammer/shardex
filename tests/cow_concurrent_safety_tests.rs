@@ -87,8 +87,7 @@ async fn test_reader_consistency_during_writes() {
     // Add some initial shards
     for _ in 0..3 {
         let shard_id = shardex::ShardId::new();
-        let shard =
-            Shard::create(shard_id, 50, 64, _test_env.path().to_path_buf()).expect("Failed to create shard");
+        let shard = Shard::create(shard_id, 50, 64, _test_env.path().to_path_buf()).expect("Failed to create shard");
         initial_index.add_shard(shard).expect("Failed to add shard");
     }
 
@@ -319,18 +318,12 @@ fn test_atomic_update_integrity() {
         results.push(result);
     }
 
-    println!(
-        "Atomic integrity test completed with {} operations",
-        results.len()
-    );
+    println!("Atomic integrity test completed with {} operations", results.len());
 
     // Final consistency check
     let final_reader = cow_index.read();
     let final_stats = final_reader.stats(0).expect("Failed to get final stats");
-    assert_eq!(
-        final_stats.vector_dimension, 8,
-        "Final integrity check failed"
-    );
+    assert_eq!(final_stats.vector_dimension, 8, "Final integrity check failed");
 }
 
 /// Test performance overhead is minimal for typical workloads
@@ -358,10 +351,7 @@ fn test_performance_overhead() {
     }
     let quick_duration = start_time.elapsed();
 
-    println!(
-        "CoW reads: {:?}, Quick access: {:?}",
-        cow_duration, quick_duration
-    );
+    println!("CoW reads: {:?}, Quick access: {:?}", cow_duration, quick_duration);
 
     // Both should be very fast for typical workloads (< 1ms per operation on average)
     let cow_per_op = cow_duration.as_nanos() / NUM_READS as u128;

@@ -160,18 +160,15 @@ impl SearchMetrics {
 
         // Update running averages
         let latency_ms = params.latency.as_millis() as f64;
-        self.average_latency_ms = (self.average_latency_ms * (self.total_searches - 1) as f64
-            + latency_ms)
-            / self.total_searches as f64;
+        self.average_latency_ms =
+            (self.average_latency_ms * (self.total_searches - 1) as f64 + latency_ms) / self.total_searches as f64;
 
-        self.average_results_per_search = (self.average_results_per_search
-            * (self.total_searches - 1) as f64
+        self.average_results_per_search = (self.average_results_per_search * (self.total_searches - 1) as f64
             + params.result_count as f64)
             / self.total_searches as f64;
 
         self.total_shards_searched += params.shards_searched as u64;
-        self.average_shards_per_search =
-            self.total_shards_searched as f64 / self.total_searches as f64;
+        self.average_shards_per_search = self.total_shards_searched as f64 / self.total_searches as f64;
 
         // Update slop factor statistics
         self.average_slop_factor = (self.average_slop_factor * (self.total_searches - 1) as f64
@@ -193,10 +190,9 @@ impl SearchMetrics {
             let latency_deviation = latency_ms - self.average_latency_ms;
             let correlation_update = slop_factor_deviation * latency_deviation;
 
-            self.slop_factor_performance_correlation = (self.slop_factor_performance_correlation
-                * (self.total_searches - 1) as f64
-                + correlation_update)
-                / self.total_searches as f64;
+            self.slop_factor_performance_correlation =
+                (self.slop_factor_performance_correlation * (self.total_searches - 1) as f64 + correlation_update)
+                    / self.total_searches as f64;
         }
     }
 }
@@ -333,10 +329,8 @@ impl SearchCoordinator {
         coordinator_config: SearchCoordinatorConfig,
     ) -> Result<Self, ShardexError> {
         let index = ShardexIndex::create(shardex_config)?;
-        let performance_monitor =
-            PerformanceMonitor::new(coordinator_config.performance_monitoring_enabled);
-        let concurrent_search_semaphore =
-            tokio::sync::Semaphore::new(coordinator_config.max_concurrent_searches);
+        let performance_monitor = PerformanceMonitor::new(coordinator_config.performance_monitoring_enabled);
+        let concurrent_search_semaphore = tokio::sync::Semaphore::new(coordinator_config.max_concurrent_searches);
 
         Ok(Self {
             index: Arc::new(Mutex::new(index)),
@@ -352,10 +346,8 @@ impl SearchCoordinator {
         coordinator_config: SearchCoordinatorConfig,
     ) -> Result<Self, ShardexError> {
         let index = ShardexIndex::open(directory_path)?;
-        let performance_monitor =
-            PerformanceMonitor::new(coordinator_config.performance_monitoring_enabled);
-        let concurrent_search_semaphore =
-            tokio::sync::Semaphore::new(coordinator_config.max_concurrent_searches);
+        let performance_monitor = PerformanceMonitor::new(coordinator_config.performance_monitoring_enabled);
+        let concurrent_search_semaphore = tokio::sync::Semaphore::new(coordinator_config.max_concurrent_searches);
 
         Ok(Self {
             index: Arc::new(Mutex::new(index)),
@@ -429,8 +421,7 @@ impl SearchCoordinator {
             // Check if we should use streaming for large k values
             if k > self.config.result_streaming_threshold {
                 return Err(ShardexError::Search(
-                    "Large k values require streaming API - use coordinate_search_streaming"
-                        .to_string(),
+                    "Large k values require streaming API - use coordinate_search_streaming".to_string(),
                 ));
             }
 
@@ -666,8 +657,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().default_timeout(Duration::from_millis(1000));
+        let coordinator_config = SearchCoordinatorConfig::new().default_timeout(Duration::from_millis(1000));
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -689,8 +679,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().default_timeout(Duration::from_millis(1)); // Very short timeout
+        let coordinator_config = SearchCoordinatorConfig::new().default_timeout(Duration::from_millis(1)); // Very short timeout
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -716,8 +705,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+        let coordinator_config = SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -799,16 +787,13 @@ mod tests {
         let mut metrics = SearchMetrics::new();
 
         // Record a few searches with different slop factors
-        let params1 =
-            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         metrics.record_search(params1);
 
-        let params2 =
-            SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
         metrics.record_search(params2);
 
-        let params3 =
-            SearchRecordParams::new(Duration::from_millis(80), 12, 2, true, false, false, 2);
+        let params3 = SearchRecordParams::new(Duration::from_millis(80), 12, 2, true, false, false, 2);
         metrics.record_search(params3);
 
         assert_eq!(metrics.total_searches, 3);
@@ -826,8 +811,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+        let coordinator_config = SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -847,8 +831,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+        let coordinator_config = SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -873,8 +856,7 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+        let coordinator_config = SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
@@ -894,12 +876,10 @@ mod tests {
         let monitor = PerformanceMonitor::new(true);
 
         // Record some searches with slop factor tracking
-        let params1 =
-            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         monitor.record_search(params1).await;
 
-        let params2 =
-            SearchRecordParams::new(Duration::from_millis(200), 5, 6, true, false, false, 6);
+        let params2 = SearchRecordParams::new(Duration::from_millis(200), 5, 6, true, false, false, 6);
         monitor.record_search(params2).await;
 
         let metrics = monitor.get_metrics().await;
@@ -917,20 +897,17 @@ mod tests {
         let shardex_config = ShardexConfig::new()
             .directory_path(_env.path())
             .vector_size(128);
-        let coordinator_config =
-            SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
+        let coordinator_config = SearchCoordinatorConfig::new().performance_monitoring_enabled(true);
 
         let coordinator = SearchCoordinator::create(shardex_config, coordinator_config)
             .await
             .unwrap();
 
         // Simulate some searches by directly recording metrics
-        let params1 =
-            SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
+        let params1 = SearchRecordParams::new(Duration::from_millis(100), 10, 3, true, false, false, 3);
         coordinator.performance_monitor.record_search(params1).await;
 
-        let params2 =
-            SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
+        let params2 = SearchRecordParams::new(Duration::from_millis(150), 8, 5, true, false, false, 5);
         coordinator.performance_monitor.record_search(params2).await;
 
         let analysis = coordinator.get_slop_factor_analysis().await;
