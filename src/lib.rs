@@ -39,9 +39,11 @@
 //! - **Bloom filter optimization** for efficient document deletion
 //! - **Crash recovery** from unexpected shutdowns
 
+pub mod async_document_text_storage;
 pub mod batch_processor;
 pub mod bloom_filter;
 pub mod concurrent;
+pub mod concurrent_document_text_storage;
 pub mod config;
 pub mod config_persistence;
 pub mod cow_index;
@@ -49,6 +51,7 @@ pub mod crash_recovery;
 pub mod deduplication;
 pub mod distance;
 pub mod document_text_entry;
+pub mod document_text_performance;
 pub mod document_text_storage;
 pub mod document_transaction_coordinator;
 pub mod error;
@@ -64,6 +67,7 @@ pub mod shard;
 pub mod shardex;
 pub mod shardex_index;
 pub mod structures;
+pub mod text_memory_pool;
 pub mod transactions;
 pub mod vector_storage;
 pub mod wal;
@@ -78,10 +82,17 @@ pub mod statistics_integration_test;
 #[cfg(test)]
 pub mod error_handling_integration_test;
 
+pub use async_document_text_storage::{
+    AsyncConfig, AsyncDocumentTextStorage, AsyncIOStats, ReadAheadBuffer, ReadAheadConfig,
+};
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};
 pub use concurrent::{
     ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType,
+};
+pub use concurrent_document_text_storage::{
+    ConcurrentConfig, ConcurrentDocumentTextStorage, ConcurrentMetrics, DocumentMetadata,
+    WriteOperation,
 };
 pub use config::ShardexConfig;
 pub use config_persistence::{ConfigurationManager, PersistedConfig};
@@ -92,6 +103,9 @@ pub use distance::DistanceMetric;
 pub use document_text_entry::{
     DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
     TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
+};
+pub use document_text_performance::{
+    AccessPattern, DocumentEntryCache, MappingStats, OptimizedMemoryMapping,
 };
 pub use document_text_storage::DocumentTextStorage;
 pub use document_transaction_coordinator::{DocumentTransactionCoordinator, TransactionStatistics};
@@ -119,6 +133,9 @@ pub use shardex::{Shardex, ShardexImpl};
 pub use shardex_index::{IndexConfig, IndexStatistics, ShardexIndex, ShardexMetadata};
 pub use structures::{
     FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader,
+};
+pub use text_memory_pool::{
+    PoolConfig, PoolStatistics, PooledBytes, PooledString, TextMemoryPool,
 };
 pub use transactions::{
     BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction,

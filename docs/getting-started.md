@@ -184,6 +184,177 @@ index.remove_documents(document_ids).await?;
 index.flush().await?;
 ```
 
+## Document Text Storage
+
+Shardex can store document source text alongside vector embeddings, enabling rich search experiences:
+
+### Enabling Text Storage
+
+Add text storage to your configuration:
+
+```rust
+let config = ShardexConfig::new()
+    .directory_path("./text_enabled_index")
+    .vector_size(128)
+    .max_document_text_size(1024 * 1024); // 1MB per document
+```
+
+**Important:** Text storage is disabled by default (`max_document_text_size = 0`).
+
+### Storing Documents with Text
+
+Use `replace_document_with_postings` for atomic document operations:
+
+```rust
+let document_text = "The quick brown fox jumps over the lazy dog.";
+let doc_id = DocumentId::from_u128(1);
+
+let postings = vec![
+    Posting {
+        document_id: doc_id,
+        start: 0,
+        length: 9, // "The quick"
+        vector: embedding1,
+    },
+    Posting {
+        document_id: doc_id,
+        start: 10,
+        length: 9, // "brown fox"
+        vector: embedding2,
+    },
+];
+
+// Store document with text and postings atomically
+index.replace_document_with_postings(
+    doc_id, 
+    document_text.to_string(), 
+    postings
+).await?;
+```
+
+### Retrieving Document Text
+
+Get the complete document text:
+
+```rust
+let full_text = index.get_document_text(doc_id).await?;
+println!("Document: {}", full_text);
+```
+
+### Extracting Text from Search Results
+
+Extract text snippets from search results:
+
+```rust
+let results = index.search(&query_vector, 10, None).await?;
+
+for result in results {
+    // Convert search result to posting for text extraction
+    let posting = Posting {
+        document_id: result.document_id,
+        start: result.start,
+        length: result.length,
+        vector: result.vector,
+    };
+    
+    let text_snippet = index.extract_text(&posting).await?;
+    println!("Found: '{}' (score: {:.4})", 
+             text_snippet, 
+             result.similarity_score);
+}
+```
+
+### Text Storage Error Handling
+
+Handle text-specific errors:
+
+```rust
+match index.get_document_text(doc_id).await {
+    Ok(text) => println!("Text: {}", text),
+    Err(ShardexError::DocumentTextNotFound { document_id }) => {
+        println!("No text stored for document {}", document_id);
+    }
+    Err(ShardexError::InvalidRange { start, length, document_length }) => {
+        println!("Invalid coordinates {}..{} for document length {}", 
+                 start, start + length, document_length);
+    }
+    Err(e) => println!("Other error: {}", e),
+}
+```
+
+### Text Storage Best Practices
+
+1. **Size Limits**: Set appropriate `max_document_text_size` for your use case
+2. **Atomic Operations**: Always use `replace_document_with_postings` for consistency
+3. **Error Handling**: Handle text-specific error types
+4. **Backward Compatibility**: Indexes without text storage continue to work
+
+### Complete Text Storage Example
+
+```rust
+use shardex::{Shardex, ShardexConfig, ShardexImpl, Posting, DocumentId};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create index with text storage
+    let config = ShardexConfig::new()
+        .directory_path("./text_example")
+        .vector_size(128)
+        .max_document_text_size(1024 * 1024);
+    
+    let mut index = ShardexImpl::create(config).await?;
+    
+    // Store document with text
+    let doc_text = "Artificial intelligence is transforming technology.";
+    let doc_id = DocumentId::from_u128(1);
+    
+    let postings = vec![
+        Posting {
+            document_id: doc_id,
+            start: 0,
+            length: 21, // "Artificial intelligence"
+            vector: generate_embedding("artificial intelligence"),
+        },
+        Posting {
+            document_id: doc_id,
+            start: 25,
+            length: 12, // "transforming"
+            vector: generate_embedding("transforming"),
+        }
+    ];
+    
+    index.replace_document_with_postings(
+        doc_id, 
+        doc_text.to_string(), 
+        postings
+    ).await?;
+    
+    // Search and extract text
+    let query = generate_embedding("AI technology");
+    let results = index.search(&query, 5, None).await?;
+    
+    for result in results {
+        let posting = Posting {
+            document_id: result.document_id,
+            start: result.start,
+            length: result.length,
+            vector: result.vector,
+        };
+        
+        if let Ok(text) = index.extract_text(&posting).await {
+            println!("Match: '{}' (score: {:.3})", text, result.similarity_score);
+        }
+    }
+    
+    Ok(())
+}
+
+// Placeholder function - use your actual embedding model
+fn generate_embedding(text: &str) -> Vec<f32> {
+    vec![0.1; 128] // Replace with real embeddings
+}
+```
+
 ## Search Parameters
 
 ### K (Number of Results)

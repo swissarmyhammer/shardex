@@ -71,7 +71,166 @@ Key responsibilities:
 - **Split Management**: Handle shard splits when capacity is exceeded
 - **Bloom Filter Management**: Optimize document deletion operations
 
-### 3. Write-Ahead Log (WAL)
+### 3. Document Text Storage Architecture
+
+Document text storage is implemented at the index level (not shard level) using append-only memory-mapped files for efficient access and ACID transactions.
+
+#### File Layout
+
+When text storage is enabled (`max_document_text_size > 0`), additional files are created:
+
+```
+index_directory/
+├── text_index.dat     # Document text index entries
+├── text_data.dat      # Raw document text data
+├── shards/            # Vector postings (unchanged)
+│   ├── {shard_ulid}.vectors
+│   ├── {shard_ulid}.postings
+│   └── ...
+├── centroids/         # Shardex segments (unchanged)
+│   └── ...
+└── wal/              # Write-ahead log (includes text operations)
+    └── ...
+```
+
+#### Text Storage Components
+
+##### Text Index File (`text_index.dat`)
+Memory-mapped file containing index entries for document text lookup:
+
+```rust
+#[repr(C)]
+struct TextIndexHeader {
+    magic: [u8; 4],           // "SIDX" - Shardex Index
+    version: u32,             // Format version
+    entry_count: u64,         // Number of index entries
+    max_document_size: u64,   // Maximum allowed document size
+    checksum: u32,            // Header integrity check
+}
+
+#[repr(C)]
+struct DocumentTextEntry {
+    document_id: DocumentId,  // 128-bit document identifier
+    text_offset: u64,         // Byte offset in text_data.dat
+    text_length: u64,         // Length of text in bytes
+    timestamp: u64,           // Creation timestamp
+}
+```
+
+##### Text Data File (`text_data.dat`)
+Append-only file containing raw document text:
+
+```rust
+#[repr(C)]
+struct TextDataHeader {
+    magic: [u8; 4],           // "SDAT" - Shardex Data
+    version: u32,             // Format version
+    total_size: u64,          // Total bytes of text data
+    document_count: u64,      // Number of documents stored
+    checksum: u32,            // Header integrity check
+}
+
+// Followed by raw text data with no delimiters
+// Offsets and lengths from index entries define boundaries
+```
+
+#### Memory Mapping Strategy
+
+Both text files use memory mapping for performance:
+
+- **Text Index**: O(n) backward search to find latest document versions
+- **Text Data**: O(1) access after index lookup using memory offsets
+- **OS Page Cache**: Leverages operating system page caching for hot data
+- **Prefaulting**: Strategic page loading to minimize page faults during search
+
+#### Transaction Coordination
+
+Document text operations are fully integrated with Shardex's WAL system:
+
+```rust
+// Extended WAL operations for text storage
+pub enum WalOperation {
+    AddPosting { shard_id: ShardId, posting: Posting },
+    RemoveDocument { document_id: DocumentId },
+    SplitShard { old_shard: ShardId, new_shards: Vec<ShardId> },
+    
+    // Text storage operations
+    StoreDocumentText { 
+        document_id: DocumentId, 
+        text_offset: u64, 
+        text_length: u64 
+    },
+    ReplaceDocumentWithPostings { 
+        document_id: DocumentId, 
+        text_offset: u64, 
+        text_length: u64,
+        postings: Vec<Posting> 
+    },
+}
+```
+
+#### Atomic Replacement Workflow
+
+The `replace_document_with_postings` operation provides ACID guarantees:
+
+```
+Replace Document Request
+        ↓
+1. Validate Text Size (vs max_document_text_size)
+        ↓
+2. Create WAL Transaction
+        ↓
+3. Append Text to text_data.dat
+        ↓
+4. Create Text Index Entry
+        ↓
+5. Remove Old Document Postings
+        ↓
+6. Add New Document Postings
+        ↓
+7. Append Text Index Entry
+        ↓
+8. Commit WAL Transaction
+        ↓
+Response to Client
+```
+
+#### Performance Characteristics
+
+- **Text Storage**: O(n) space where n is total text size across all document versions
+- **Text Lookup**: O(d) time where d is number of document versions (typically small)
+- **Text Extraction**: O(1) time after lookup (memory-mapped access)  
+- **Document Versioning**: Multiple versions stored until compaction
+- **Concurrency**: Multiple readers, single writer per transaction
+
+#### Error Handling and Recovery
+
+Text storage includes specific error handling:
+
+```rust
+pub enum TextStorageError {
+    DocumentTextNotFound { document_id: DocumentId },
+    InvalidRange { start: u32, length: u32, document_length: u64 },
+    DocumentTooLarge { size: usize, max_size: usize },
+    TextCorruption { details: String },
+}
+```
+
+Recovery procedures:
+1. **Index Validation**: Verify text index entries are consistent
+2. **Data Validation**: Check text data integrity using offsets
+3. **Cross-Reference**: Ensure index entries point to valid data ranges
+4. **Corruption Isolation**: Continue operation with valid entries
+
+#### Backward Compatibility
+
+Text storage is designed for full backward compatibility:
+- Indexes without text storage continue to work unchanged
+- Text storage is opt-in via `max_document_text_size` configuration
+- No changes to existing vector search APIs
+- Text methods return appropriate errors when storage is disabled
+
+### 4. Write-Ahead Log (WAL)
 
 The WAL provides ACID guarantees and crash recovery:
 
@@ -119,6 +278,7 @@ The search coordinator orchestrates multi-shard searches:
 
 ### Write Operations
 
+#### Standard Posting Operations
 ```
 Add Postings Request
         ↓
@@ -143,8 +303,40 @@ Add Postings Request
 Response to Client
 ```
 
+#### Atomic Document Replacement (with Text)
+```
+Replace Document with Postings Request
+        ↓
+1. Validate Input (text size, dimensions, format)
+        ↓
+2. Create WAL Transaction
+        ↓
+3. Write to WAL (with checksum)
+        ↓
+4. Append Text to text_data.dat
+        ↓
+5. Remove Old Document from All Shards
+        ↓  
+6. Select Target Shards for New Postings
+        ↓
+7. Update Shard Data (vectors + postings)
+        ↓
+8. Update Shard Centroids
+        ↓
+9. Append Text Index Entry
+        ↓
+10. Update Bloom Filters
+        ↓
+11. Check for Shard Splits
+        ↓
+12. Commit WAL Transaction
+        ↓
+Response to Client
+```
+
 ### Read Operations
 
+#### Vector Search Operations
 ```
 Search Request
         ↓
@@ -165,12 +357,41 @@ Search Request
 8. Return Top K Results
 ```
 
+#### Text Retrieval Operations
+```
+Get Document Text Request
+        ↓
+1. Validate Document ID
+        ↓
+2. Search Text Index (backward scan)
+        ↓
+3. Find Latest Entry for Document
+        ↓
+4. Memory-Mapped Access to Text Data
+        ↓
+5. Return Text String
+
+Extract Text Request (from Posting)
+        ↓
+1. Validate Posting Coordinates
+        ↓
+2. Get Document Text (as above)
+        ↓
+3. Validate Range (start + length ≤ document length)
+        ↓
+4. Extract Substring
+        ↓
+5. Return Text Snippet
+```
+
 ## File Layout and Storage
 
 ### Directory Structure
 ```
 index_directory/
 ├── shardex.meta              # Index metadata and configuration
+├── text_index.dat            # Document text index (if text storage enabled)
+├── text_data.dat             # Document text data (if text storage enabled)
 ├── centroids/                # Shardex segments
 │   ├── segment_000001.shx    # Centroids + metadata + bloom filters
 │   ├── segment_000002.shx
