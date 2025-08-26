@@ -42,7 +42,6 @@ enum WriteOperation {
         text: String,
         completion_sender: oneshot::Sender<Result<(), ShardexError>>,
     },
-
 }
 
 /// Configuration for concurrent document text storage
@@ -467,8 +466,6 @@ impl ConcurrentDocumentTextStorage {
 
                     let _ = completion_sender.send(result);
                 }
-
-
             }
         }
 

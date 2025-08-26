@@ -130,7 +130,6 @@ const POSTING_STORAGE_MAGIC: &[u8; 4] = b"PSTR";
 /// Current version of the posting storage format
 const POSTING_STORAGE_VERSION: u32 = 1;
 
-
 impl PostingStorageHeader {
     /// Size of the header structure in bytes
     pub const SIZE: usize = std::mem::size_of::<PostingStorageHeader>();

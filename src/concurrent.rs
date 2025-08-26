@@ -183,6 +183,8 @@ struct WriterHandle {
 struct PendingWrite {
     /// Unique identifier for the pending operation
     operation_id: Uuid,
+    /// Channel sender to notify when the operation can proceed
+    notify: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Classification of write operations for monitoring and coordination
@@ -264,7 +266,7 @@ impl ConcurrentShardex {
     /// - Read operations are very fast (typically microseconds)
     /// - No coordination overhead with other readers
     /// - No blocking on write operations
-    pub async fn read_operation<F, R>(&self, operation: F) -> Result<R, ShardexError>
+    pub fn read_operation<F, R>(&self, operation: F) -> Result<R, ShardexError>
     where
         F: FnOnce(&ShardexIndex) -> Result<R, ShardexError> + Send,
         R: Send,
@@ -416,7 +418,7 @@ impl ConcurrentShardex {
         match operation_result {
             Ok(result) => {
                 // Commit the changes atomically
-                writer.commit_changes().await?;
+                writer.commit_changes()?;
 
                 // Update coordination statistics
                 self.update_coordination_stats(coordination_duration, false);
@@ -486,16 +488,45 @@ impl ConcurrentShardex {
         }
 
         // There's an active writer, so we need to queue this operation
-        let pending_write = PendingWrite { operation_id };
+        let (notify_sender, notify_receiver) = tokio::sync::oneshot::channel();
+        let pending_write = PendingWrite { 
+            operation_id,
+            notify: notify_sender,
+        };
 
         coordinator.pending_writes.push_back(pending_write);
         coordinator.stats.contended_writes += 1;
 
-        // For now, we'll return an error indicating contention
-        // In a more sophisticated implementation, we could wait for the active writer to finish
-        Err(ShardexError::Config(
-            "Write operation contention detected - please retry".to_string(),
-        ))
+        // Drop the coordinator lock to allow other operations
+        drop(coordinator);
+
+        // Wait for notification that we can proceed
+        match notify_receiver.await {
+            Ok(()) => {
+                // We can now proceed - acquire the coordinator again
+                if let Ok(mut coordinator) = self.write_coordinator.lock() {
+                    let writer_handle = WriterHandle {
+                        writer_id: operation_id,
+                    };
+                    coordinator.active_writer = Some(writer_handle);
+                    coordinator.stats.total_writes += 1;
+
+                    Ok(WriteCoordinationGuard {
+                        operation_id,
+                        coordinator: Arc::clone(&self.write_coordinator),
+                    })
+                } else {
+                    Err(ShardexError::Config(
+                        "Failed to acquire write coordination after waiting".to_string(),
+                    ))
+                }
+            },
+            Err(_) => {
+                Err(ShardexError::Config(
+                    "Write coordination channel closed while waiting".to_string(),
+                ))
+            }
+        }
     }
 
     /// Update coordination statistics for monitoring
@@ -574,13 +605,9 @@ impl Drop for WriteCoordinationGuard {
 
             // Process next pending write if available
             if let Some(pending) = coordinator.pending_writes.pop_front() {
-                let writer_handle = WriterHandle {
-                    writer_id: pending.operation_id,
-                };
-                coordinator.active_writer = Some(writer_handle);
-
-                // Note: In a full implementation, we would notify the waiting operation
-                // For now, this is a simplified coordination mechanism
+                // Notify the waiting operation that it can proceed
+                // The operation will set itself as active_writer when it wakes up
+                let _ = pending.notify.send(()); // Ignore send errors (receiver might be dropped)
             }
         }
     }

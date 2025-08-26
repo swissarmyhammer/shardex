@@ -1409,8 +1409,6 @@ impl Shard {
         Ok(furthest_pair)
     }
 
-
-
     /// Calculate Euclidean distance between two vectors
     fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "Vectors must have same length");

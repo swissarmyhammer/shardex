@@ -55,7 +55,7 @@ pub struct DetailedIndexStats {
 }
 
 /// Real-time performance monitoring system
-/// 
+///
 /// TODO: TECHNICAL DEBT - This struct uses 6 separate Arc<RwLock<T>> fields which creates
 /// potential for lock contention and complexity. Consider refactoring to:
 /// - Message-passing pattern with dedicated metrics collection thread
@@ -199,7 +199,7 @@ pub struct HealthMetrics {
 }
 
 /// Document text storage performance metrics
-/// 
+///
 /// Composed of focused metric categories to improve maintainability and readability.
 /// Each sub-metric can be accessed through its respective category.
 #[derive(Debug, Clone, Default)]
@@ -270,18 +270,38 @@ impl PerformanceMonitor {
     }
 
     /// Record a search operation
-    pub async fn record_search(&self, _latency: Duration, _result_count: usize, success: bool) {
-        // For now, we'll update the performance metrics directly
-        // In a full implementation, we'd use SearchRecordParams with the existing SearchMetrics
-
-        // Update the search latency for percentile calculations (simplified)
-        // This is a placeholder - in a real implementation we'd use proper percentile tracking
-
-        // Just track basic search stats for now to avoid unused variable warnings
+    pub async fn record_search(&self, latency: Duration, result_count: usize, success: bool) {
+        // Update search metrics with actual implementation
+        let mut metrics = self.search_metrics.write().await;
+        
+        // Update counters
+        metrics.total_searches += 1;
         if success {
-            // Search completed successfully with result_count results in latency time
-            // Could update internal metrics here
+            metrics.successful_searches += 1;
         }
+        
+        // Update timing and result statistics
+        let latency_ms = latency.as_millis() as u64;
+        metrics.total_search_time += latency;
+        metrics.total_results_returned += result_count;
+        
+        // Update min/max latencies
+        if latency_ms < metrics.min_search_latency_ms {
+            metrics.min_search_latency_ms = latency_ms;
+        }
+        if latency_ms > metrics.max_search_latency_ms {
+            metrics.max_search_latency_ms = latency_ms;
+        }
+        
+        // Update average calculations
+        metrics.average_search_latency_ms = metrics.total_search_time.as_millis() as u64 / metrics.total_searches;
+        metrics.average_results_per_search = if metrics.total_searches > 0 {
+            metrics.total_results_returned as f64 / metrics.total_searches as f64
+        } else {
+            0.0
+        };
+        
+        metrics.last_updated = SystemTime::now();
     }
 
     /// Record a write operation
@@ -364,13 +384,15 @@ impl PerformanceMonitor {
             metrics.basic.total_text_size += text_size;
 
             // Update average document size
-            metrics.basic.average_document_size = metrics.basic.total_text_size as f64 / metrics.basic.total_documents as f64;
+            metrics.basic.average_document_size =
+                metrics.basic.total_text_size as f64 / metrics.basic.total_documents as f64;
 
             // Update average storage latency
             let latency_ms = latency.as_millis() as f64;
-            metrics.performance.average_storage_latency_ms =
-                (metrics.performance.average_storage_latency_ms * (metrics.basic.document_storage_operations - 1) as f64 + latency_ms)
-                    / metrics.basic.document_storage_operations as f64;
+            metrics.performance.average_storage_latency_ms = (metrics.performance.average_storage_latency_ms
+                * (metrics.basic.document_storage_operations - 1) as f64
+                + latency_ms)
+                / metrics.basic.document_storage_operations as f64;
         } else {
             metrics.errors.storage_errors += 1;
             metrics.errors.last_error_time = Some(SystemTime::now());
@@ -403,7 +425,8 @@ impl PerformanceMonitor {
         } else {
             metrics.cache.cache_misses += 1;
         }
-        metrics.cache.cache_hit_rate = metrics.cache.cache_hits as f64 / (metrics.cache.cache_hits + metrics.cache.cache_misses) as f64;
+        metrics.cache.cache_hit_rate =
+            metrics.cache.cache_hits as f64 / (metrics.cache.cache_hits + metrics.cache.cache_misses) as f64;
 
         // Update throughput calculation
         self.update_retrieval_throughput(&mut metrics).await;
@@ -446,7 +469,9 @@ impl PerformanceMonitor {
         metrics.concurrent.write_batch_operations += 1;
 
         // Update average batch size
-        let total_items = (metrics.concurrent.write_batch_operations - 1) as f64 * metrics.concurrent.average_batch_size + batch_size as f64;
+        let total_items = (metrics.concurrent.write_batch_operations - 1) as f64
+            * metrics.concurrent.average_batch_size
+            + batch_size as f64;
         metrics.concurrent.average_batch_size = total_items / metrics.concurrent.write_batch_operations as f64;
     }
 
@@ -463,7 +488,8 @@ impl PerformanceMonitor {
 
         if timed_out {
             metrics.async_ops.async_timeouts += 1;
-            metrics.async_ops.async_timeout_rate = metrics.async_ops.async_timeouts as f64 / metrics.async_ops.async_operations as f64;
+            metrics.async_ops.async_timeout_rate =
+                metrics.async_ops.async_timeouts as f64 / metrics.async_ops.async_operations as f64;
         }
 
         if operation_type == "read_ahead_hit" {
@@ -472,8 +498,8 @@ impl PerformanceMonitor {
             } else {
                 metrics.async_ops.read_ahead_misses += 1;
             }
-            metrics.async_ops.read_ahead_hit_rate =
-                metrics.async_ops.read_ahead_hits as f64 / (metrics.async_ops.read_ahead_hits + metrics.async_ops.read_ahead_misses) as f64;
+            metrics.async_ops.read_ahead_hit_rate = metrics.async_ops.read_ahead_hits as f64
+                / (metrics.async_ops.read_ahead_hits + metrics.async_ops.read_ahead_misses) as f64;
         }
     }
 
@@ -560,7 +586,8 @@ impl PerformanceMonitor {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
         if metrics.basic.document_storage_operations > 0 {
-            metrics.performance.storage_throughput_docs_per_sec = metrics.basic.document_storage_operations as f64 / 60.0;
+            metrics.performance.storage_throughput_docs_per_sec =
+                metrics.basic.document_storage_operations as f64 / 60.0;
             // Rough estimate
         }
     }
@@ -570,7 +597,8 @@ impl PerformanceMonitor {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
         if metrics.basic.document_retrieval_operations > 0 {
-            metrics.performance.retrieval_throughput_docs_per_sec = metrics.basic.document_retrieval_operations as f64 / 60.0;
+            metrics.performance.retrieval_throughput_docs_per_sec =
+                metrics.basic.document_retrieval_operations as f64 / 60.0;
             // Rough estimate
         }
     }

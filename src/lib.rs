@@ -44,7 +44,7 @@
 //! ## Struct Definition Standards
 //!
 //! ### Default Implementation Rules
-//! 
+//!
 //! 1. **PREFER** `#[derive(Default)]` for structs with all zero/empty defaults:
 //!    ```rust
 //!    #[derive(Debug, Clone, Default)]
@@ -99,7 +99,7 @@
 //!    ```
 //!
 //! ### Struct Size Guidelines
-//! 
+//!
 //! 1. **MAXIMUM** 15 fields per struct (prefer 10 or fewer)
 //! 2. **BREAK DOWN** large structs into logical sub-structures:
 //!    ```rust
@@ -115,27 +115,27 @@
 //! 4. **USE** composition over large flat structures
 //!
 //! ### Derive Attribute Ordering
-//! 
+//!
 //! Always use consistent ordering for derive attributes:
 //! ```rust
 //! #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 //! ```
-//! 
+//!
 //! Order: Debug, Clone, Copy (if applicable), Default, PartialEq, Eq, Hash, Serialize, Deserialize
 //!
 //! ### Builder Pattern Usage
-//! 
+//!
 //! Use builder patterns for:
 //! - Configuration structs with many optional parameters
 //! - Complex initialization sequences
 //! - Structs with validation requirements
-//! 
+//!
 //! ```rust
 //! #[derive(Debug, Clone, Default)]
 //! pub struct MyConfig {
 //!     pub timeout: u64,
 //! }
-//! 
+//!
 //! impl MyConfig {
 //!     pub fn new() -> Self { Self::default() }
 //!     
