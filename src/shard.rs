@@ -1313,9 +1313,22 @@ impl Shard {
     /// (cluster_a_indices, cluster_b_indices)
     #[allow(dead_code)]
     fn cluster_vectors(&self) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
-        let active_indices: Vec<usize> = (0..self.current_count())
-            .filter(|&i| !self.is_deleted(i).unwrap_or(true))
-            .collect();
+        let mut active_indices = Vec::new();
+        for i in 0..self.current_count() {
+            match self.is_deleted(i) {
+                Ok(deleted) => {
+                    if !deleted {
+                        active_indices.push(i);
+                    }
+                },
+                Err(e) => {
+                    return Err(e.with_operation_context(
+                        "vector clustering", 
+                        &format!("failed to check deletion status for index {}", i)
+                    ));
+                }
+            }
+        }
 
         if active_indices.len() < 2 {
             return Err(ShardexError::Config(
@@ -1398,9 +1411,25 @@ impl Shard {
 
             // Ensure both clusters have at least one vector
             if cluster_a_indices.is_empty() {
-                cluster_a_indices.push(cluster_b_indices.pop().unwrap());
+                if let Some(index) = cluster_b_indices.pop() {
+                    cluster_a_indices.push(index);
+                } else {
+                    return Err(ShardexError::shard_operation_failed(
+                        self.id.raw(),
+                        "clustering",
+                        "both clusters are empty after vector assignment",
+                    ));
+                }
             } else if cluster_b_indices.is_empty() {
-                cluster_b_indices.push(cluster_a_indices.pop().unwrap());
+                if let Some(index) = cluster_a_indices.pop() {
+                    cluster_b_indices.push(index);
+                } else {
+                    return Err(ShardexError::shard_operation_failed(
+                        self.id.raw(),
+                        "clustering", 
+                        "cluster A is empty but cannot redistribute vectors",
+                    ));
+                }
             }
 
             // Update centroids

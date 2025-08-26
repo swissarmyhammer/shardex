@@ -302,6 +302,151 @@ impl ShardexError {
             _ => None,
         }
     }
+
+    /// Add file context to an error, preserving the original error information
+    pub fn with_file_context(
+        self,
+        file_path: impl AsRef<std::path::Path>,
+        operation: &str,
+    ) -> Self {
+        let file_path_str = file_path.as_ref().display().to_string();
+        let context = format!("{} (file: {})", operation, file_path_str);
+        
+        match self {
+            Self::Io(ref err) => {
+                Self::Io(std::io::Error::new(
+                    err.kind(),
+                    format!("{}: {}", context, err),
+                ))
+            }
+            Self::Config(ref msg) => Self::Config(format!("{}: {}", context, msg)),
+            Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: {}", context, msg)),
+            Self::Wal(ref msg) => Self::Wal(format!("{}: {}", context, msg)),
+            Self::Shard(ref msg) => Self::Shard(format!("{}: {}", context, msg)),
+            Self::Search(ref msg) => Self::Search(format!("{}: {}", context, msg)),
+            Self::Corruption(ref msg) => Self::Corruption(format!("{}: {}", context, msg)),
+            Self::TextCorruption(ref msg) => Self::TextCorruption(format!("{}: {}", context, msg)),
+            _ => self, // For structured errors, return as-is to preserve structure
+        }
+    }
+
+    /// Add operation context to an error, preserving the original error information
+    pub fn with_operation_context(self, operation: &str, additional_context: &str) -> Self {
+        let context = format!("{}: {}", operation, additional_context);
+        
+        match self {
+            Self::Io(ref err) => {
+                Self::Io(std::io::Error::new(
+                    err.kind(),
+                    format!("{}: {}", context, err),
+                ))
+            }
+            Self::Config(ref msg) => Self::Config(format!("{}: {}", context, msg)),
+            Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: {}", context, msg)),
+            Self::Wal(ref msg) => Self::Wal(format!("{}: {}", context, msg)),
+            Self::Shard(ref msg) => Self::Shard(format!("{}: {}", context, msg)),
+            Self::Search(ref msg) => Self::Search(format!("{}: {}", context, msg)),
+            Self::Corruption(ref msg) => Self::Corruption(format!("{}: {}", context, msg)),
+            Self::TextCorruption(ref msg) => Self::TextCorruption(format!("{}: {}", context, msg)),
+            Self::InvalidInput { field, reason, suggestion } => Self::InvalidInput {
+                field: field.clone(),
+                reason: format!("{}: {}", context, reason),
+                suggestion: suggestion.clone(),
+            },
+            Self::InvalidDocumentId { reason, suggestion } => Self::InvalidDocumentId {
+                reason: format!("{}: {}", context, reason),
+                suggestion: suggestion.clone(),
+            },
+            Self::InvalidPostingData { reason, suggestion } => Self::InvalidPostingData {
+                reason: format!("{}: {}", context, reason),
+                suggestion: suggestion.clone(),
+            },
+            Self::TransientFailure { operation: op, reason, recovery_suggestion, retry_count } => {
+                Self::TransientFailure {
+                    operation: format!("{}: {}", context, op),
+                    reason: reason.clone(),
+                    recovery_suggestion: recovery_suggestion.clone(),
+                    retry_count: retry_count.clone(),
+                }
+            },
+            Self::ResourceExhausted { resource, reason, suggestion } => Self::ResourceExhausted {
+                resource: resource.clone(),
+                reason: format!("{}: {}", context, reason),
+                suggestion: suggestion.clone(),
+            },
+            Self::ConcurrencyError { operation: op, reason, suggestion } => Self::ConcurrencyError {
+                operation: format!("{}: {}", context, op),
+                reason: reason.clone(),
+                suggestion: suggestion.clone(),
+            },
+            _ => self, // For other structured errors, return as-is
+        }
+    }
+
+    /// Chain this error with a source error, providing error causality
+    pub fn chain_with_source(
+        self,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Self {
+        let source_msg = source.to_string();
+        
+        match self {
+            Self::Config(ref msg) => Self::Config(format!("{}: caused by {}", msg, source_msg)),
+            Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: caused by {}", msg, source_msg)),
+            Self::Wal(ref msg) => Self::Wal(format!("{}: caused by {}", msg, source_msg)),
+            Self::Shard(ref msg) => Self::Shard(format!("{}: caused by {}", msg, source_msg)),
+            Self::Search(ref msg) => Self::Search(format!("{}: caused by {}", msg, source_msg)),
+            Self::Corruption(ref msg) => Self::Corruption(format!("{}: caused by {}", msg, source_msg)),
+            Self::TextCorruption(ref msg) => Self::TextCorruption(format!("{}: caused by {}", msg, source_msg)),
+            _ => self, // For IO errors and structured errors, preserve original
+        }
+    }
+
+    /// Create a file operation error with context
+    pub fn file_operation_failed(
+        file_path: impl AsRef<std::path::Path>,
+        operation: &str,
+        source: std::io::Error,
+    ) -> Self {
+        Self::Io(source).with_file_context(file_path, operation)
+    }
+
+    /// Create a memory mapping error with file context
+    pub fn memory_mapping_failed(
+        file_path: impl AsRef<std::path::Path>,
+        operation: &str,
+        reason: impl Into<String>,
+    ) -> Self {
+        let file_path_str = file_path.as_ref().display().to_string();
+        Self::MemoryMapping(format!("{} failed for file {}: {}", operation, file_path_str, reason.into()))
+    }
+
+    /// Create a WAL operation error with context
+    pub fn wal_operation_failed(
+        operation: &str,
+        context: &str,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::Wal(format!("{} ({}): {}", operation, context, reason.into()))
+    }
+
+    /// Create a shard operation error with context
+    pub fn shard_operation_failed(
+        shard_id: impl std::fmt::Display,
+        operation: &str,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::Shard(format!("Shard {} {}: {}", shard_id, operation, reason.into()))
+    }
+
+    /// Create a search operation error with context
+    pub fn search_operation_failed(
+        operation: &str,
+        context: &str,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::Search(format!("{} ({}): {}", operation, context, reason.into()))
+    }
 }
 
 #[cfg(test)]
@@ -644,5 +789,262 @@ mod tests {
 
         assert!(!not_found_error.is_transient());
         assert!(!not_found_error.is_recoverable());
+    }
+
+    #[test]
+    fn test_with_file_context() {
+        use std::path::Path;
+        
+        let io_error = ShardexError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "File not found",
+        ));
+        let contextual_error = io_error.with_file_context(Path::new("/tmp/test.dat"), "reading shard data");
+        
+        let error_str = format!("{}", contextual_error);
+        assert!(error_str.contains("reading shard data"));
+        assert!(error_str.contains("/tmp/test.dat"));
+        assert!(error_str.contains("File not found"));
+    }
+
+    #[test]
+    fn test_with_file_context_config_error() {
+        use std::path::Path;
+        
+        let config_error = ShardexError::Config("Invalid dimension".to_string());
+        let contextual_error = config_error.with_file_context(Path::new("/etc/shardex.conf"), "parsing configuration");
+        
+        let error_str = format!("{}", contextual_error);
+        assert!(error_str.contains("parsing configuration"));
+        assert!(error_str.contains("/etc/shardex.conf"));
+        assert!(error_str.contains("Invalid dimension"));
+    }
+
+    #[test]
+    fn test_with_operation_context() {
+        let config_error = ShardexError::Config("Missing field".to_string());
+        let contextual_error = config_error.with_operation_context("index initialization", "validating shard count");
+        
+        let error_str = format!("{}", contextual_error);
+        assert!(error_str.contains("index initialization"));
+        assert!(error_str.contains("validating shard count"));
+        assert!(error_str.contains("Missing field"));
+    }
+
+    #[test]
+    fn test_with_operation_context_invalid_input() {
+        let input_error = ShardexError::InvalidInput {
+            field: "vector_dimension".to_string(),
+            reason: "must be positive".to_string(),
+            suggestion: "Provide a positive integer".to_string(),
+        };
+        let contextual_error = input_error.with_operation_context("posting validation", "checking vector dimensions");
+        
+        let error_str = format!("{}", contextual_error);
+        assert!(error_str.contains("posting validation"));
+        assert!(error_str.contains("checking vector dimensions"));
+        assert!(error_str.contains("must be positive"));
+        assert!(error_str.contains("Provide a positive integer"));
+    }
+
+    #[test] 
+    fn test_with_operation_context_transient_failure() {
+        let transient_error = ShardexError::TransientFailure {
+            operation: "disk write".to_string(),
+            reason: "temporary space issue".to_string(),
+            recovery_suggestion: "retry after cleanup".to_string(),
+            retry_count: 1,
+        };
+        let contextual_error = transient_error.with_operation_context("shard persistence", "syncing to disk");
+        
+        let error_str = format!("{}", contextual_error);
+        assert!(error_str.contains("shard persistence"));
+        assert!(error_str.contains("syncing to disk"));
+        assert!(error_str.contains("temporary space issue"));
+        assert!(error_str.contains("retry after cleanup"));
+    }
+
+    #[test]
+    fn test_chain_with_source() {
+        let config_error = ShardexError::Config("Parse error".to_string());
+        let source_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid JSON");
+        let chained_error = config_error.chain_with_source(Box::new(source_error));
+        
+        let error_str = format!("{}", chained_error);
+        assert!(error_str.contains("Parse error"));
+        assert!(error_str.contains("caused by"));
+        assert!(error_str.contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn test_file_operation_failed() {
+        use std::path::Path;
+        
+        let io_error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Access denied");
+        let error = ShardexError::file_operation_failed(Path::new("/data/shard.bin"), "opening shard file", io_error);
+        
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("opening shard file"));
+        assert!(error_str.contains("/data/shard.bin"));
+        assert!(error_str.contains("Access denied"));
+    }
+
+    #[test]
+    fn test_memory_mapping_failed() {
+        use std::path::Path;
+        
+        let error = ShardexError::memory_mapping_failed(
+            Path::new("/data/vector.mmap"),
+            "memory mapping vectors",
+            "insufficient virtual memory",
+        );
+        
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("memory mapping vectors failed"));
+        assert!(error_str.contains("/data/vector.mmap"));
+        assert!(error_str.contains("insufficient virtual memory"));
+    }
+
+    #[test]
+    fn test_wal_operation_failed() {
+        let error = ShardexError::wal_operation_failed(
+            "log rotation",
+            "segment 5",
+            "disk full",
+        );
+        
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("log rotation"));
+        assert!(error_str.contains("segment 5"));
+        assert!(error_str.contains("disk full"));
+    }
+
+    #[test]
+    fn test_shard_operation_failed() {
+        let error = ShardexError::shard_operation_failed(42, "split operation", "insufficient data");
+        
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("Shard 42"));
+        assert!(error_str.contains("split operation"));
+        assert!(error_str.contains("insufficient data"));
+    }
+
+    #[test]
+    fn test_search_operation_failed() {
+        let error = ShardexError::search_operation_failed(
+            "vector similarity search",
+            "shard 7",
+            "corrupted index",
+        );
+        
+        let error_str = format!("{}", error);
+        assert!(error_str.contains("vector similarity search"));
+        assert!(error_str.contains("shard 7"));
+        assert!(error_str.contains("corrupted index"));
+    }
+
+    #[test]
+    fn test_context_chaining() {
+        use std::path::Path;
+        
+        // Test that multiple context applications work correctly
+        let base_error = ShardexError::Config("Invalid setting".to_string());
+        let error_with_file = base_error.with_file_context(Path::new("/etc/config.toml"), "loading config");
+        let error_with_operation = error_with_file.with_operation_context("startup", "initializing system");
+        
+        let error_str = format!("{}", error_with_operation);
+        assert!(error_str.contains("startup"));
+        assert!(error_str.contains("initializing system"));
+        assert!(error_str.contains("loading config"));
+        assert!(error_str.contains("/etc/config.toml"));
+        assert!(error_str.contains("Invalid setting"));
+    }
+
+    #[test]
+    fn test_context_preserves_error_classification() {
+        let transient_error = ShardexError::TransientFailure {
+            operation: "test".to_string(),
+            reason: "test".to_string(),
+            recovery_suggestion: "test".to_string(),
+            retry_count: 1,
+        };
+        
+        let contextual_error = transient_error.with_operation_context("test_op", "test_context");
+        
+        // Ensure error classification is preserved after adding context
+        assert!(contextual_error.is_transient());
+        assert!(contextual_error.is_recoverable());
+        assert_eq!(contextual_error.retry_count(), Some(1));
+    }
+
+    #[test] 
+    fn test_structured_error_context_preservation() {
+        // Test that structured errors preserve their structure when context is added
+        let invalid_input = ShardexError::InvalidInput {
+            field: "test_field".to_string(),
+            reason: "test_reason".to_string(),
+            suggestion: "test_suggestion".to_string(),
+        };
+        
+        let contextual_error = invalid_input.with_operation_context("validation", "checking input");
+        
+        match contextual_error {
+            ShardexError::InvalidInput { field, reason, suggestion } => {
+                assert_eq!(field, "test_field");
+                assert!(reason.contains("validation"));
+                assert!(reason.contains("checking input"));
+                assert!(reason.contains("test_reason"));
+                assert_eq!(suggestion, "test_suggestion");
+            },
+            _ => panic!("Expected InvalidInput variant to be preserved"),
+        }
+    }
+
+    #[test]
+    fn test_error_context_integration_validation() {
+        use std::path::Path;
+        
+        // Comprehensive test of all error context enhancement features
+        let base_error = ShardexError::Config("Invalid vector dimension setting".to_string());
+        
+        // Test file context
+        let file_error = base_error.with_file_context(
+            Path::new("/etc/shardex/index.toml"),
+            "loading index configuration"
+        );
+        
+        // Test operation context  
+        let operation_error = file_error.with_operation_context(
+            "system initialization",
+            "preparing search engine"
+        );
+        
+        let error_msg = format!("{}", operation_error);
+        
+        // Verify all context information is present
+        assert!(error_msg.contains("system initialization"));
+        assert!(error_msg.contains("preparing search engine"));
+        assert!(error_msg.contains("loading index configuration"));
+        assert!(error_msg.contains("/etc/shardex/index.toml"));
+        assert!(error_msg.contains("Invalid vector dimension setting"));
+        
+        // Test helper methods
+        let shard_error = ShardexError::shard_operation_failed(
+            42,
+            "split operation",
+            "insufficient vectors for clustering"
+        );
+        let shard_msg = format!("{}", shard_error);
+        assert!(shard_msg.contains("Shard 42"));
+        assert!(shard_msg.contains("split operation"));
+        assert!(shard_msg.contains("insufficient vectors for clustering"));
+        
+        // Test transient error classification preservation
+        let transient = ShardexError::transient_failure("network write", "connection timeout", 3);
+        let contextual_transient = transient.with_operation_context("data persistence", "syncing to storage");
+        
+        assert!(contextual_transient.is_transient());
+        assert!(contextual_transient.is_recoverable());
+        assert_eq!(contextual_transient.retry_count(), Some(3));
     }
 }
