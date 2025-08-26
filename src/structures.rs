@@ -696,8 +696,6 @@ pub struct FlushStats {
 }
 
 impl FlushStats {
-
-
     /// Get total flush duration in milliseconds
     pub fn total_duration_ms(&self) -> u64 {
         self.total_duration.as_millis() as u64
@@ -765,8 +763,6 @@ impl FlushStats {
             .unwrap_or("unknown")
     }
 }
-
-
 
 impl Display for FlushStats {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

@@ -55,7 +55,7 @@ pub struct DetailedIndexStats {
 }
 
 /// Real-time performance monitoring system
-/// 
+///
 /// TODO: TECHNICAL DEBT - This struct uses 6 separate Arc<RwLock<T>> fields which creates
 /// potential for lock contention and complexity. Consider refactoring to:
 /// - Message-passing pattern with dedicated metrics collection thread
@@ -199,7 +199,7 @@ pub struct HealthMetrics {
 }
 
 /// Document text storage performance metrics
-/// 
+///
 /// Composed of focused metric categories to improve maintainability and readability.
 /// Each sub-metric can be accessed through its respective category.
 #[derive(Debug, Clone, Default)]
@@ -364,13 +364,15 @@ impl PerformanceMonitor {
             metrics.basic.total_text_size += text_size;
 
             // Update average document size
-            metrics.basic.average_document_size = metrics.basic.total_text_size as f64 / metrics.basic.total_documents as f64;
+            metrics.basic.average_document_size =
+                metrics.basic.total_text_size as f64 / metrics.basic.total_documents as f64;
 
             // Update average storage latency
             let latency_ms = latency.as_millis() as f64;
-            metrics.performance.average_storage_latency_ms =
-                (metrics.performance.average_storage_latency_ms * (metrics.basic.document_storage_operations - 1) as f64 + latency_ms)
-                    / metrics.basic.document_storage_operations as f64;
+            metrics.performance.average_storage_latency_ms = (metrics.performance.average_storage_latency_ms
+                * (metrics.basic.document_storage_operations - 1) as f64
+                + latency_ms)
+                / metrics.basic.document_storage_operations as f64;
         } else {
             metrics.errors.storage_errors += 1;
             metrics.errors.last_error_time = Some(SystemTime::now());
@@ -403,7 +405,8 @@ impl PerformanceMonitor {
         } else {
             metrics.cache.cache_misses += 1;
         }
-        metrics.cache.cache_hit_rate = metrics.cache.cache_hits as f64 / (metrics.cache.cache_hits + metrics.cache.cache_misses) as f64;
+        metrics.cache.cache_hit_rate =
+            metrics.cache.cache_hits as f64 / (metrics.cache.cache_hits + metrics.cache.cache_misses) as f64;
 
         // Update throughput calculation
         self.update_retrieval_throughput(&mut metrics).await;
@@ -446,7 +449,9 @@ impl PerformanceMonitor {
         metrics.concurrent.write_batch_operations += 1;
 
         // Update average batch size
-        let total_items = (metrics.concurrent.write_batch_operations - 1) as f64 * metrics.concurrent.average_batch_size + batch_size as f64;
+        let total_items = (metrics.concurrent.write_batch_operations - 1) as f64
+            * metrics.concurrent.average_batch_size
+            + batch_size as f64;
         metrics.concurrent.average_batch_size = total_items / metrics.concurrent.write_batch_operations as f64;
     }
 
@@ -463,7 +468,8 @@ impl PerformanceMonitor {
 
         if timed_out {
             metrics.async_ops.async_timeouts += 1;
-            metrics.async_ops.async_timeout_rate = metrics.async_ops.async_timeouts as f64 / metrics.async_ops.async_operations as f64;
+            metrics.async_ops.async_timeout_rate =
+                metrics.async_ops.async_timeouts as f64 / metrics.async_ops.async_operations as f64;
         }
 
         if operation_type == "read_ahead_hit" {
@@ -472,8 +478,8 @@ impl PerformanceMonitor {
             } else {
                 metrics.async_ops.read_ahead_misses += 1;
             }
-            metrics.async_ops.read_ahead_hit_rate =
-                metrics.async_ops.read_ahead_hits as f64 / (metrics.async_ops.read_ahead_hits + metrics.async_ops.read_ahead_misses) as f64;
+            metrics.async_ops.read_ahead_hit_rate = metrics.async_ops.read_ahead_hits as f64
+                / (metrics.async_ops.read_ahead_hits + metrics.async_ops.read_ahead_misses) as f64;
         }
     }
 
@@ -560,7 +566,8 @@ impl PerformanceMonitor {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
         if metrics.basic.document_storage_operations > 0 {
-            metrics.performance.storage_throughput_docs_per_sec = metrics.basic.document_storage_operations as f64 / 60.0;
+            metrics.performance.storage_throughput_docs_per_sec =
+                metrics.basic.document_storage_operations as f64 / 60.0;
             // Rough estimate
         }
     }
@@ -570,7 +577,8 @@ impl PerformanceMonitor {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
         if metrics.basic.document_retrieval_operations > 0 {
-            metrics.performance.retrieval_throughput_docs_per_sec = metrics.basic.document_retrieval_operations as f64 / 60.0;
+            metrics.performance.retrieval_throughput_docs_per_sec =
+                metrics.basic.document_retrieval_operations as f64 / 60.0;
             // Rough estimate
         }
     }

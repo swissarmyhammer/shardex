@@ -416,7 +416,7 @@ impl ConcurrentShardex {
         match operation_result {
             Ok(result) => {
                 // Commit the changes atomically
-                writer.commit_changes().await?;
+                writer.commit_changes()?;
 
                 // Update coordination statistics
                 self.update_coordination_stats(coordination_duration, false);

@@ -121,10 +121,7 @@ async fn test_reader_consistency_during_writes() {
         thread::sleep(Duration::from_millis(10));
 
         // Commit the changes
-        writer
-            .commit_changes()
-            .await
-            .expect("Failed to commit changes");
+        writer.commit_changes().expect("Failed to commit changes");
 
         println!("Completed write operation {}", i + 1);
     }
@@ -178,10 +175,7 @@ async fn test_sequential_writer_operations() {
         let _stats = writer.stats(0).expect("Failed to get writer stats");
 
         // Commit the changes
-        writer
-            .commit_changes()
-            .await
-            .expect("Failed to commit changes");
+        writer.commit_changes().expect("Failed to commit changes");
 
         // Verify the changes are visible
         let current_count = cow_index.shard_count();
@@ -231,10 +225,7 @@ async fn test_memory_cleanup_old_versions() {
             let writer = cow_index
                 .clone_for_write()
                 .expect("Failed to create writer");
-            writer
-                .commit_changes()
-                .await
-                .expect("Failed to commit changes");
+            writer.commit_changes().expect("Failed to commit changes");
         }
     }
 
