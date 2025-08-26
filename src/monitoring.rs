@@ -20,8 +20,7 @@ const HISTOGRAM_MIN_MICROS: u64 = 1; // 1 microsecond minimum
 const HISTOGRAM_MAX_MICROS: u64 = 3_600_000_000; // 1 hour in microseconds 
 const HISTOGRAM_PRECISION: u8 = 3; // 3 significant digits
 
-// Test tolerance constants for percentile testing
-const PERCENTILE_TEST_TOLERANCE_MS: u64 = 5; // 5ms tolerance for percentile tests
+
 
 /// Enhanced index statistics with comprehensive performance monitoring
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -686,6 +685,9 @@ impl PercentileCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test tolerance constants for percentile testing
+    const PERCENTILE_TEST_TOLERANCE_MS: u64 = 5; // 5ms tolerance for percentile tests
 
     #[tokio::test]
     async fn test_performance_monitor() {

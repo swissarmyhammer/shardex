@@ -213,7 +213,33 @@ impl OptimizedMemoryMapping {
         Ok(())
     }
 
-    /// Apply platform-specific memory advice hints
+    /// Apply platform-specific memory advice hints (Unix/Linux implementation)
+    /// 
+    /// Uses the madvise() system call to provide the kernel with information about
+    /// expected memory access patterns, which can help optimize memory management.
+    /// 
+    /// # Platform Behavior
+    /// - Unix/Linux: Uses libc::madvise() with appropriate MADV_* flags
+    /// - Sequential access → MADV_SEQUENTIAL (optimize for sequential reading)
+    /// - Random access → MADV_RANDOM (disable readahead, optimize for random access)
+    /// - Mixed access → MADV_NORMAL (default kernel behavior)
+    /// 
+    /// # Safety Considerations
+    /// - Uses unsafe madvise() system call on the provided memory pointer
+    /// - Assumes ptr and len represent a valid memory-mapped region
+    /// - Failures are logged but don't cause operation failure (advisory nature)
+    /// 
+    /// # Error Handling
+    /// - System call failures are logged as warnings using portable error reporting
+    /// - Always returns Ok(()) as memory advice failures are non-critical
+    /// - Distinguishes between different errno conditions for better diagnostics
+    /// 
+    /// # Arguments
+    /// - `ptr`: Raw pointer to the start of the memory region
+    /// - `len`: Length of the memory region in bytes
+    /// 
+    /// # Returns
+    /// Always returns Ok(()) - madvise failures don't break functionality
     #[cfg(unix)]
     fn apply_platform_memory_advice(&self, ptr: *mut std::ffi::c_void, len: usize) -> Result<(), ShardexError> {
         use std::ffi::c_int;
@@ -232,11 +258,11 @@ impl OptimizedMemoryMapping {
             log::debug!("Successfully applied memory advice: {:?}", self.access_pattern);
             Ok(())
         } else {
-            let error_code = unsafe { *libc::__error() };
+            let error = std::io::Error::last_os_error();
             log::warn!(
-                "Failed to apply memory advice {:?}: errno {}",
+                "Failed to apply memory advice {:?}: {}",
                 self.access_pattern,
-                error_code
+                error
             );
             // Don't fail the operation - madvise failures are not critical
             Ok(())
@@ -244,10 +270,29 @@ impl OptimizedMemoryMapping {
     }
 
     /// Apply platform-specific memory advice hints (Windows implementation)
+    /// 
+    /// Windows has limited equivalents to Unix madvise(). This implementation
+    /// provides logging for different access patterns but does not make actual
+    /// system calls due to Windows API limitations.
+    /// 
+    /// # Platform Behavior
+    /// - Windows: Limited memory advice support compared to Unix
+    /// - Could potentially use VirtualAlloc with MEM_RESET for some patterns
+    /// - Currently logs access patterns for debugging and monitoring
+    /// 
+    /// # Future Enhancements
+    /// - Could implement VirtualAlloc(MEM_RESET) for memory reset hints
+    /// - Could use PrefetchVirtualMemory for sequential access optimization
+    /// - Windows 8+ supports limited memory management hints
+    /// 
+    /// # Arguments
+    /// - `_ptr`: Raw pointer to the start of the memory region (unused)
+    /// - `_len`: Length of the memory region in bytes (unused)
+    /// 
+    /// # Returns
+    /// Always returns Ok(()) - Windows implementation is currently advisory logging only
     #[cfg(windows)]
-    fn apply_platform_memory_advice(&self, ptr: *mut std::ffi::c_void, len: usize) -> Result<(), ShardexError> {
-        use std::ffi::c_void;
-        
+    fn apply_platform_memory_advice(&self, _ptr: *mut std::ffi::c_void, _len: usize) -> Result<(), ShardexError> {
         // Windows doesn't have direct equivalents to madvise
         // We can use VirtualAlloc with MEM_RESET for some patterns
         match self.access_pattern {
@@ -267,6 +312,22 @@ impl OptimizedMemoryMapping {
     }
 
     /// Apply platform-specific memory advice hints (fallback for unsupported platforms)
+    /// 
+    /// Fallback implementation for platforms that don't have Unix madvise() or
+    /// Windows memory management APIs. Provides logging for access patterns
+    /// without making any system calls.
+    /// 
+    /// # Platform Behavior
+    /// - Other platforms: No system calls made, logging only
+    /// - Provides consistent API across all platforms
+    /// - Allows code to run on any platform without conditional compilation at call sites
+    /// 
+    /// # Arguments
+    /// - `_ptr`: Raw pointer to the start of the memory region (unused)
+    /// - `_len`: Length of the memory region in bytes (unused)
+    /// 
+    /// # Returns
+    /// Always returns Ok(()) - fallback implementation is logging only
     #[cfg(not(any(unix, windows)))]
     fn apply_platform_memory_advice(&self, _ptr: *mut std::ffi::c_void, _len: usize) -> Result<(), ShardexError> {
         log::debug!("Memory advice not supported on this platform, pattern: {:?}", self.access_pattern);
