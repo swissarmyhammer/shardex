@@ -34,6 +34,16 @@ pub trait Shardex {
     async fn flush_with_stats(&mut self) -> Result<FlushStats, Self::Error>;
     async fn stats(&self) -> Result<IndexStats, Self::Error>;
     async fn detailed_stats(&self) -> Result<DetailedIndexStats, Self::Error>;
+
+    // Document Text Storage Methods
+    async fn get_document_text(&self, document_id: DocumentId) -> Result<String, Self::Error>;
+    async fn extract_text(&self, posting: &Posting) -> Result<String, Self::Error>;
+    async fn replace_document_with_postings(
+        &mut self,
+        document_id: DocumentId,
+        text: String,
+        postings: Vec<Posting>,
+    ) -> Result<(), Self::Error>;
 }
 ```
 
@@ -161,6 +171,91 @@ let stats = index.stats().await?;
 println!("Index has {} documents", stats.total_postings);
 ```
 
+##### `get_document_text(&self, document_id: DocumentId) -> Result<String, Self::Error>`
+
+Retrieves the complete current text for a document.
+
+**Parameters:**
+- `document_id`: The document identifier
+
+**Returns:**
+- `Ok(String)`: The complete document text
+- `Err(ShardexError)`: Error if document not found or text storage disabled
+
+**Example:**
+```rust
+let document_text = index.get_document_text(document_id).await?;
+println!("Document content: {}", document_text);
+```
+
+##### `extract_text(&self, posting: &Posting) -> Result<String, Self::Error>`
+
+Extracts text substring using posting coordinates (document_id, start, length).
+
+**Parameters:**
+- `posting`: Posting containing document coordinates
+
+**Returns:**
+- `Ok(String)`: Extracted text substring
+- `Err(ShardexError)`: Error if coordinates invalid or document not found
+
+**Example:**
+```rust
+// From search results
+let search_results = index.search(&query_vector, 10, None).await?;
+for result in search_results {
+    let posting = Posting {
+        document_id: result.document_id,
+        start: result.start,
+        length: result.length,
+        vector: result.vector,
+    };
+    
+    let text_snippet = index.extract_text(&posting).await?;
+    println!("Found: '{}'", text_snippet);
+}
+```
+
+##### `replace_document_with_postings(&mut self, document_id: DocumentId, text: String, postings: Vec<Posting>) -> Result<(), Self::Error>`
+
+Atomically replaces document text and all associated postings in a single transaction.
+
+**Parameters:**
+- `document_id`: Document identifier
+- `text`: New document text content
+- `postings`: New postings for the document
+
+**Returns:**
+- `Ok(())`: Operation completed successfully
+- `Err(ShardexError)`: Error during atomic replacement
+
+**Example:**
+```rust
+let document_text = "The quick brown fox jumps over the lazy dog.";
+let postings = vec![
+    Posting {
+        document_id: doc_id,
+        start: 0,
+        length: 9, // "The quick"
+        vector: embedding1,
+    },
+    Posting {
+        document_id: doc_id,
+        start: 10,
+        length: 9, // "brown fox"
+        vector: embedding2,
+    },
+    Posting {
+        document_id: doc_id,
+        start: 20,
+        length: 5, // "jumps"
+        vector: embedding3,
+    },
+];
+
+index.replace_document_with_postings(doc_id, document_text.to_string(), postings).await?;
+```
+
 ## Data Structures
 
 ### `Posting`
@@ -261,6 +356,7 @@ pub struct ShardexConfig {
     pub batch_write_interval_ms: u64,
     pub default_slop_factor: usize,
     pub bloom_filter_size: usize,
+    pub max_document_text_size: usize,
 }
 ```
 
@@ -277,6 +373,7 @@ impl ShardexConfig {
     pub fn batch_write_interval_ms(mut self, ms: u64) -> Self;
     pub fn default_slop_factor(mut self, factor: usize) -> Self;
     pub fn bloom_filter_size(mut self, size: usize) -> Self;
+    pub fn max_document_text_size(mut self, size: usize) -> Self;
 }
 ```
 
@@ -349,6 +446,23 @@ Default number of shards to search when no slop factor is specified.
 .default_slop_factor(5) // For high-accuracy applications
 ```
 
+##### `max_document_text_size: usize`
+
+Maximum size in bytes for document text storage per document. Set to 0 to disable text storage.
+
+**Default:** `0` (disabled)
+
+**Trade-offs:**
+- 0: Text storage disabled, minimal overhead
+- Small values: Memory efficient, may limit document sizes
+- Large values: Supports large documents, higher memory usage
+
+**Example:**
+```rust
+.max_document_text_size(10 * 1024 * 1024) // 10MB per document
+.max_document_text_size(0) // Disable text storage
+```
+
 ## Error Handling
 
 ### `ShardexError`
@@ -369,6 +483,18 @@ pub enum ShardexError {
     
     #[error("Configuration error: {0}")]
     Config(String),
+    
+    #[error("Document text not found for document ID: {document_id}")]
+    DocumentTextNotFound { document_id: String },
+    
+    #[error("Invalid range: start={start}, length={length} for document length {document_length}")]
+    InvalidRange { start: u32, length: u32, document_length: u64 },
+    
+    #[error("Document text size {size} exceeds maximum allowed {max_size}")]
+    DocumentTooLarge { size: usize, max_size: usize },
+    
+    #[error("Text storage corruption detected: {details}")]
+    TextCorruption { details: String },
 }
 ```
 
@@ -410,6 +536,41 @@ Invalid configuration parameters.
 - Zero or negative values for required parameters
 - Invalid file paths
 - Incompatible parameter combinations
+
+##### `DocumentTextNotFound { document_id: String }`
+
+Document text not available for the requested document ID.
+
+**Common Causes:**
+- Document ID does not exist
+- Text storage is disabled (max_document_text_size = 0)
+- Document was added without text storage
+
+##### `InvalidRange { start: u32, length: u32, document_length: u64 }`
+
+Text extraction coordinates are invalid for the document.
+
+**Common Causes:**
+- Start position beyond document end
+- Length extends beyond document end
+- Negative or invalid coordinates
+
+##### `DocumentTooLarge { size: usize, max_size: usize }`
+
+Document text exceeds the configured size limit.
+
+**Common Causes:**
+- Document larger than max_document_text_size
+- Configuration needs adjustment for large documents
+
+##### `TextCorruption { details: String }`
+
+Text storage file corruption detected during read/write operations.
+
+**Common Causes:**
+- Unexpected shutdown during write operations
+- File system corruption
+- Manual modification of text storage files
 
 ## Identifiers
 
@@ -490,6 +651,205 @@ let results = index.search_with_metric(
     DistanceMetric::Euclidean,
     Some(3)
 ).await?;
+```
+
+## Document Text Storage
+
+Shardex supports storing and retrieving document source text alongside vector embeddings, enabling rich search experiences with text extraction.
+
+### Overview
+
+Document text storage is an optional feature that allows you to:
+
+- Store complete document text with vector postings
+- Extract text snippets from search results
+- Atomically update documents and their postings
+- Maintain text-to-vector coordinate mapping
+
+### Configuration
+
+Enable document text storage by setting `max_document_text_size` in your configuration:
+
+```rust
+let config = ShardexConfig {
+    directory_path: "./my_index".into(),
+    vector_size: 128,
+    max_document_text_size: 10 * 1024 * 1024, // 10MB per document
+    ..Default::default()
+};
+```
+
+**Important:** Text storage is disabled by default (`max_document_text_size = 0`).
+
+### File Layout
+
+When text storage is enabled, additional files are created:
+
+```
+index_directory/
+├── text_index.dat     # Document text index entries
+├── text_data.dat      # Raw document text data
+├── shard_0/           # Vector postings (unchanged)
+├── shard_1/
+└── wal.log           # Write-ahead log (includes text operations)
+```
+
+### Usage Patterns
+
+#### Basic Document Storage
+
+```rust
+let document_text = "The quick brown fox jumps over the lazy dog.";
+let doc_id = DocumentId::new();
+
+let postings = vec![
+    Posting {
+        document_id: doc_id,
+        start: 0,
+        length: 9, // "The quick"
+        vector: embedding1,
+    },
+    Posting {
+        document_id: doc_id,
+        start: 10,
+        length: 9, // "brown fox"
+        vector: embedding2,
+    },
+];
+
+// Store document with text and postings atomically
+index.replace_document_with_postings(doc_id, document_text.to_string(), postings).await?;
+```
+
+#### Text Retrieval
+
+```rust
+// Get complete document text
+let full_text = index.get_document_text(doc_id).await?;
+
+// Extract text from posting coordinates
+let posting = Posting {
+    document_id: doc_id,
+    start: 0,
+    length: 9,
+    vector: query_vector,
+};
+let text_snippet = index.extract_text(&posting).await?; // "The quick"
+```
+
+#### Search with Text Extraction
+
+```rust
+let search_results = index.search(&query_vector, 10, None).await?;
+
+for result in search_results {
+    // Convert search result to posting for text extraction
+    let posting = Posting {
+        document_id: result.document_id,
+        start: result.start,
+        length: result.length,
+        vector: result.vector,
+    };
+    
+    let text_snippet = index.extract_text(&posting).await?;
+    println!("Found: '{}' (score: {:.4})", text_snippet, result.similarity_score);
+}
+```
+
+### Performance Characteristics
+
+#### Memory Usage
+- **Index overhead**: ~32 bytes per document
+- **Text storage**: Actual text size + alignment padding
+- **Memory mapping**: OS manages paging automatically
+
+#### Lookup Performance
+- **Text retrieval**: O(d) where d is number of document versions (typically small)
+- **Text extraction**: O(1) after index lookup (memory-mapped access)
+- **Search**: No performance impact on vector operations
+
+#### Storage Efficiency
+- **Append-only**: All document versions stored for ACID properties
+- **Compaction**: Manual compaction removes old versions
+- **Compression**: Not implemented (relies on file system compression)
+
+### Best Practices
+
+#### Document Size Management
+```rust
+// Configure appropriate size limits
+let config = ShardexConfig::new()
+    .max_document_text_size(50 * 1024 * 1024) // 50MB for large documents
+    .directory_path("./large_doc_index");
+
+// Handle oversized documents
+match index.replace_document_with_postings(doc_id, large_text, postings).await {
+    Err(ShardexError::DocumentTooLarge { size, max_size }) => {
+        eprintln!("Document {} bytes exceeds limit {} bytes", size, max_size);
+        // Consider splitting document or increasing limit
+    }
+    Ok(()) => println!("Document stored successfully"),
+    Err(e) => eprintln!("Other error: {}", e),
+}
+```
+
+#### Error Handling
+```rust
+// Comprehensive error handling for text operations
+match index.extract_text(&posting).await {
+    Ok(text) => println!("Extracted: {}", text),
+    Err(ShardexError::DocumentTextNotFound { document_id }) => {
+        eprintln!("No text stored for document {}", document_id);
+    }
+    Err(ShardexError::InvalidRange { start, length, document_length }) => {
+        eprintln!("Invalid coordinates {}..{} for document length {}", 
+                  start, start + length, document_length);
+    }
+    Err(ShardexError::TextCorruption { details }) => {
+        eprintln!("Text corruption detected: {}", details);
+        // Consider index recovery procedures
+    }
+    Err(e) => eprintln!("Unexpected error: {}", e),
+}
+```
+
+#### Atomic Operations
+```rust
+// Always use atomic replacement for consistency
+// DON'T do this (can lead to inconsistency):
+// index.remove_documents(vec![doc_id]).await?;
+// index.add_postings(new_postings).await?;
+
+// DO this instead (atomic):
+index.replace_document_with_postings(doc_id, updated_text, new_postings).await?;
+```
+
+### Migration and Compatibility
+
+#### Backward Compatibility
+- Indexes without text storage continue to work unchanged
+- Text storage is opt-in via configuration
+- No breaking changes to existing APIs
+
+#### Adding Text Storage to Existing Indexes
+```rust
+// Existing index without text storage
+let mut index = ShardexImpl::open("./existing_index").await?;
+
+// Text storage methods will return appropriate errors
+match index.get_document_text(doc_id).await {
+    Err(ShardexError::DocumentTextNotFound { .. }) => {
+        println!("Text storage not enabled for this document");
+    }
+    Ok(text) => println!("Found text: {}", text),
+    Err(e) => eprintln!("Other error: {}", e),
+}
+
+// Enable text storage by creating new index with updated config
+let new_config = ShardexConfig::new()
+    .directory_path("./text_enabled_index")
+    .max_document_text_size(10 * 1024 * 1024);
+let mut new_index = ShardexImpl::create(new_config).await?;
 ```
 
 ## Advanced Types
