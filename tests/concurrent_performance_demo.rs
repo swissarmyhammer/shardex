@@ -3,7 +3,7 @@
 //! This test demonstrates that the concurrent coordination system provides
 //! the expected performance characteristics and deadlock-free operation.
 
-use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexIndex};
+// Placeholder file - performance demo not currently implemented
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +11,6 @@ use tokio::task::JoinSet;
 
 mod common;
 use common::{TestEnvironment, create_test_concurrent_shardex};
-}
 
 #[tokio::test]
 async fn test_concurrent_throughput_demonstration() {

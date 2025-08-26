@@ -128,11 +128,25 @@ impl DocumentTextStorage {
         let mut text_data_file = MemoryMappedFile::create(&data_path, initial_data_size)?;
 
         // Initialize index header
-        let index_header = TextIndexHeader::new();
+        let mut index_header = TextIndexHeader::new();
         text_index_file.write_at(0, &index_header)?;
 
-        // Initialize data header
-        let data_header = TextDataHeader::new();
+        // Initialize data header  
+        let mut data_header = TextDataHeader::new();
+        text_data_file.write_at(0, &data_header)?;
+
+        // Update checksums for the headers now that they're written to disk
+        // For empty storage, data portion is empty (starts right after header)
+        let index_data_start = index_header.file_header.header_size as usize;
+        let index_data_end = index_data_start + (index_header.entry_count as usize * DocumentTextEntry::SIZE);
+        let index_data = &text_index_file.as_slice()[index_data_start..index_data_end];
+        index_header.update_checksum(index_data);
+        text_index_file.write_at(0, &index_header)?;
+
+        let data_data_start = data_header.file_header.header_size as usize;
+        let data_data_end = data_header.next_text_offset as usize;
+        let data_data = &text_data_file.as_slice()[data_data_start..data_data_end];
+        data_header.update_checksum(data_data);
         text_data_file.write_at(0, &data_header)?;
 
         // Sync headers to disk
@@ -417,9 +431,15 @@ impl DocumentTextStorage {
         let text_start = aligned_offset + 4;
         mut_slice[text_start as usize..(text_start as usize + text_bytes.len())].copy_from_slice(text_bytes);
 
-        // Update header
+        // Update header with new offsets and sizes
         self.data_header.next_text_offset += total_size as u64;
         self.data_header.total_text_size += text_bytes.len() as u64;
+
+        // Update header checksum to reflect new data
+        let data_start = self.data_header.file_header.header_size as usize;
+        let data_end = self.data_header.next_text_offset as usize;
+        let text_data = &mut_slice[data_start..data_end];
+        self.data_header.update_checksum(text_data);
 
         // Write updated header to file
         self.text_data_file.write_at(0, &self.data_header)?;
@@ -453,14 +473,26 @@ impl DocumentTextStorage {
         let offset = self.index_header.next_entry_offset;
         self.text_index_file.write_at(offset as usize, entry)?;
 
-        // Update header
+        // Sync to ensure entry data is visible before updating header
+        self.text_index_file.sync()?;
+
+        // Update header with new entry count and offset
         self.index_header.add_entry();
+
+        // Update header checksum to reflect new index data
+        // Only include data for actual entries, not padding after next_entry_offset
+        let index_data_start = self.index_header.file_header.header_size as usize;
+        let index_data_end = index_data_start + (self.index_header.entry_count as usize * DocumentTextEntry::SIZE);
+        let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
+        self.index_header.update_checksum(index_data);
 
         // Write updated header to file
         self.text_index_file.write_at(0, &self.index_header)?;
 
         // Sync to ensure durability
         self.text_index_file.sync()?;
+
+        // Don't re-read header - keep the cached header consistent with what we just wrote
 
         Ok(())
     }
@@ -840,13 +872,74 @@ impl DocumentTextStorage {
         Ok(())
     }
 
-    /// Verify checksums if available (placeholder for future implementation)
+    /// Verify checksums for both index and data files
     ///
-    /// Currently a placeholder - in a full implementation this would verify
-    /// checksums stored in headers or maintained separately to detect corruption.
+    /// Validates the CRC32 checksums stored in the FileHeaders of both the text index
+    /// and text data files against their current content. This detects corruption
+    /// in either the header data or the text data sections.
+    ///
+    /// # Returns
+    /// * `Ok(())` - All checksums are valid
+    /// * `Err(ShardexError)` - One or more checksums are invalid, indicating corruption
+    ///
+    /// # Examples
+    /// ```rust
+    /// use shardex::document_text_storage::DocumentTextStorage;
+    /// use tempfile::TempDir;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let temp_dir = TempDir::new()?;
+    /// let storage = DocumentTextStorage::create(&temp_dir, 10_000_000)?;
+    ///
+    /// // Verify data integrity
+    /// storage.verify_checksums()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn verify_checksums(&self) -> Result<(), ShardexError> {
-        // Placeholder - checksums not currently implemented in headers
-        // This would verify file integrity using stored checksums
+        // Re-read header from disk to ensure we have the current state
+        let current_index_header: TextIndexHeader = self.text_index_file.read_at(0)?;
+        let current_data_header: TextDataHeader = self.text_data_file.read_at(0)?;
+
+        // Verify index file checksum
+        // Only include data for actual entries, not padding after next_entry_offset
+        let index_data_start = current_index_header.file_header.header_size as usize;
+        let index_data_end = index_data_start + (current_index_header.entry_count as usize * DocumentTextEntry::SIZE);
+        
+        if index_data_end > self.text_index_file.len() {
+            return Err(ShardexError::text_corruption(format!(
+                "Index file corruption: calculated end {} exceeds file size {}",
+                index_data_end, self.text_index_file.len()
+            )));
+        }
+        
+        let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
+        if let Err(e) = current_index_header.validate_checksum(index_data) {
+            return Err(ShardexError::text_corruption(format!(
+                "Text index checksum validation failed: {}",
+                e
+            )));
+        }
+
+        // Verify data file checksum
+        let data_data_start = current_data_header.file_header.header_size as usize;
+        let data_data_end = current_data_header.next_text_offset as usize;
+        
+        if data_data_end > self.text_data_file.len() {
+            return Err(ShardexError::text_corruption(format!(
+                "Data file corruption: next_text_offset {} exceeds file size {}",
+                data_data_end, self.text_data_file.len()
+            )));
+        }
+        
+        let text_data = &self.text_data_file.as_slice()[data_data_start..data_data_end];
+        if let Err(e) = current_data_header.validate_checksum(text_data) {
+            return Err(ShardexError::text_corruption(format!(
+                "Text data checksum validation failed: {}",
+                e
+            )));
+        }
+
         Ok(())
     }
 
@@ -1702,4 +1795,12 @@ mod tests {
         let doc_id3 = DocumentId::new();
         assert!(storage.store_text_safe(doc_id3, text_with_null).is_err());
     }
+
+
+
+
+
+
+
+
 }

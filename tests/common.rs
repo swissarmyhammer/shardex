@@ -83,6 +83,7 @@ impl TestSetupBuilder {
 /// Test environment for concurrent coordination tests
 /// 
 /// Provides isolated temporary directory and cleanup for each test
+#[allow(dead_code)]
 pub struct TestEnvironment {
     pub temp_dir: TempDir,
     #[allow(dead_code)]
@@ -91,6 +92,7 @@ pub struct TestEnvironment {
 
 impl TestEnvironment {
     /// Create a new test environment with isolated temporary directory
+    #[allow(dead_code)]
     pub fn new(test_name: &str) -> Self {
         let temp_dir =
             TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
@@ -102,6 +104,7 @@ impl TestEnvironment {
     }
 
     /// Get the path to the temporary directory
+    #[allow(dead_code)]
     pub fn path(&self) -> &std::path::Path {
         self.temp_dir.path()
     }
@@ -112,6 +115,7 @@ impl TestEnvironment {
 /// Uses consistent test parameters:
 /// - Vector size: 64 dimensions
 /// - Shard size: 100 postings per shard
+#[allow(dead_code)]
 pub fn create_test_concurrent_shardex(test_env: &TestEnvironment) -> ConcurrentShardex {
     let config = ShardexConfig::new()
         .directory_path(test_env.path())
