@@ -1187,7 +1187,7 @@ mod tests {
             50
         );
 
-        let docs = vec![DocumentId::new(), DocumentId::new(), DocumentId::new(), DocumentId::new()];
+        let docs = [DocumentId::new(), DocumentId::new(), DocumentId::new(), DocumentId::new()];
 
         // Create a repeating access pattern: doc1 -> doc2 -> doc3 -> doc1 -> doc2 -> doc3
         for _ in 0..3 {
@@ -1234,9 +1234,11 @@ mod tests {
     async fn test_access_pattern_cleanup() {
         let temp_dir = TempDir::new().unwrap();
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let mut config = AsyncStorageConfig::default();
-        config.prediction_temporal_window = Duration::from_millis(50); // Very short window
-        config.cleanup_interval = Duration::from_millis(100);
+        let config = AsyncStorageConfig {
+            prediction_temporal_window: Duration::from_millis(50), // Very short window
+            cleanup_interval: Duration::from_millis(100),
+            ..AsyncStorageConfig::default()
+        };
 
         let async_storage = AsyncDocumentTextStorage::new(storage, config)
             .await
@@ -1267,9 +1269,11 @@ mod tests {
     async fn test_prediction_performance_with_many_documents() {
         let temp_dir = TempDir::new().unwrap();
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let mut config = AsyncStorageConfig::default();
-        config.max_access_history = 500;
-        config.prediction_count = 10;
+        let config = AsyncStorageConfig {
+            max_access_history: 500,
+            prediction_count: 10,
+            ..AsyncStorageConfig::default()
+        };
 
         let async_storage = AsyncDocumentTextStorage::new(storage, config)
             .await
