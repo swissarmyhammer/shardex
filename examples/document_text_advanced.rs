@@ -413,7 +413,7 @@ async fn performance_example(index: &mut ShardexImpl) -> Result<(), Box<dyn Erro
         "elit",
     ];
 
-    for (_i, word) in words.iter().enumerate() {
+    for word in words.iter() {
         // Find multiple occurrences of each word
         let mut start_pos = 0;
         let mut occurrence_count = 0;

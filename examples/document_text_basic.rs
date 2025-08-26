@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
     // Sample documents with text and corresponding embeddings
-    let documents = vec![
+    let documents = &[
         (
             "The quick brown fox jumps over the lazy dog. This classic sentence contains every letter of the English alphabet.",
             vec![
@@ -135,7 +135,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("=========================================");
 
     let doc_id = DocumentId::from_raw(1);
-    let sample_postings = vec![
+    let sample_postings = &[
         Posting {
             document_id: doc_id,
             start: 0,

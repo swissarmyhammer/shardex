@@ -50,7 +50,7 @@ impl Default for AsyncStorageConfig {
 /// Read-ahead buffer entry
 #[derive(Debug, Clone)]
 struct ReadAheadEntry {
-    #[allow(dead_code)] // Used for cache key validation and debugging
+    #[allow(dead_code)] // Used as map key, not read directly
     document_id: DocumentId,
     text: String,
     created_at: SystemTime,

@@ -42,11 +42,7 @@ enum WriteOperation {
         text: String,
         completion_sender: oneshot::Sender<Result<(), ShardexError>>,
     },
-    #[allow(dead_code)] // Future functionality for text deletion
-    DeleteText {
-        document_id: DocumentId,
-        completion_sender: oneshot::Sender<Result<(), ShardexError>>,
-    },
+
 }
 
 /// Configuration for concurrent document text storage
@@ -472,21 +468,7 @@ impl ConcurrentDocumentTextStorage {
                     let _ = completion_sender.send(result);
                 }
 
-                WriteOperation::DeleteText {
-                    document_id,
-                    completion_sender,
-                } => {
-                    // Remove from cache
-                    {
-                        let mut cache = metadata_cache.lock();
-                        cache.remove(&document_id);
-                    }
 
-                    // For now, we'll return success as logical deletion
-                    // In a real implementation, this might mark entries for cleanup
-                    let result = Ok(());
-                    let _ = completion_sender.send(result);
-                }
             }
         }
 

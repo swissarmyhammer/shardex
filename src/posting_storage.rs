@@ -129,9 +129,7 @@ unsafe impl Zeroable for PostingStorageHeader {}
 const POSTING_STORAGE_MAGIC: &[u8; 4] = b"PSTR";
 /// Current version of the posting storage format
 const POSTING_STORAGE_VERSION: u32 = 1;
-/// Default alignment for data structures (currently unused but reserved for future optimizations)
-#[allow(dead_code)]
-const DEFAULT_ALIGNMENT: usize = 8;
+
 
 impl PostingStorageHeader {
     /// Size of the header structure in bytes

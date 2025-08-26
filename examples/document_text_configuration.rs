@@ -67,7 +67,7 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
     let mut index = ShardexImpl::create(config).await?;
 
     // Test with small documents
-    let small_documents = vec![
+    let small_documents = &[
         "Short document about cats.",
         "Brief article on dogs.",
         "Quick note about birds.",
@@ -185,7 +185,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
             "robotics",
         ];
 
-        for (_j, segment) in segments.iter().enumerate() {
+        for segment in segments.iter() {
             if let Some(pos) = text.find(segment) {
                 postings.push(Posting {
                     document_id: doc_id,
@@ -459,7 +459,7 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
 async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
-    let chat_messages = vec![
+    let chat_messages = &[
         "Hi there! How can I help you today?",
         "I'm looking for information about machine learning algorithms.",
         "Great! Machine learning has many different approaches. Are you interested in supervised or unsupervised learning?",
@@ -519,7 +519,7 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
 async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
-    let academic_abstracts = vec![
+    let academic_abstracts = &[
         "This paper presents a novel deep learning approach for natural language understanding in conversational AI systems. We propose a transformer-based architecture that achieves state-of-the-art performance on multiple dialogue benchmarks.",
         "We investigate the application of reinforcement learning to autonomous vehicle navigation in complex urban environments. Our experimental results demonstrate significant improvements in safety and efficiency compared to traditional rule-based approaches.",
         "This study examines the effectiveness of federated learning for privacy-preserving machine learning in healthcare applications. We evaluate our approach on real-world medical datasets while maintaining patient privacy constraints.",
@@ -578,7 +578,7 @@ async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<
 async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
-    let code_snippets = vec![
+    let code_snippets = &[
         (
             "function_definitions.rs",
             "pub fn calculate_similarity(vec1: &[f32], vec2: &[f32]) -> f32 {\n    let dot_product: f32 = vec1.iter().zip(vec2.iter()).map(|(a, b)| a * b).sum();\n    let magnitude1: f32 = vec1.iter().map(|x| x * x).sum::<f32>().sqrt();\n    let magnitude2: f32 = vec2.iter().map(|x| x * x).sum::<f32>().sqrt();\n    dot_product / (magnitude1 * magnitude2)\n}",
@@ -732,7 +732,7 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
 }
 
 fn create_realistic_documents(count: usize) -> Vec<(String, Vec<&'static str>)> {
-    let templates = vec![
+    let templates = &[
         (
             "Our latest software update includes significant improvements to performance, security, and user experience. The development team has worked tirelessly to address user feedback and implement new features.",
             vec!["software", "performance", "security", "development", "features"],

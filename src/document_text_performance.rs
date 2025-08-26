@@ -140,9 +140,7 @@ impl OptimizedMappingStats {
 pub struct OptimizedMemoryMapping {
     /// Underlying memory-mapped index file
     index_file: Arc<RwLock<MemoryMappedFile>>,
-    /// Underlying memory-mapped data file
-    #[allow(dead_code)] // Future functionality for separate data file mapping
-    data_file: Arc<RwLock<MemoryMappedFile>>,
+
     /// LRU cache for frequently accessed entries
     entry_cache: Arc<RwLock<LruCache>>,
     /// System page size for alignment optimization
@@ -157,7 +155,6 @@ impl OptimizedMemoryMapping {
     /// Create optimized memory mapping with performance hints
     pub fn create_optimized(
         index_file: MemoryMappedFile,
-        data_file: MemoryMappedFile,
         access_pattern: AccessPattern,
         cache_size: usize,
     ) -> Result<Self, ShardexError> {
@@ -166,7 +163,6 @@ impl OptimizedMemoryMapping {
 
         let mapping = Self {
             index_file: Arc::new(RwLock::new(index_file)),
-            data_file: Arc::new(RwLock::new(data_file)),
             entry_cache,
             page_size,
             access_pattern,

@@ -320,14 +320,14 @@ pub enum RecoveryResult {
 /// Text storage recovery manager for automatic error recovery
 pub struct TextStorageRecoveryManager {
     /// Storage reference wrapped in mutex for recovery operations
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: Implement missing DocumentTextStorage methods
     storage: Arc<Mutex<DocumentTextStorage>>,
     /// Backup manager for pre-recovery backups
     backup_manager: BackupManager,
     /// Recovery configuration
     recovery_config: RecoveryConfig,
     /// Performance monitor for metrics
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: Implement missing DocumentTextStorage methods
     performance_monitor: Option<Arc<PerformanceMonitor>>,
 }
 

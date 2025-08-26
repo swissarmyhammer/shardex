@@ -55,6 +55,13 @@ pub struct DetailedIndexStats {
 }
 
 /// Real-time performance monitoring system
+/// 
+/// TODO: TECHNICAL DEBT - This struct uses 6 separate Arc<RwLock<T>> fields which creates
+/// potential for lock contention and complexity. Consider refactoring to:
+/// - Message-passing pattern with dedicated metrics collection thread
+/// - Atomic counters for simple metrics
+/// - Single RwLock for complex aggregated metrics
+/// This would reduce lock contention and improve performance
 pub struct PerformanceMonitor {
     /// Search operation metrics
     search_metrics: Arc<RwLock<SearchMetrics>>,
