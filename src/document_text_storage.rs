@@ -61,6 +61,12 @@ use crate::identifiers::DocumentId;
 use crate::memory::MemoryMappedFile;
 use std::path::{Path, PathBuf};
 
+/// Size of the u32 length prefix for text blocks
+const TEXT_LENGTH_PREFIX_SIZE: u64 = 4;
+
+/// Alignment boundary for text blocks (4-byte alignment)
+const TEXT_BLOCK_ALIGNMENT: u64 = 4;
+
 /// Document text storage manager using memory-mapped files
 ///
 /// DocumentTextStorage manages two memory-mapped files to provide efficient
@@ -1175,8 +1181,8 @@ impl DocumentTextStorage {
 
     /// Scan and rebuild index from data file (recovery operation)
     ///
-    /// Scans through the data file reading length-prefixed text blocks and rebuilds 
-    /// the index file with new entries. This method is used for recovery operations 
+    /// Scans through the data file reading length-prefixed text blocks and rebuilds
+    /// the index file with new entries. This method is used for recovery operations
     /// when the index file is corrupted but the data file remains intact.
     ///
     /// Since the original document IDs are lost due to index corruption, this method
@@ -1223,26 +1229,25 @@ impl DocumentTextStorage {
         self.index_header.next_entry_offset = self.index_header.file_header.header_size as u64;
 
         let mut recovered_entries = 0u32;
-        let mut current_offset = TextDataHeader::SIZE as u64;  // Start after the complete header
+        let mut current_offset = TextDataHeader::SIZE as u64; // Start after the complete header
         let data_end = self.data_header.next_text_offset;
-        
 
-        
         // If there's no data to scan, return early
         if current_offset >= data_end {
-            tracing::info!("No text data to scan - data file is empty (current_offset: {}, data_end: {})", current_offset, data_end);
+            tracing::info!(
+                "No text data to scan - data file is empty (current_offset: {}, data_end: {})",
+                current_offset,
+                data_end
+            );
             return Ok(0);
         }
-        
+
         // Progress reporting for large files
         let data_size = data_end - current_offset;
         let mut last_progress_report = 0u64;
         const PROGRESS_INTERVAL: u64 = 10 * 1024 * 1024; // Report every 10MB
 
-        tracing::info!(
-            "Scanning {} bytes of text data for recovery", 
-            data_size
-        );
+        tracing::info!("Scanning {} bytes of text data for recovery", data_size);
 
         // Scan through data file looking for valid text blocks
         while current_offset < data_end {
@@ -1251,8 +1256,9 @@ impl DocumentTextStorage {
             if processed >= last_progress_report + PROGRESS_INTERVAL {
                 let progress_pct = (processed * 100) / data_size;
                 tracing::info!(
-                    "Recovery progress: {:.1}% ({} entries recovered so far)", 
-                    progress_pct, recovered_entries
+                    "Recovery progress: {:.1}% ({} entries recovered so far)",
+                    progress_pct,
+                    recovered_entries
                 );
                 last_progress_report = processed;
             }
@@ -1263,56 +1269,52 @@ impl DocumentTextStorage {
                     // Successfully read text block - create index entry
                     let document_id = DocumentId::new(); // Generate new ID since original is lost
                     let entry = DocumentTextEntry::new(document_id, current_offset, text_length);
-                    
+
                     // Validate the entry before adding
                     if let Err(e) = entry.validate() {
-                        tracing::warn!(
-                            "Skipping invalid recovered entry at offset {}: {}", 
-                            current_offset, e
-                        );
+                        tracing::warn!("Skipping invalid recovered entry at offset {}: {}", current_offset, e);
                     } else {
                         // Add entry to rebuilt index
                         if let Err(e) = self.append_index_entry(&entry) {
-                            tracing::error!(
-                                "Failed to append recovered entry at offset {}: {}",
-                                current_offset, e
-                            );
+                            tracing::error!("Failed to append recovered entry at offset {}: {}", current_offset, e);
                             // Continue trying to recover other entries
                         } else {
                             recovered_entries += 1;
                             tracing::debug!(
                                 "Recovered text block: {} bytes at offset {} (new ID: {})",
-                                text_length, current_offset, document_id
+                                text_length,
+                                current_offset,
+                                document_id
                             );
                         }
                     }
 
                     // Move to next aligned offset (accounting for length prefix)
-                    let aligned_offset = (current_offset + 4 + text_length + 3) & !3; // 4-byte align
+                    let aligned_offset =
+                        (current_offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
+                            & !(TEXT_BLOCK_ALIGNMENT - 1);
                     current_offset = aligned_offset;
                 }
                 Err(e) => {
                     // Handle corrupted or invalid text block
                     match e {
                         ShardexError::TextCorruption(ref msg) if msg.contains("Length mismatch") => {
-                            tracing::warn!(
-                                "Corrupted text block at offset {}: {} - skipping", 
-                                current_offset, msg
-                            );
+                            tracing::warn!("Corrupted text block at offset {}: {} - skipping", current_offset, msg);
                             // Try to skip to next potential text block (advance by 4 bytes)
                             current_offset += 4;
                         }
                         ShardexError::TextCorruption(ref msg) if msg.contains("exceeds data file size") => {
                             tracing::warn!(
-                                "Text block at offset {} extends beyond file - stopping scan", 
+                                "Text block at offset {} extends beyond file - stopping scan",
                                 current_offset
                             );
                             break;
                         }
                         ShardexError::TextCorruption(ref msg) if msg.contains("Invalid UTF-8") => {
                             tracing::warn!(
-                                "Invalid UTF-8 in text block at offset {} - skipping: {}", 
-                                current_offset, msg
+                                "Invalid UTF-8 in text block at offset {} - skipping: {}",
+                                current_offset,
+                                msg
                             );
                             // Skip forward and try again
                             current_offset += 4;
@@ -1320,8 +1322,9 @@ impl DocumentTextStorage {
                         _ => {
                             // For other errors, log and continue
                             tracing::warn!(
-                                "Error reading text block at offset {}: {} - skipping", 
-                                current_offset, e
+                                "Error reading text block at offset {}: {} - skipping",
+                                current_offset,
+                                e
                             );
                             current_offset += 4;
                         }
@@ -1340,7 +1343,9 @@ impl DocumentTextStorage {
         let index_data_start = self.index_header.file_header.header_size as usize;
         let index_data_end = index_data_start + (self.index_header.entry_count as usize * DocumentTextEntry::SIZE);
         let index_data = &self.text_index_file.as_slice()[index_data_start..index_data_end];
-        self.index_header.file_header.update_for_modification(index_data);
+        self.index_header
+            .file_header
+            .update_for_modification(index_data);
 
         // Write updated index header
         if let Err(e) = self.text_index_file.write_at(0, &self.index_header) {
@@ -1353,15 +1358,16 @@ impl DocumentTextStorage {
         // Sync index file to ensure persistence
         if let Err(e) = self.text_index_file.sync() {
             tracing::error!("Failed to sync rebuilt index: {}", e);
-            // Restore original state  
+            // Restore original state
             self.index_header = original_index_header;
-            return Err(e.into());
+            return Err(e);
         }
 
         if recovered_entries > 0 {
             tracing::info!(
                 "Successfully rebuilt index: recovered {} entries from data file (original count: {})",
-                recovered_entries, original_entry_count
+                recovered_entries,
+                original_entry_count
             );
         } else {
             tracing::info!("Index rebuild completed: no recoverable entries found in data file");
@@ -1386,13 +1392,16 @@ impl DocumentTextStorage {
         if offset + 4 > self.text_data_file.len() as u64 {
             return Err(ShardexError::text_corruption(format!(
                 "Text block offset {} + 4 exceeds data file size {}",
-                offset, self.text_data_file.len()
+                offset,
+                self.text_data_file.len()
             )));
         }
 
-        // Read length prefix (u32) 
-        let length_bytes = &self.text_data_file.as_slice()[offset as usize..(offset + 4) as usize];
-        let text_length = u32::from_le_bytes([length_bytes[0], length_bytes[1], length_bytes[2], length_bytes[3]]) as u64;
+        // Read length prefix (u32)
+        let length_bytes =
+            &self.text_data_file.as_slice()[offset as usize..(offset + TEXT_LENGTH_PREFIX_SIZE) as usize];
+        let text_length =
+            u32::from_le_bytes([length_bytes[0], length_bytes[1], length_bytes[2], length_bytes[3]]) as u64;
 
         // Validate text length is reasonable (prevents reading garbage)
         if text_length == 0 {
@@ -1413,7 +1422,9 @@ impl DocumentTextStorage {
         if offset + 4 + text_length > self.text_data_file.len() as u64 {
             return Err(ShardexError::text_corruption(format!(
                 "Text block at offset {} with length {} exceeds data file size {}",
-                offset, text_length, self.text_data_file.len()
+                offset,
+                text_length,
+                self.text_data_file.len()
             )));
         }
 
@@ -1425,8 +1436,9 @@ impl DocumentTextStorage {
         // Validate and convert to String
         let text_content = String::from_utf8(text_slice.to_vec()).map_err(|e| {
             ShardexError::text_corruption(format!(
-                "Invalid UTF-8 sequence in text block at offset {}: {}", 
-                offset + 4, e
+                "Invalid UTF-8 sequence in text block at offset {}: {}",
+                offset + 4,
+                e
             ))
         })?;
 
@@ -2315,7 +2327,7 @@ mod tests {
 
         // Now call rebuild_index_from_data - should recover text blocks
         let recovered_entries = storage.rebuild_index_from_data().unwrap();
-        
+
         // Should have recovered the entries (may have different document IDs)
         assert!(recovered_entries > 0);
         assert!(storage.entry_count() > 0);
@@ -2330,7 +2342,7 @@ mod tests {
         let doc_id = DocumentId::new();
         let text = "Text that will survive index corruption.";
         storage.store_text(doc_id, text).unwrap();
-        
+
         // Simulate corrupted index by clearing entry count (data remains intact)
         storage.index_header.entry_count = 0;
         storage.index_header.next_entry_offset = storage.index_header.file_header.header_size as u64;
@@ -2340,7 +2352,7 @@ mod tests {
 
         // Rebuild index from data
         let recovered_entries = storage.rebuild_index_from_data().unwrap();
-        
+
         // Should have recovered at least one entry
         assert_eq!(recovered_entries, 1);
         assert_eq!(storage.entry_count(), 1);
