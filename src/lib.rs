@@ -38,6 +38,90 @@
 //! - **Configurable vector dimensions** and index parameters
 //! - **Bloom filter optimization** for efficient document deletion
 //! - **Crash recovery** from unexpected shutdowns
+//!
+//! # Development Guidelines
+//!
+//! ## Struct Definition Standards
+//!
+//! ### Default Implementation Rules
+//! 
+//! 1. **PREFER** `#[derive(Default)]` for structs with all zero/empty defaults:
+//!    ```rust
+//!    #[derive(Debug, Clone, Default)]
+//!    pub struct SimpleMetrics {
+//!        pub count: u64,
+//!        pub total: u64,
+//!    }
+//!    ```
+//!
+//! 2. **USE** manual `impl Default` only when:
+//!    - Non-zero defaults are needed
+//!    - Complex initialization is required  
+//!    - Fields contain non-Default types
+//!    ```rust
+//!    impl Default for ComplexMetrics {
+//!        fn default() -> Self {
+//!            Self {
+//!                start_time: Instant::now(), // Can't derive this
+//!                threshold: 0.95,           // Non-zero default
+//!                // ...
+//!            }
+//!        }
+//!    }
+//!    ```
+//!
+//! 3. **AVOID** redundant patterns like:
+//!    ```rust
+//!    // DON'T DO THIS - just derive Default instead
+//!    impl Default for SomeStruct {
+//!        fn default() -> Self {
+//!            Self::new() // If new() just sets zero/empty values
+//!        }
+//!    }
+//!    ```
+//!
+//! ### Struct Size Guidelines
+//! 
+//! 1. **MAXIMUM** 15 fields per struct (prefer 10 or fewer)
+//! 2. **BREAK DOWN** large structs into logical sub-structures:
+//!    ```rust
+//!    // Instead of one large struct with 30+ fields:
+//!    #[derive(Debug, Clone, Default)]
+//!    pub struct DocumentMetrics {
+//!        pub basic: BasicMetrics,
+//!        pub performance: PerformanceMetrics,
+//!        pub cache: CacheMetrics,
+//!    }
+//!    ```
+//! 3. **GROUP** related fields into cohesive types
+//! 4. **USE** composition over large flat structures
+//!
+//! ### Derive Attribute Ordering
+//! 
+//! Always use consistent ordering for derive attributes:
+//! ```rust
+//! #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+//! ```
+//! 
+//! Order: Debug, Clone, Copy (if applicable), Default, PartialEq, Eq, Hash, Serialize, Deserialize
+//!
+//! ### Builder Pattern Usage
+//! 
+//! Use builder patterns for:
+//! - Configuration structs with many optional parameters
+//! - Complex initialization sequences
+//! - Structs with validation requirements
+//! 
+//! ```rust
+//! impl ConfigStruct {
+//!     pub fn new() -> Self { Self::default() }
+//!     
+//!     pub fn field1(mut self, value: Type) -> Self {
+//!         self.field1 = value;
+//!         self
+//!     }
+//! }
+//! ```
 
 pub mod async_document_text_storage;
 pub mod batch_processor;

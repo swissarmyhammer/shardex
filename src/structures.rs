@@ -141,7 +141,7 @@ use std::fmt::{self, Display, Formatter};
 /// assert_eq!(posting.document_id.raw(), 1);
 /// assert_eq!(posting.vector.len(), 3);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Posting {
     /// Unique identifier for the document this posting belongs to
     pub document_id: DocumentId,
@@ -778,11 +778,7 @@ impl FlushStats {
     }
 }
 
-impl Default for FlushStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+
 
 impl Display for FlushStats {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

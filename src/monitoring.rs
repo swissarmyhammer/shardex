@@ -108,40 +108,51 @@ pub struct BloomFilterMetrics {
     pub memory_usage_bytes: usize,
 }
 
-/// Document text storage performance metrics
+/// Basic document operation metrics
 #[derive(Debug, Clone, Default)]
-pub struct DocumentTextMetrics {
-    // Basic document operations
+pub struct BasicDocumentMetrics {
     pub total_documents: u64,
     pub total_text_size: u64,
     pub average_document_size: f64,
     pub document_storage_operations: u64,
     pub document_retrieval_operations: u64,
     pub document_extraction_operations: u64,
+}
 
-    // Performance metrics
+/// Document performance timing metrics
+#[derive(Debug, Clone, Default)]
+pub struct DocumentPerformanceMetrics {
     pub average_storage_latency_ms: f64,
     pub average_retrieval_latency_ms: f64,
     pub average_extraction_latency_ms: f64,
     pub storage_throughput_docs_per_sec: f64,
     pub retrieval_throughput_docs_per_sec: f64,
+}
 
-    // Cache performance
+/// Document cache performance metrics
+#[derive(Debug, Clone, Default)]
+pub struct DocumentCacheMetrics {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub cache_hit_rate: f64,
     pub cache_size: usize,
     pub cache_memory_usage: usize,
+}
 
-    // Concurrent operations
+/// Concurrent operation metrics
+#[derive(Debug, Clone, Default)]
+pub struct ConcurrentOperationMetrics {
     pub concurrent_readers: u64,
     pub concurrent_writers: u64,
     pub max_concurrent_operations: usize,
     pub write_queue_size: usize,
     pub write_batch_operations: u64,
     pub average_batch_size: f64,
+}
 
-    // Async operations
+/// Asynchronous operation metrics
+#[derive(Debug, Clone, Default)]
+pub struct AsyncOperationMetrics {
     pub async_operations: u64,
     pub async_timeouts: u64,
     pub async_timeout_rate: f64,
@@ -149,30 +160,59 @@ pub struct DocumentTextMetrics {
     pub read_ahead_misses: u64,
     pub read_ahead_hit_rate: f64,
     pub read_ahead_buffer_size: usize,
+}
 
-    // Memory pool performance
+/// Memory pool performance metrics
+#[derive(Debug, Clone, Default)]
+pub struct MemoryPoolMetrics {
     pub pool_hits: u64,
     pub pool_misses: u64,
     pub pool_hit_rate: f64,
     pub pool_memory_usage: usize,
     pub pool_discards: u64,
+}
 
-    // File system metrics
+/// Filesystem usage metrics
+#[derive(Debug, Clone, Default)]
+pub struct FilesystemMetrics {
     pub index_file_size: u64,
     pub data_file_size: u64,
     pub total_file_size: u64,
     pub file_utilization_ratio: f64,
+}
 
-    // Error tracking
+/// Error tracking metrics
+#[derive(Debug, Clone, Default)]
+pub struct ErrorTrackingMetrics {
     pub storage_errors: u64,
     pub retrieval_errors: u64,
     pub corruption_errors: u64,
     pub last_error_time: Option<SystemTime>,
+}
 
-    // Health metrics
+/// Health check metrics
+#[derive(Debug, Clone, Default)]
+pub struct HealthMetrics {
     pub health_check_passes: u64,
     pub health_check_failures: u64,
     pub last_health_check: Option<SystemTime>,
+}
+
+/// Document text storage performance metrics
+/// 
+/// Composed of focused metric categories to improve maintainability and readability.
+/// Each sub-metric can be accessed through its respective category.
+#[derive(Debug, Clone, Default)]
+pub struct DocumentTextMetrics {
+    pub basic: BasicDocumentMetrics,
+    pub performance: DocumentPerformanceMetrics,
+    pub cache: DocumentCacheMetrics,
+    pub concurrent: ConcurrentOperationMetrics,
+    pub async_ops: AsyncOperationMetrics,
+    pub memory_pool: MemoryPoolMetrics,
+    pub filesystem: FilesystemMetrics,
+    pub errors: ErrorTrackingMetrics,
+    pub health: HealthMetrics,
 }
 
 /// System resource usage metrics
@@ -317,23 +357,23 @@ impl PerformanceMonitor {
     /// Record a document text storage operation
     pub async fn record_document_storage(&self, latency: Duration, text_size: u64, success: bool) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.document_storage_operations += 1;
+        metrics.basic.document_storage_operations += 1;
 
         if success {
-            metrics.total_documents += 1;
-            metrics.total_text_size += text_size;
+            metrics.basic.total_documents += 1;
+            metrics.basic.total_text_size += text_size;
 
             // Update average document size
-            metrics.average_document_size = metrics.total_text_size as f64 / metrics.total_documents as f64;
+            metrics.basic.average_document_size = metrics.basic.total_text_size as f64 / metrics.basic.total_documents as f64;
 
             // Update average storage latency
             let latency_ms = latency.as_millis() as f64;
-            metrics.average_storage_latency_ms =
-                (metrics.average_storage_latency_ms * (metrics.document_storage_operations - 1) as f64 + latency_ms)
-                    / metrics.document_storage_operations as f64;
+            metrics.performance.average_storage_latency_ms =
+                (metrics.performance.average_storage_latency_ms * (metrics.basic.document_storage_operations - 1) as f64 + latency_ms)
+                    / metrics.basic.document_storage_operations as f64;
         } else {
-            metrics.storage_errors += 1;
-            metrics.last_error_time = Some(SystemTime::now());
+            metrics.errors.storage_errors += 1;
+            metrics.errors.last_error_time = Some(SystemTime::now());
         }
 
         // Update throughput calculation
@@ -343,27 +383,27 @@ impl PerformanceMonitor {
     /// Record a document text retrieval operation
     pub async fn record_document_retrieval(&self, latency: Duration, cache_hit: bool, success: bool) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.document_retrieval_operations += 1;
+        metrics.basic.document_retrieval_operations += 1;
 
         if success {
             // Update average retrieval latency
             let latency_ms = latency.as_millis() as f64;
-            metrics.average_retrieval_latency_ms = (metrics.average_retrieval_latency_ms
-                * (metrics.document_retrieval_operations - 1) as f64
+            metrics.performance.average_retrieval_latency_ms = (metrics.performance.average_retrieval_latency_ms
+                * (metrics.basic.document_retrieval_operations - 1) as f64
                 + latency_ms)
-                / metrics.document_retrieval_operations as f64;
+                / metrics.basic.document_retrieval_operations as f64;
         } else {
-            metrics.retrieval_errors += 1;
-            metrics.last_error_time = Some(SystemTime::now());
+            metrics.errors.retrieval_errors += 1;
+            metrics.errors.last_error_time = Some(SystemTime::now());
         }
 
         // Update cache metrics
         if cache_hit {
-            metrics.cache_hits += 1;
+            metrics.cache.cache_hits += 1;
         } else {
-            metrics.cache_misses += 1;
+            metrics.cache.cache_misses += 1;
         }
-        metrics.cache_hit_rate = metrics.cache_hits as f64 / (metrics.cache_hits + metrics.cache_misses) as f64;
+        metrics.cache.cache_hit_rate = metrics.cache.cache_hits as f64 / (metrics.cache.cache_hits + metrics.cache.cache_misses) as f64;
 
         // Update throughput calculation
         self.update_retrieval_throughput(&mut metrics).await;
@@ -372,42 +412,42 @@ impl PerformanceMonitor {
     /// Record a document text extraction operation
     pub async fn record_document_extraction(&self, latency: Duration, _extracted_size: u32, success: bool) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.document_extraction_operations += 1;
+        metrics.basic.document_extraction_operations += 1;
 
         if success {
             // Update average extraction latency
             let latency_ms = latency.as_millis() as f64;
-            metrics.average_extraction_latency_ms = (metrics.average_extraction_latency_ms
-                * (metrics.document_extraction_operations - 1) as f64
+            metrics.performance.average_extraction_latency_ms = (metrics.performance.average_extraction_latency_ms
+                * (metrics.basic.document_extraction_operations - 1) as f64
                 + latency_ms)
-                / metrics.document_extraction_operations as f64;
+                / metrics.basic.document_extraction_operations as f64;
         } else {
-            metrics.retrieval_errors += 1; // Extraction errors count as retrieval errors
-            metrics.last_error_time = Some(SystemTime::now());
+            metrics.errors.retrieval_errors += 1; // Extraction errors count as retrieval errors
+            metrics.errors.last_error_time = Some(SystemTime::now());
         }
     }
 
     /// Record concurrent operation metrics
     pub async fn record_concurrent_operations(&self, readers: u64, writers: u64, write_queue_size: usize) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.concurrent_readers = readers;
-        metrics.concurrent_writers = writers;
-        metrics.write_queue_size = write_queue_size;
+        metrics.concurrent.concurrent_readers = readers;
+        metrics.concurrent.concurrent_writers = writers;
+        metrics.concurrent.write_queue_size = write_queue_size;
 
         let total_concurrent = readers + writers;
-        if total_concurrent > metrics.max_concurrent_operations as u64 {
-            metrics.max_concurrent_operations = total_concurrent as usize;
+        if total_concurrent > metrics.concurrent.max_concurrent_operations as u64 {
+            metrics.concurrent.max_concurrent_operations = total_concurrent as usize;
         }
     }
 
     /// Record write batch operation
     pub async fn record_write_batch(&self, batch_size: usize, _latency: Duration) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.write_batch_operations += 1;
+        metrics.concurrent.write_batch_operations += 1;
 
         // Update average batch size
-        let total_items = (metrics.write_batch_operations - 1) as f64 * metrics.average_batch_size + batch_size as f64;
-        metrics.average_batch_size = total_items / metrics.write_batch_operations as f64;
+        let total_items = (metrics.concurrent.write_batch_operations - 1) as f64 * metrics.concurrent.average_batch_size + batch_size as f64;
+        metrics.concurrent.average_batch_size = total_items / metrics.concurrent.write_batch_operations as f64;
     }
 
     /// Record async operation metrics
@@ -419,21 +459,21 @@ impl PerformanceMonitor {
         read_ahead_hit: bool,
     ) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.async_operations += 1;
+        metrics.async_ops.async_operations += 1;
 
         if timed_out {
-            metrics.async_timeouts += 1;
-            metrics.async_timeout_rate = metrics.async_timeouts as f64 / metrics.async_operations as f64;
+            metrics.async_ops.async_timeouts += 1;
+            metrics.async_ops.async_timeout_rate = metrics.async_ops.async_timeouts as f64 / metrics.async_ops.async_operations as f64;
         }
 
         if operation_type == "read_ahead_hit" {
             if read_ahead_hit {
-                metrics.read_ahead_hits += 1;
+                metrics.async_ops.read_ahead_hits += 1;
             } else {
-                metrics.read_ahead_misses += 1;
+                metrics.async_ops.read_ahead_misses += 1;
             }
-            metrics.read_ahead_hit_rate =
-                metrics.read_ahead_hits as f64 / (metrics.read_ahead_hits + metrics.read_ahead_misses) as f64;
+            metrics.async_ops.read_ahead_hit_rate =
+                metrics.async_ops.read_ahead_hits as f64 / (metrics.async_ops.read_ahead_hits + metrics.async_ops.read_ahead_misses) as f64;
         }
     }
 
@@ -446,14 +486,14 @@ impl PerformanceMonitor {
         discards: u64,
     ) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.pool_hits = pool_hits;
-        metrics.pool_misses = pool_misses;
-        metrics.pool_memory_usage = pool_memory_usage;
-        metrics.pool_discards = discards;
+        metrics.memory_pool.pool_hits = pool_hits;
+        metrics.memory_pool.pool_misses = pool_misses;
+        metrics.memory_pool.pool_memory_usage = pool_memory_usage;
+        metrics.memory_pool.pool_discards = discards;
 
         let total_pool_requests = pool_hits + pool_misses;
         if total_pool_requests > 0 {
-            metrics.pool_hit_rate = pool_hits as f64 / total_pool_requests as f64;
+            metrics.memory_pool.pool_hit_rate = pool_hits as f64 / total_pool_requests as f64;
         }
     }
 
@@ -465,21 +505,21 @@ impl PerformanceMonitor {
         utilization_ratio: f64,
     ) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.index_file_size = index_file_size;
-        metrics.data_file_size = data_file_size;
-        metrics.total_file_size = index_file_size + data_file_size;
-        metrics.file_utilization_ratio = utilization_ratio;
+        metrics.filesystem.index_file_size = index_file_size;
+        metrics.filesystem.data_file_size = data_file_size;
+        metrics.filesystem.total_file_size = index_file_size + data_file_size;
+        metrics.filesystem.file_utilization_ratio = utilization_ratio;
     }
 
     /// Record corruption error
     pub async fn record_document_corruption(&self, error_type: &str) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.corruption_errors += 1;
-        metrics.last_error_time = Some(SystemTime::now());
+        metrics.errors.corruption_errors += 1;
+        metrics.errors.last_error_time = Some(SystemTime::now());
 
         tracing::error!(
             error_type = error_type,
-            total_corruption_errors = metrics.corruption_errors,
+            total_corruption_errors = metrics.errors.corruption_errors,
             "Document text storage corruption detected"
         );
     }
@@ -489,12 +529,12 @@ impl PerformanceMonitor {
         let mut metrics = self.document_text_metrics.write().await;
 
         if passed {
-            metrics.health_check_passes += 1;
+            metrics.health.health_check_passes += 1;
         } else {
-            metrics.health_check_failures += 1;
+            metrics.health.health_check_failures += 1;
         }
 
-        metrics.last_health_check = Some(SystemTime::now());
+        metrics.health.last_health_check = Some(SystemTime::now());
     }
 
     /// Update cache size metrics
@@ -505,9 +545,9 @@ impl PerformanceMonitor {
         read_ahead_buffer_size: usize,
     ) {
         let mut metrics = self.document_text_metrics.write().await;
-        metrics.cache_size = cache_size;
-        metrics.cache_memory_usage = cache_memory_usage;
-        metrics.read_ahead_buffer_size = read_ahead_buffer_size;
+        metrics.cache.cache_size = cache_size;
+        metrics.cache.cache_memory_usage = cache_memory_usage;
+        metrics.async_ops.read_ahead_buffer_size = read_ahead_buffer_size;
     }
 
     /// Get current document text metrics
@@ -519,8 +559,8 @@ impl PerformanceMonitor {
     async fn update_storage_throughput(&self, metrics: &mut DocumentTextMetrics) {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
-        if metrics.document_storage_operations > 0 {
-            metrics.storage_throughput_docs_per_sec = metrics.document_storage_operations as f64 / 60.0;
+        if metrics.basic.document_storage_operations > 0 {
+            metrics.performance.storage_throughput_docs_per_sec = metrics.basic.document_storage_operations as f64 / 60.0;
             // Rough estimate
         }
     }
@@ -529,8 +569,8 @@ impl PerformanceMonitor {
     async fn update_retrieval_throughput(&self, metrics: &mut DocumentTextMetrics) {
         // Simple throughput calculation based on recent operations
         // In a production system, this would use a sliding window
-        if metrics.document_retrieval_operations > 0 {
-            metrics.retrieval_throughput_docs_per_sec = metrics.document_retrieval_operations as f64 / 60.0;
+        if metrics.basic.document_retrieval_operations > 0 {
+            metrics.performance.retrieval_throughput_docs_per_sec = metrics.basic.document_retrieval_operations as f64 / 60.0;
             // Rough estimate
         }
     }
