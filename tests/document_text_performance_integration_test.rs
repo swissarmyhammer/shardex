@@ -39,6 +39,7 @@ mod integration_utils {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub async fn populate_storage<S>(
         storage: &S,
         documents: &[(DocumentId, String)],
@@ -569,7 +570,7 @@ async fn test_error_handling_integration() {
 
     // Test timeout scenarios
     let async_storage = AsyncDocumentTextStorage::new(
-        DocumentTextStorage::create(&TempDir::new().unwrap(), 1024 * 1024).unwrap(),
+        DocumentTextStorage::create(TempDir::new().unwrap(), 1024 * 1024).unwrap(),
         AsyncStorageConfig {
             default_timeout: Duration::from_millis(1), // Very short timeout
             ..AsyncStorageConfig::default()

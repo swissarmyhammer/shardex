@@ -7,6 +7,8 @@
 //! - Error simulation and validation helpers
 //! - Text boundary and UTF-8 testing utilities
 
+#![allow(dead_code)] // Test utilities may not all be used in current test suite
+
 use shardex::document_text_storage::DocumentTextStorage;
 use shardex::error::ShardexError;
 use shardex::identifiers::DocumentId;
@@ -285,7 +287,7 @@ impl PostingGenerator {
             let max_length = std::cmp::min(segment_size, remaining);
 
             // Use a reasonable length (not too small, not too large)
-            let length = std::cmp::max(1, std::cmp::min(max_length, 100)) as u32;
+            let length = max_length.clamp(1, 100) as u32;
 
             // Adjust start to respect UTF-8 boundaries
             let (adjusted_start, adjusted_length) =

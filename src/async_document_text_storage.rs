@@ -837,13 +837,15 @@ mod tests {
 
     #[test]
     fn test_async_metrics_calculations() {
-        let mut metrics = AsyncStorageMetrics::default();
-        metrics.successful_async_reads = 80;
-        metrics.async_reads = 100;
-        metrics.successful_async_writes = 90;
-        metrics.async_writes = 100;
-        metrics.read_ahead_hits = 70;
-        metrics.read_ahead_misses = 30;
+        let metrics = AsyncStorageMetrics {
+            successful_async_reads: 80,
+            async_reads: 100,
+            successful_async_writes: 90,
+            async_writes: 100,
+            read_ahead_hits: 70,
+            read_ahead_misses: 30,
+            ..Default::default()
+        };
 
         assert_eq!(metrics.async_read_success_ratio(), 0.8);
         assert_eq!(metrics.async_write_success_ratio(), 0.9);

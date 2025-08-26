@@ -428,7 +428,7 @@ fn test_large_document_integration() {
             "Mismatch for posting {} at {}..{}",
             i, expected_start, expected_end
         );
-        assert!(extracted.len() > 0, "Empty extraction for posting {}", i);
+        assert!(!extracted.is_empty(), "Empty extraction for posting {}", i);
     }
 
     // Test performance with large document
@@ -450,7 +450,7 @@ fn test_document_versioning_with_postings() {
     let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
 
     let doc_id = DocumentId::new();
-    let versions = vec![
+    let versions = [
         "Version 1: Initial document content for versioning test.",
         "Version 2: Updated document with additional content for more comprehensive testing of versioning workflow.",
         "Version 3: Final version with extensive content to test how postings work across document versions and updates.",
@@ -530,7 +530,7 @@ fn test_realistic_usage_workflow() {
     let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
 
     // Simulate realistic document processing workflow
-    let documents = vec![
+    let documents = [
         (
             "Technical documentation about Rust programming language features and best practices.",
             vec![(0, 9), (10, 13), (24, 5), (42, 8), (51, 8), (60, 3)], // Word boundaries

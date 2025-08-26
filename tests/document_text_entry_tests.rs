@@ -7,7 +7,7 @@
 //! - Memory layout compatibility and safety
 //! - Bytemuck Pod/Zeroable implementations
 
-use bytemuck;
+
 use shardex::document_text_entry::{
     DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
     TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
@@ -324,8 +324,8 @@ fn test_memory_layout_consistency() {
     );
 
     // Verify headers are reasonably sized
-    assert!(TextIndexHeader::SIZE >= 80 + 4 + 8); // FileHeader + entry_count + next_entry_offset
-    assert!(TextDataHeader::SIZE >= 80 + 8 + 8); // FileHeader + total_text_size + next_text_offset
+    const _: () = assert!(TextIndexHeader::SIZE >= 80 + 4 + 8); // FileHeader + entry_count + next_entry_offset
+    const _: () = assert!(TextDataHeader::SIZE >= 80 + 8 + 8); // FileHeader + total_text_size + next_text_offset
 }
 
 #[test]

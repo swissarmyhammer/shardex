@@ -661,8 +661,10 @@ mod tests {
 
     #[test]
     fn test_oversized_buffer_handling() {
-        let mut config = MemoryPoolConfig::default();
-        config.max_buffer_capacity = 100; // Small limit for testing
+        let config = MemoryPoolConfig {
+            max_buffer_capacity: 100, // Small limit for testing
+            ..Default::default()
+        };
         let pool = TextMemoryPool::new(config);
 
         // Create a large buffer that exceeds the limit
@@ -679,8 +681,10 @@ mod tests {
 
     #[test]
     fn test_buffer_expiration() {
-        let mut config = MemoryPoolConfig::default();
-        config.buffer_ttl = Duration::from_millis(10); // Very short TTL for testing
+        let config = MemoryPoolConfig {
+            buffer_ttl: Duration::from_millis(10), // Very short TTL for testing
+            ..Default::default()
+        };
         let pool = TextMemoryPool::new(config);
 
         // Create a buffer
@@ -725,8 +729,10 @@ mod tests {
 
     #[test]
     fn test_pool_size_limits() {
-        let mut config = MemoryPoolConfig::default();
-        config.max_pool_size = 2; // Very small pool for testing
+        let config = MemoryPoolConfig {
+            max_pool_size: 2, // Very small pool for testing
+            ..Default::default()
+        };
         let pool = TextMemoryPool::new(config);
 
         // Create more buffers than the pool can hold
@@ -756,8 +762,10 @@ mod tests {
 
     #[test]
     fn test_growth_factor() {
-        let mut config = MemoryPoolConfig::default();
-        config.growth_factor = 2.0;
+        let config = MemoryPoolConfig {
+            growth_factor: 2.0,
+            ..Default::default()
+        };
         let pool = TextMemoryPool::new(config);
 
         let buf = pool.get_string_buffer(100);

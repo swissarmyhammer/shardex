@@ -733,8 +733,10 @@ mod tests {
     async fn test_batched_writes() {
         let temp_dir = TempDir::new().unwrap();
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let mut config = ConcurrentStorageConfig::default();
-        config.max_batch_size = 2; // Small batch size for testing
+        let config = ConcurrentStorageConfig {
+            max_batch_size: 2, // Small batch size for testing
+            ..Default::default()
+        };
 
         let concurrent_storage = ConcurrentDocumentTextStorage::new(storage, config);
         concurrent_storage
@@ -776,13 +778,15 @@ mod tests {
 
     #[test]
     fn test_metrics_calculations() {
-        let mut metrics = ConcurrentStorageMetrics::default();
-        metrics.successful_reads = 80;
-        metrics.read_operations = 100;
-        metrics.successful_writes = 90;
-        metrics.write_operations = 100;
-        metrics.metadata_cache_hits = 70;
-        metrics.metadata_cache_misses = 30;
+        let metrics = ConcurrentStorageMetrics {
+            successful_reads: 80,
+            read_operations: 100,
+            successful_writes: 90,
+            write_operations: 100,
+            metadata_cache_hits: 70,
+            metadata_cache_misses: 30,
+            ..Default::default()
+        };
 
         assert_eq!(metrics.read_success_ratio(), 0.8);
         assert_eq!(metrics.write_success_ratio(), 0.9);

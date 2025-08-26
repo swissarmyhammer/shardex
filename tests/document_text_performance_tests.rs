@@ -130,7 +130,7 @@ fn test_many_documents_performance() {
 
         let mut doc_ids = Vec::with_capacity(document_count);
         let document_text =
-            format!("Performance test document with unique content for scalability testing.");
+            "Performance test document with unique content for scalability testing.".to_string();
 
         // Measure bulk storage time
         let start = Instant::now();
