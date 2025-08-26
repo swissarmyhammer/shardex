@@ -496,7 +496,7 @@ mod tests {
         let cow_index = CowShardexIndex::new(index);
 
         // Should be able to get quick stats
-        let stats = cow_index.quick_stats().expect("Failed to get quick stats");
+        let stats = cow_index.quick_stats(0).expect("Failed to get quick stats");
         assert_eq!(stats.total_shards, 0);
         assert_eq!(stats.vector_dimension, 128);
     }

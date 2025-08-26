@@ -45,7 +45,7 @@
 //! // Coordinated write operation
 //! let write_result = concurrent.write_operation(|writer| {
 //!     // Modify the index through the writer
-//!     let stats = writer.index().stats()?;
+//!     let stats = writer.index().stats(0)?;
 //!     Ok(stats.total_shards)
 //! }).await?;
 //!

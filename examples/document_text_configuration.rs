@@ -6,7 +6,7 @@
 //! - Performance-optimized setups
 //! - Different use case scenarios
 
-use shardex::{DocumentId, DistanceMetric, Posting, Shardex, ShardexConfig, ShardexImpl};
+use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
 use std::error::Error;
 use std::time::Instant;
 
@@ -171,7 +171,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
         let segments = ["artificial intelligence", "machine learning", "deep neural", 
                        "natural language", "computer vision", "robotics"];
         
-        for (j, segment) in segments.iter().enumerate() {
+        for (_j, segment) in segments.iter().enumerate() {
             if let Some(pos) = text.find(segment) {
                 postings.push(Posting {
                     document_id: doc_id,
