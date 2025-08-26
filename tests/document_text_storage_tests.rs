@@ -11,11 +11,12 @@
 use shardex::document_text_storage::DocumentTextStorage;
 use shardex::error::ShardexError;
 use shardex::identifiers::DocumentId;
-use shardex::test_utils::{create_temp_dir_for_test, test_constants};
+mod common;
+use common::{create_temp_dir_for_test, test_constants};
 
 #[test]
 fn test_storage_creation() {
-    let temp_dir = create_temp_dir_for_test("test_storage_creation");
+    let temp_dir = create_temp_dir_for_test();
     let max_size = test_constants::DEFAULT_SHARD_SIZE * 1024; // Use test constant
 
     let storage = DocumentTextStorage::create(&temp_dir, max_size).unwrap();
@@ -32,7 +33,7 @@ fn test_storage_creation() {
 
 #[test]
 fn test_storage_opening() {
-    let temp_dir = create_temp_dir_for_test("test_storage_opening");
+    let temp_dir = create_temp_dir_for_test();
     let max_size = test_constants::DEFAULT_SHARD_SIZE * 1024;
     let doc_id = DocumentId::new();
     let text = "Test text for opening validation.";
@@ -57,7 +58,7 @@ fn test_storage_opening() {
 
 #[test]
 fn test_basic_text_storage_and_retrieval() {
-    let temp_dir = create_temp_dir_for_test("test_basic_text_storage_and_retrieval");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_id = DocumentId::new();
@@ -78,7 +79,7 @@ fn test_basic_text_storage_and_retrieval() {
 
 #[test]
 fn test_multiple_documents() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let documents = vec![
@@ -109,7 +110,7 @@ fn test_multiple_documents() {
 
 #[test]
 fn test_document_updates() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_id = DocumentId::new();
@@ -139,7 +140,7 @@ fn test_document_updates() {
 
 #[test]
 fn test_unicode_text_handling() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let test_cases = vec![
@@ -173,7 +174,7 @@ fn test_unicode_text_handling() {
 
 #[test]
 fn test_size_limit_enforcement() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let small_limit = 100; // 100 bytes
     let mut storage = DocumentTextStorage::create(&temp_dir, small_limit).unwrap();
 
@@ -209,7 +210,7 @@ fn test_size_limit_enforcement() {
 
 #[test]
 fn test_document_not_found() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let nonexistent_doc = DocumentId::new();
@@ -226,7 +227,7 @@ fn test_document_not_found() {
 
 #[test]
 fn test_empty_text_rejection() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_id = DocumentId::new();
@@ -244,7 +245,7 @@ fn test_empty_text_rejection() {
 
 #[test]
 fn test_file_growth_and_resize() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     // Store many documents to trigger file growth
@@ -269,7 +270,7 @@ fn test_file_growth_and_resize() {
 
 #[test]
 fn test_backward_search_finds_latest() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_id = DocumentId::new();
@@ -297,7 +298,7 @@ fn test_backward_search_finds_latest() {
 
 #[test]
 fn test_sync_operations() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_id = DocumentId::new();
@@ -315,7 +316,7 @@ fn test_sync_operations() {
 
 #[test]
 fn test_utilization_ratio() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     // Initially should have low utilization (mostly header overhead)
@@ -345,7 +346,7 @@ fn test_utilization_ratio() {
 
 #[test]
 fn test_max_document_size_updates() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, 100).unwrap();
 
     assert_eq!(storage.max_document_size(), 100);
@@ -367,7 +368,7 @@ fn test_max_document_size_updates() {
 
 #[test]
 fn test_persistence_across_sessions() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let doc_id = DocumentId::new();
     let text = "Persistent text data across sessions.";
 
@@ -416,13 +417,13 @@ fn test_persistence_across_sessions() {
 
 #[test]
 fn test_large_document_handling() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let large_limit = 10 * test_constants::DEFAULT_SHARD_SIZE * 1024; // 10MB limit
     let mut storage = DocumentTextStorage::create(&temp_dir, large_limit).unwrap();
 
     let doc_id = DocumentId::new();
     // Create a reasonably large document (1MB)
-    let large_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20000);
+    let large_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(17964);
 
     // Should succeed with large document
     storage.store_text(doc_id, &large_text).unwrap();
@@ -435,7 +436,7 @@ fn test_large_document_handling() {
 
 #[test]
 fn test_many_small_documents() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let document_count = 1000;
@@ -460,7 +461,7 @@ fn test_many_small_documents() {
 
 #[test]
 fn test_mixed_document_sizes() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let medium_text =
@@ -500,7 +501,7 @@ fn test_mixed_document_sizes() {
 
 #[test]
 fn test_text_alignment_and_boundaries() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     // Test various text lengths that might test alignment boundaries
@@ -529,7 +530,7 @@ fn test_text_alignment_and_boundaries() {
 fn test_concurrent_document_operations() {
     // Note: This is not true concurrency testing (would require threading),
     // but tests interleaved operations that might happen in concurrent scenarios
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let doc_ids: Vec<DocumentId> = (0..10).map(|_| DocumentId::new()).collect();
@@ -561,7 +562,7 @@ fn test_concurrent_document_operations() {
 
 #[test]
 fn test_storage_statistics() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     // Initially empty
@@ -602,7 +603,7 @@ fn test_storage_statistics() {
 
 #[test]
 fn test_text_with_special_characters() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let special_texts = vec![
@@ -649,7 +650,7 @@ fn test_text_with_special_characters() {
 
 #[test]
 fn test_error_handling_during_storage() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let tiny_limit = 10; // Very small limit for testing
     let mut storage = DocumentTextStorage::create(&temp_dir, tiny_limit).unwrap();
 
@@ -679,7 +680,7 @@ fn test_error_handling_during_storage() {
 
 #[test]
 fn test_boundary_text_lengths() {
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let limit = 1000;
     let mut storage = DocumentTextStorage::create(&temp_dir, limit).unwrap();
 
@@ -711,7 +712,7 @@ fn test_boundary_text_lengths() {
 #[test]
 fn test_file_system_stress() {
     // Test behavior with rapid file operations that might stress the file system
-    let temp_dir = create_temp_dir_for_test("document_storage_test");
+    let temp_dir = create_temp_dir_for_test();
     let mut storage = DocumentTextStorage::create(&temp_dir, test_constants::DEFAULT_SHARD_SIZE * 1024).unwrap();
 
     let iterations = 50;

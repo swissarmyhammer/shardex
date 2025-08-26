@@ -72,7 +72,7 @@ async fn batch_document_processing(index: &mut ShardexImpl) -> Result<(), Box<dy
         
         // Create overlapping postings based on keywords
         let mut postings = Vec::new();
-        let mut current_pos = 0u32;
+        let _current_pos = 0u32;
         
         for keyword in keywords {
             // Find keyword positions in text
@@ -355,7 +355,7 @@ async fn performance_example(index: &mut ShardexImpl) -> Result<(), Box<dyn Erro
     let mut postings = Vec::new();
     let words = ["Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit"];
     
-    for (i, word) in words.iter().enumerate() {
+    for (_i, word) in words.iter().enumerate() {
         // Find multiple occurrences of each word
         let mut start_pos = 0;
         let mut occurrence_count = 0;

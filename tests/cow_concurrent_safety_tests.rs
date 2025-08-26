@@ -3,7 +3,8 @@
 //! This test suite verifies that the copy-on-write implementation provides
 //! safe concurrent access patterns as specified in the requirements.
 
-use shardex::test_utils::TestSetupBuilder;
+mod common;
+use common::TestSetupBuilder;
 use shardex::{CowShardexIndex, Shard};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -87,7 +88,7 @@ async fn test_reader_consistency_during_writes() {
     for _ in 0..3 {
         let shard_id = shardex::ShardId::new();
         let shard =
-            Shard::create(shard_id, 50, 64, _test_env.path_buf()).expect("Failed to create shard");
+            Shard::create(shard_id, 50, 64, _test_env.path().to_path_buf()).expect("Failed to create shard");
         initial_index.add_shard(shard).expect("Failed to add shard");
     }
 
