@@ -6,12 +6,15 @@
 #[cfg(test)]
 mod tests {
     use crate::error::ShardexError;
-    use crate::test_utils::error::{
-        assert_error_contains, assert_error_context, assert_error_causality, expect_error,
-        expect_success, create_test_io_error,
+    use crate::{
+        assert_error_contains, assert_error_type, 
+        test_utils::error::{
+            assert_error_context, assert_error_causality, expect_error, 
+            expect_success, create_test_io_error
+        }
     };
     use std::path::Path;
-    use super::*;
+
 
     #[test]
     fn test_error_with_file_context_enhancement() {

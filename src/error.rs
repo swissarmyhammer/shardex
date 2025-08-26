@@ -366,7 +366,7 @@ impl ShardexError {
                     operation: format!("{}: {}", context, op),
                     reason: reason.clone(),
                     recovery_suggestion: recovery_suggestion.clone(),
-                    retry_count: retry_count.clone(),
+                    retry_count,
                 }
             },
             Self::ResourceExhausted { resource, reason, suggestion } => Self::ResourceExhausted {
