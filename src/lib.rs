@@ -83,7 +83,7 @@ pub mod statistics_integration_test;
 pub mod error_handling_integration_test;
 
 pub use async_document_text_storage::{
-    AsyncConfig, AsyncDocumentTextStorage, AsyncIOStats, ReadAheadBuffer, ReadAheadConfig,
+    AsyncDocumentTextStorage, AsyncStorageConfig, AsyncStorageMetrics,
 };
 pub use batch_processor::BatchProcessor;
 pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, BloomFilterStats};

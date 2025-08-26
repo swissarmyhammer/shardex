@@ -170,9 +170,9 @@ impl CowShardexIndex {
     /// Get current index statistics without acquiring a full reference
     ///
     /// This provides quick access to index statistics for monitoring purposes.
-    pub fn quick_stats(&self) -> Result<crate::structures::IndexStats, ShardexError> {
+    pub fn quick_stats(&self, pending_operations: usize) -> Result<crate::structures::IndexStats, ShardexError> {
         let index_ref = self.read();
-        index_ref.stats()
+        index_ref.stats(pending_operations)
     }
 
     /// Check if the index is empty
@@ -236,8 +236,8 @@ impl IndexWriter {
     /// Get statistics for the modified index
     ///
     /// This shows statistics for the local modifications before they are committed.
-    pub fn stats(&self) -> Result<crate::structures::IndexStats, ShardexError> {
-        self.modified_index.stats()
+    pub fn stats(&self, pending_operations: usize) -> Result<crate::structures::IndexStats, ShardexError> {
+        self.modified_index.stats(pending_operations)
     }
 }
 
@@ -516,7 +516,7 @@ mod tests {
             .expect("Failed to create writer");
 
         // Writer should be able to get stats for its local copy
-        let stats = writer.stats().expect("Failed to get writer stats");
+        let stats = writer.stats(0).expect("Failed to get writer stats");
         assert_eq!(stats.vector_dimension, 128);
     }
 

@@ -1288,13 +1288,13 @@ impl ShardexIndex {
     }
 
     /// Get index statistics in a format compatible with structures::IndexStats
-    pub fn stats(&self) -> Result<crate::structures::IndexStats, ShardexError> {
+    pub fn stats(&self, pending_operations: usize) -> Result<crate::structures::IndexStats, ShardexError> {
         let stats = self.statistics();
 
         Ok(crate::structures::IndexStats {
             total_shards: stats.total_shards,
             total_postings: stats.total_postings,
-            pending_operations: 0, // WAL operations not implemented yet
+            pending_operations,
             memory_usage: stats.total_memory_usage,
             active_postings: stats.total_postings, // Assume all postings are active for now
             deleted_postings: 0,                   // Deleted postings tracking not implemented yet
@@ -2318,6 +2318,46 @@ mod tests {
         assert_eq!(stats.total_postings, 1);
         assert_eq!(stats.total_capacity, 20);
         assert!(stats.average_utilization > 0.0);
+    }
+
+    #[test]
+    fn test_wal_operations_tracking() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(16);
+
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Add a shard for realistic testing
+        let shard_id = ShardId::new();
+        let mut shard = Shard::create(shard_id, 20, 16, temp_dir.path().to_path_buf()).unwrap();
+        let doc_id = DocumentId::new();
+        let posting = Posting::new(doc_id, 0, 10, vec![0.5; 16], 16).unwrap();
+        shard.add_posting(posting).unwrap();
+        index.add_shard(shard).unwrap();
+
+        // Test with no pending operations
+        let stats = index.stats(0).unwrap();
+        assert_eq!(stats.pending_operations, 0);
+        assert_eq!(stats.total_shards, 1);
+        assert_eq!(stats.total_postings, 1);
+
+        // Test with some pending operations
+        let stats = index.stats(5).unwrap();
+        assert_eq!(stats.pending_operations, 5);
+        assert_eq!(stats.total_shards, 1); // Other stats should be unaffected
+        assert_eq!(stats.total_postings, 1);
+
+        // Test with many pending operations
+        let stats = index.stats(1000).unwrap();
+        assert_eq!(stats.pending_operations, 1000);
+        assert_eq!(stats.total_shards, 1);
+        assert_eq!(stats.total_postings, 1);
+
+        // Ensure pending operations are passed through correctly
+        assert_eq!(stats.vector_dimension, 16);
+        assert!(stats.memory_usage > 0);
     }
 
     #[test]

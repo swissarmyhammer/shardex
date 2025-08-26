@@ -210,7 +210,7 @@ async fn test_sequential_writer_operations() {
             .expect("Failed to create writer");
 
         // Simulate some modifications to the writer's copy
-        let _stats = writer.stats().expect("Failed to get writer stats");
+        let _stats = writer.stats(0).expect("Failed to get writer stats");
 
         // Commit the changes
         writer
@@ -312,7 +312,7 @@ fn test_atomic_update_integrity() {
                 // Even threads: readers
                 for _ in 0..10 {
                     let reader = cow_index_clone.read();
-                    let stats = reader.stats().expect("Failed to get stats");
+                    let stats = reader.stats(0).expect("Failed to get stats");
 
                     // Verify stats are internally consistent
                     assert!(stats.total_shards <= 1000, "Unreasonable shard count");
@@ -332,7 +332,7 @@ fn test_atomic_update_integrity() {
                     std::thread::sleep(Duration::from_millis(2));
 
                     // For non-async tests, just validate the writer state
-                    let stats = writer.stats().expect("Failed to get writer stats");
+                    let stats = writer.stats(0).expect("Failed to get writer stats");
                     assert_eq!(stats.vector_dimension, 8, "Writer integrity compromised");
 
                     // Discard the writer (simulating commit)
@@ -340,7 +340,7 @@ fn test_atomic_update_integrity() {
 
                     // Verify the index is still consistent
                     let reader = cow_index_clone.read();
-                    let stats = reader.stats().expect("Failed to get stats");
+                    let stats = reader.stats(0).expect("Failed to get stats");
                     assert_eq!(stats.vector_dimension, 8, "Index integrity compromised");
                 }
                 format!("Writer {} completed", i)
@@ -364,7 +364,7 @@ fn test_atomic_update_integrity() {
 
     // Final consistency check
     let final_reader = cow_index.read();
-    let final_stats = final_reader.stats().expect("Failed to get final stats");
+    let final_stats = final_reader.stats(0).expect("Failed to get final stats");
     assert_eq!(
         final_stats.vector_dimension, 8,
         "Final integrity check failed"
