@@ -272,14 +272,21 @@ impl TextIndexHeader {
     }
 
     /// Validate checksum against provided entry data
+    /// 
+    /// Uses enhanced checksum calculation that includes the entire header structure
+    /// (normalized) plus the provided data, ensuring comprehensive validation.
     pub fn validate_checksum(&self, data: &[u8]) -> Result<(), ShardexError> {
-        self.file_header.validate_checksum(data)
+        self.file_header.validate_checksum(data).map_err(|e| {
+            ShardexError::Corruption(format!("TextIndexHeader checksum validation failed: {}", e))
+        })
     }
 
     /// Update checksum based on entry data
     pub fn update_checksum(&mut self, data: &[u8]) {
         self.file_header.update_checksum(data);
     }
+
+
 
     /// Get the offset where the next document entry should be written
     pub fn next_entry_offset(&self) -> u64 {
@@ -471,13 +478,17 @@ impl TextDataHeader {
 
     /// Validate checksum against provided text data
     pub fn validate_checksum(&self, data: &[u8]) -> Result<(), ShardexError> {
-        self.file_header.validate_checksum(data)
+        self.file_header.validate_checksum(data).map_err(|e| {
+            ShardexError::Corruption(format!("TextDataHeader checksum validation failed: {}", e))
+        })
     }
 
     /// Update checksum based on text data
     pub fn update_checksum(&mut self, data: &[u8]) {
         self.file_header.update_checksum(data);
     }
+
+
 
     /// Get the offset where the next text block should be written
     pub fn next_text_offset(&self) -> u64 {

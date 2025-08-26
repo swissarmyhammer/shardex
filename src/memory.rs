@@ -708,7 +708,7 @@ impl StandardHeader {
     }
 
     /// Update CRC32 with additional data
-    fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    pub fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
         const CRC32_TABLE: [u32; 256] = generate_crc32_table();
 
         for &byte in data {

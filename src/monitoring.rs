@@ -476,7 +476,7 @@ impl PerformanceMonitor {
             search_latency_p50: search_p50,
             search_latency_p95: search_p95,
             search_latency_p99: search_p99,
-            write_throughput: write_throughput,
+            write_throughput,
             read_throughput: search_throughput,
             bloom_filter_hit_rate: bloom_hit_rate,
             bloom_filter_false_positive_rate: bloom_false_positive_rate,
@@ -506,6 +506,12 @@ impl PerformanceMonitor {
 }
 
 impl Default for PerformanceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for PercentileCalculator {
     fn default() -> Self {
         Self::new()
     }
