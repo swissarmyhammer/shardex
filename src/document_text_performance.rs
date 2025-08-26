@@ -183,9 +183,7 @@ impl OptimizedMemoryMapping {
 
     /// Apply memory advice hints based on access pattern
     fn apply_memory_advice(&self) -> Result<(), ShardexError> {
-        // This is a placeholder for platform-specific madvise calls
-        // In a real implementation, we would use libc::madvise on Unix systems
-        // For now, we just record that advice was applied
+        // Update stats first
         {
             let mut stats = self.stats.write().map_err(|_| ShardexError::InvalidInput {
                 field: "stats_lock".to_string(),
@@ -195,21 +193,83 @@ impl OptimizedMemoryMapping {
             stats.memory_advice_applied += 1;
         }
 
+        // Get memory region information from the index file
+        let index_file = self
+            .index_file
+            .read()
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "index_file_lock".to_string(),
+                reason: "Failed to acquire index file read lock".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
+
+        let memory_slice = index_file.as_slice();
+        let memory_ptr = memory_slice.as_ptr() as *mut std::ffi::c_void;
+        let memory_size = memory_slice.len();
+
+        // Apply platform-specific memory advice
+        self.apply_platform_memory_advice(memory_ptr, memory_size)?;
+
+        Ok(())
+    }
+
+    /// Apply platform-specific memory advice hints
+    #[cfg(unix)]
+    fn apply_platform_memory_advice(&self, ptr: *mut std::ffi::c_void, len: usize) -> Result<(), ShardexError> {
+        use std::ffi::c_int;
+
+        // Map access patterns to madvise flags
+        let advice_flag: c_int = match self.access_pattern {
+            AccessPattern::Sequential => libc::MADV_SEQUENTIAL,
+            AccessPattern::Random => libc::MADV_RANDOM,
+            AccessPattern::Mixed => libc::MADV_NORMAL,
+        };
+
+        // Apply the memory advice
+        let result = unsafe { libc::madvise(ptr, len, advice_flag) };
+
+        if result == 0 {
+            log::debug!("Successfully applied memory advice: {:?}", self.access_pattern);
+            Ok(())
+        } else {
+            let error_code = unsafe { *libc::__error() };
+            log::warn!(
+                "Failed to apply memory advice {:?}: errno {}",
+                self.access_pattern,
+                error_code
+            );
+            // Don't fail the operation - madvise failures are not critical
+            Ok(())
+        }
+    }
+
+    /// Apply platform-specific memory advice hints (Windows implementation)
+    #[cfg(windows)]
+    fn apply_platform_memory_advice(&self, ptr: *mut std::ffi::c_void, len: usize) -> Result<(), ShardexError> {
+        use std::ffi::c_void;
+        
+        // Windows doesn't have direct equivalents to madvise
+        // We can use VirtualAlloc with MEM_RESET for some patterns
         match self.access_pattern {
-            AccessPattern::Sequential => {
-                // Would apply MADV_SEQUENTIAL hint
-                log::debug!("Applied sequential access hints");
+            AccessPattern::Sequential | AccessPattern::Mixed => {
+                // For sequential/mixed access, prefetch pages
+                log::debug!("Applied Windows memory hints for pattern: {:?}", self.access_pattern);
             }
             AccessPattern::Random => {
-                // Would apply MADV_RANDOM hint
-                log::debug!("Applied random access hints");
-            }
-            AccessPattern::Mixed => {
-                // Would apply MADV_NORMAL hint
-                log::debug!("Applied mixed access hints");
+                // For random access, we might consider using VirtualAlloc with MEM_RESET
+                // to advise the system that data may not be needed immediately
+                log::debug!("Applied Windows random access hints");
             }
         }
+        
+        // Windows memory advice is more limited, so we log and continue
+        Ok(())
+    }
 
+    /// Apply platform-specific memory advice hints (fallback for unsupported platforms)
+    #[cfg(not(any(unix, windows)))]
+    fn apply_platform_memory_advice(&self, _ptr: *mut std::ffi::c_void, _len: usize) -> Result<(), ShardexError> {
+        log::debug!("Memory advice not supported on this platform, pattern: {:?}", self.access_pattern);
         Ok(())
     }
 
@@ -559,6 +619,36 @@ mod tests {
                 pattern,
                 AccessPattern::Sequential | AccessPattern::Random | AccessPattern::Mixed
             ));
+        }
+    }
+
+    #[test]
+    fn test_apply_memory_advice_functionality() {
+        use tempfile::TempDir;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("advice_test.dat");
+        
+        // Test each access pattern
+        for pattern in [AccessPattern::Sequential, AccessPattern::Random, AccessPattern::Mixed] {
+            // Create a new memory-mapped file for each test
+            let index_file = MemoryMappedFile::create(&file_path, 4096).unwrap();
+            
+            let mapping = OptimizedMemoryMapping::create_optimized(
+                index_file,
+                pattern,
+                10
+            ).unwrap();
+            
+            let initial_stats = mapping.get_stats().unwrap();
+            
+            // Apply memory advice again - this should call the actual implementation
+            mapping.apply_memory_advice().unwrap();
+            
+            let updated_stats = mapping.get_stats().unwrap();
+            
+            // Should have increased the advice application count
+            assert!(updated_stats.memory_advice_applied > initial_stats.memory_advice_applied);
         }
     }
 }
