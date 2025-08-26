@@ -988,15 +988,342 @@ impl IntegrityChecker {
     /// Verify that posting data contains valid structures
     fn verify_posting_data_quality(
         &self,
-        _posting_data: &[u8],
-        _header: &crate::posting_storage::PostingStorageHeader,
+        posting_data: &[u8],
+        header: &crate::posting_storage::PostingStorageHeader,
     ) -> Result<(), Box<CorruptionReport>> {
-        // Placeholder for posting data quality verification
-        // In a full implementation, this would:
-        // 1. Verify posting headers are valid
-        // 2. Check document IDs are reasonable
-        // 3. Verify start/length ranges are sensible
-        // 4. Check for overlapping or inconsistent postings
+        use crate::identifiers::DocumentId;
+
+        // 1. Validate basic header constraints
+        if header.current_count == 0 {
+            return Ok(()); // Empty storage is valid
+        }
+
+        if header.current_count > header.capacity {
+            return Err(Box::new(CorruptionReport {
+                corruption_type: CorruptionType::DataCorruption,
+                file_path: PathBuf::from("posting_storage"),
+                corruption_offset: None,
+                corruption_size: None,
+                description: format!(
+                    "Current count {} exceeds capacity {}",
+                    header.current_count, header.capacity
+                ),
+                recovery_recommendations: vec!["Rebuild posting storage with correct capacity".to_string()],
+                severity: 0.9,
+                is_recoverable: true,
+                detected_at: SystemTime::now(),
+            }));
+        }
+
+        // 2. Verify data offsets are within bounds
+        let data_size = posting_data.len();
+        let header_size = std::mem::size_of::<crate::posting_storage::PostingStorageHeader>();
+
+        // Convert absolute offsets to relative offsets (relative to start of data region)
+        // Check for overflow before subtraction
+        if header.document_ids_offset < header_size as u64
+            || header.starts_offset < header_size as u64
+            || header.lengths_offset < header_size as u64
+            || header.deleted_flags_offset < header_size as u64
+        {
+            return Err(Box::new(CorruptionReport {
+                corruption_type: CorruptionType::HeaderCorruption,
+                file_path: PathBuf::from("posting_storage"),
+                corruption_offset: Some(0),
+                corruption_size: Some(header_size as u64),
+                description: "Invalid header offsets - offsets point before end of header".to_string(),
+                recovery_recommendations: vec!["Header is corrupted; restore from backup".to_string()],
+                severity: 1.0,
+                is_recoverable: false,
+                detected_at: SystemTime::now(),
+            }));
+        }
+
+        let document_ids_offset_rel = (header.document_ids_offset as usize)
+            .checked_sub(header_size)
+            .ok_or_else(|| {
+                Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::HeaderCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: Some(0),
+                    corruption_size: Some(header_size as u64),
+                    description: "Document IDs offset calculation overflow".to_string(),
+                    recovery_recommendations: vec!["Header is corrupted; restore from backup".to_string()],
+                    severity: 1.0,
+                    is_recoverable: false,
+                    detected_at: SystemTime::now(),
+                })
+            })?;
+
+        let starts_offset_rel = (header.starts_offset as usize)
+            .checked_sub(header_size)
+            .ok_or_else(|| {
+                Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::HeaderCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: Some(0),
+                    corruption_size: Some(header_size as u64),
+                    description: "Starts offset calculation overflow".to_string(),
+                    recovery_recommendations: vec!["Header is corrupted; restore from backup".to_string()],
+                    severity: 1.0,
+                    is_recoverable: false,
+                    detected_at: SystemTime::now(),
+                })
+            })?;
+
+        let lengths_offset_rel = (header.lengths_offset as usize)
+            .checked_sub(header_size)
+            .ok_or_else(|| {
+                Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::HeaderCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: Some(0),
+                    corruption_size: Some(header_size as u64),
+                    description: "Lengths offset calculation overflow".to_string(),
+                    recovery_recommendations: vec!["Header is corrupted; restore from backup".to_string()],
+                    severity: 1.0,
+                    is_recoverable: false,
+                    detected_at: SystemTime::now(),
+                })
+            })?;
+
+        let deleted_flags_offset_rel = (header.deleted_flags_offset as usize)
+            .checked_sub(header_size)
+            .ok_or_else(|| {
+                Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::HeaderCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: Some(0),
+                    corruption_size: Some(header_size as u64),
+                    description: "Deleted flags offset calculation overflow".to_string(),
+                    recovery_recommendations: vec!["Header is corrupted; restore from backup".to_string()],
+                    severity: 1.0,
+                    is_recoverable: false,
+                    detected_at: SystemTime::now(),
+                })
+            })?;
+
+        let document_ids_end = document_ids_offset_rel + (header.current_count as usize * 16);
+        let starts_end = starts_offset_rel + (header.current_count as usize * 4);
+        let lengths_end = lengths_offset_rel + (header.current_count as usize * 4);
+        let deleted_flags_end = deleted_flags_offset_rel + ((header.current_count as usize + 7) / 8);
+
+        if document_ids_end > data_size
+            || starts_end > data_size
+            || lengths_end > data_size
+            || deleted_flags_end > data_size
+        {
+            return Err(Box::new(CorruptionReport {
+                corruption_type: CorruptionType::DataCorruption,
+                file_path: PathBuf::from("posting_storage"),
+                corruption_offset: None,
+                corruption_size: None,
+                description: "Posting data arrays extend beyond file bounds".to_string(),
+                recovery_recommendations: vec!["File may be truncated; restore from backup".to_string()],
+                severity: 1.0,
+                is_recoverable: false,
+                detected_at: SystemTime::now(),
+            }));
+        }
+
+        // 3. Analyze posting data quality
+        let mut invalid_document_ids = 0;
+        let mut zero_lengths = 0;
+        let mut excessive_lengths = 0;
+        let mut overflow_ranges = 0;
+        let mut active_count_actual = 0;
+        let mut document_id_counts: std::collections::HashMap<DocumentId, usize> = std::collections::HashMap::new();
+        let mut previous_doc_id = None;
+        let mut ordering_violations = 0;
+
+        const MAX_REASONABLE_LENGTH: u32 = 10_000_000; // 10MB max segment length
+
+        for i in 0..header.current_count as usize {
+            // Check if posting is deleted
+            let byte_index = i / 8;
+            let bit_index = i % 8;
+            let deleted_byte_offset = deleted_flags_offset_rel + byte_index;
+
+            if deleted_byte_offset < data_size {
+                let deleted_byte = posting_data[deleted_byte_offset];
+                let is_deleted = (deleted_byte >> bit_index) & 1 != 0;
+
+                if !is_deleted {
+                    active_count_actual += 1;
+                }
+            }
+
+            // Read document ID
+            let doc_id_offset = document_ids_offset_rel + (i * 16);
+            if doc_id_offset + 16 <= data_size {
+                let doc_id_bytes = &posting_data[doc_id_offset..doc_id_offset + 16];
+                let document_id =
+                    DocumentId::from_raw(u128::from_le_bytes(doc_id_bytes.try_into().unwrap_or([0u8; 16])));
+
+                // Check for invalid document IDs (zero or all-bits-set patterns)
+                let raw_id = document_id.raw();
+
+                if raw_id == 0 || raw_id == u128::MAX {
+                    invalid_document_ids += 1;
+                } else {
+                    // Track document ID frequency
+                    *document_id_counts.entry(document_id).or_insert(0) += 1;
+
+                    // Check ordering (should be generally ascending)
+                    if let Some(prev_id) = previous_doc_id {
+                        if document_id < prev_id {
+                            ordering_violations += 1;
+                        }
+                    }
+                    previous_doc_id = Some(document_id);
+                }
+            }
+
+            // Read start position
+            let start_offset = starts_offset_rel + (i * 4);
+            if start_offset + 4 <= data_size {
+                let start_bytes = &posting_data[start_offset..start_offset + 4];
+                let start = u32::from_le_bytes(start_bytes.try_into().unwrap_or([0u8; 4]));
+
+                // Read length
+                let length_offset = lengths_offset_rel + (i * 4);
+                if length_offset + 4 <= data_size {
+                    let length_bytes = &posting_data[length_offset..length_offset + 4];
+                    let length = u32::from_le_bytes(length_bytes.try_into().unwrap_or([0u8; 4]));
+
+                    // Validate length
+                    if length == 0 {
+                        zero_lengths += 1;
+                    } else if length > MAX_REASONABLE_LENGTH {
+                        excessive_lengths += 1;
+                    }
+
+                    // Check for overflow
+                    if start.checked_add(length).is_none() {
+                        overflow_ranges += 1;
+                    }
+                }
+            }
+        }
+
+        // 4. Check active count consistency
+        if active_count_actual != header.active_count as usize {
+            return Err(Box::new(CorruptionReport {
+                corruption_type: CorruptionType::DataCorruption,
+                file_path: PathBuf::from("posting_storage"),
+                corruption_offset: None,
+                corruption_size: None,
+                description: format!(
+                    "Active count mismatch: header claims {}, actual {}",
+                    header.active_count, active_count_actual
+                ),
+                recovery_recommendations: vec!["Recompute active count from posting data".to_string()],
+                severity: 0.6,
+                is_recoverable: true,
+                detected_at: SystemTime::now(),
+            }));
+        }
+
+        // 5. Apply quality thresholds
+        let total_postings = header.current_count as usize;
+        if total_postings > 0 {
+            let invalid_ratio = invalid_document_ids as f64 / total_postings as f64;
+            let zero_length_ratio = zero_lengths as f64 / total_postings as f64;
+            let excessive_length_ratio = excessive_lengths as f64 / total_postings as f64;
+            let overflow_ratio = overflow_ranges as f64 / total_postings as f64;
+            let ordering_violation_ratio = ordering_violations as f64 / total_postings as f64;
+
+            if invalid_ratio > 0.1 {
+                return Err(Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::DataCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: None,
+                    corruption_size: None,
+                    description: format!(
+                        "Too many invalid document IDs: {:.1}% ({} out of {})",
+                        invalid_ratio * 100.0,
+                        invalid_document_ids,
+                        total_postings
+                    ),
+                    recovery_recommendations: vec!["Regenerate document IDs from valid postings".to_string()],
+                    severity: 0.8,
+                    is_recoverable: true,
+                    detected_at: SystemTime::now(),
+                }));
+            }
+
+            if zero_length_ratio > 0.05 {
+                return Err(Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::DataCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: None,
+                    corruption_size: None,
+                    description: format!(
+                        "Too many zero-length postings: {:.1}% ({} out of {})",
+                        zero_length_ratio * 100.0,
+                        zero_lengths,
+                        total_postings
+                    ),
+                    recovery_recommendations: vec!["Remove or fix zero-length postings".to_string()],
+                    severity: 0.4,
+                    is_recoverable: true,
+                    detected_at: SystemTime::now(),
+                }));
+            }
+
+            if excessive_length_ratio > 0.01 {
+                return Err(Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::DataCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: None,
+                    corruption_size: None,
+                    description: format!(
+                        "Too many excessively long postings: {:.1}% ({} out of {})",
+                        excessive_length_ratio * 100.0,
+                        excessive_lengths,
+                        total_postings
+                    ),
+                    recovery_recommendations: vec!["Validate posting lengths against document sizes".to_string()],
+                    severity: 0.7,
+                    is_recoverable: true,
+                    detected_at: SystemTime::now(),
+                }));
+            }
+
+            if overflow_ratio > 0.0 {
+                return Err(Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::DataCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: None,
+                    corruption_size: None,
+                    description: format!("Found {} postings with start+length overflow", overflow_ranges),
+                    recovery_recommendations: vec!["Fix posting ranges to prevent numeric overflow".to_string()],
+                    severity: 0.9,
+                    is_recoverable: true,
+                    detected_at: SystemTime::now(),
+                }));
+            }
+
+            if ordering_violation_ratio > 0.3 {
+                return Err(Box::new(CorruptionReport {
+                    corruption_type: CorruptionType::DataCorruption,
+                    file_path: PathBuf::from("posting_storage"),
+                    corruption_offset: None,
+                    corruption_size: None,
+                    description: format!(
+                        "Too many ordering violations: {:.1}% ({} out of {})",
+                        ordering_violation_ratio * 100.0,
+                        ordering_violations,
+                        total_postings
+                    ),
+                    recovery_recommendations: vec!["Re-sort postings by document ID".to_string()],
+                    severity: 0.5,
+                    is_recoverable: true,
+                    detected_at: SystemTime::now(),
+                }));
+            }
+        }
+
         Ok(())
     }
 
@@ -3344,5 +3671,355 @@ mod tests {
         assert!(!report.recovery_recommendations.is_empty());
         assert_eq!(report.corruption_type, CorruptionType::DataCorruption);
         assert!(report.severity > 0.0);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_valid_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header_size = std::mem::size_of::<crate::posting_storage::PostingStorageHeader>();
+
+        // Create a valid posting storage header
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 128),
+            capacity: 2,
+            current_count: 2,
+            active_count: 2,
+            document_ids_offset: header_size as u64, // Start right after header
+            starts_offset: (header_size + 2 * 16) as u64, // After document IDs
+            lengths_offset: (header_size + 2 * 16 + 2 * 4) as u64, // After starts
+            deleted_flags_offset: (header_size + 2 * 16 + 2 * 4 + 2 * 4) as u64, // After lengths
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        // Create valid posting data sized properly for the data structure
+        let mut posting_data = vec![0u8; 2 * 16 + 2 * 4 + 2 * 4 + 1]; // Document IDs + starts + lengths + deleted flags
+
+        // Add two valid document IDs in ascending order
+        use crate::identifiers::DocumentId;
+        let doc_id1 = DocumentId::from_raw(1000000000000000000u128);
+        let doc_id2 = DocumentId::from_raw(2000000000000000000u128);
+
+        posting_data[0..16].copy_from_slice(&doc_id1.to_bytes());
+        posting_data[16..32].copy_from_slice(&doc_id2.to_bytes());
+
+        // Add valid start positions
+        let starts_offset = 2 * 16;
+        posting_data[starts_offset..starts_offset + 4].copy_from_slice(&100u32.to_le_bytes());
+        posting_data[starts_offset + 4..starts_offset + 8].copy_from_slice(&200u32.to_le_bytes());
+
+        // Add valid lengths
+        let lengths_offset = 2 * 16 + 2 * 4;
+        posting_data[lengths_offset..lengths_offset + 4].copy_from_slice(&50u32.to_le_bytes());
+        posting_data[lengths_offset + 4..lengths_offset + 8].copy_from_slice(&75u32.to_le_bytes());
+
+        // Add deleted flags (both not deleted)
+        let deleted_flags_offset = 2 * 16 + 2 * 4 + 2 * 4;
+        posting_data[deleted_flags_offset] = 0b00000000;
+
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+        assert!(
+            result.is_ok(),
+            "Expected valid data to pass verification, but got error: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_empty_storage() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 64),
+            capacity: 10,
+            current_count: 0,
+            active_count: 0,
+            document_ids_offset: 64,
+            starts_offset: 64,
+            lengths_offset: 64,
+            deleted_flags_offset: 64,
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let posting_data = vec![0u8; 64];
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_count_exceeds_capacity() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 320),
+            capacity: 5,
+            current_count: 10, // Exceeds capacity
+            active_count: 10,
+            document_ids_offset: 64,
+            starts_offset: 224,
+            lengths_offset: 264,
+            deleted_flags_offset: 304,
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let posting_data = vec![0u8; 320];
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.description.contains("Current count"));
+        assert!(error.description.contains("exceeds capacity"));
+        assert_eq!(error.severity, 0.9);
+        assert!(error.is_recoverable);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_arrays_beyond_bounds() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 120),
+            capacity: 10,
+            current_count: 2,
+            active_count: 2,
+            document_ids_offset: 144,  // Must be >= header size (140 bytes)
+            starts_offset: 176,        // 144 + (2 * 16) = 176
+            lengths_offset: 184,       // 176 + (2 * 4) = 184
+            deleted_flags_offset: 500, // Way beyond file size (this should cause the bounds error)
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let posting_data = vec![0u8; 200]; // Large enough for valid offsets but not for deleted_flags_offset
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.description.contains("extend beyond file bounds"));
+        assert_eq!(error.severity, 1.0);
+        assert!(!error.is_recoverable);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_too_many_invalid_document_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 200),
+            capacity: 10,
+            current_count: 5,
+            active_count: 5,
+            document_ids_offset: 144,  // Must be >= header size (140 bytes)
+            starts_offset: 224,        // 144 + (5 * 16) = 224
+            lengths_offset: 244,       // 224 + (5 * 4) = 244
+            deleted_flags_offset: 264, // 244 + (5 * 4) = 264
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let mut posting_data = vec![0u8; 300];
+
+        // Add mostly invalid document IDs (all zeros)
+        // Only make one valid to ensure > 10% are invalid
+        let valid_doc_id = DocumentId::new().raw().to_le_bytes();
+        posting_data[144..160].copy_from_slice(&valid_doc_id);
+        // The rest remain zero (invalid)
+
+        // Add valid start positions and lengths
+        for i in 0..5 {
+            posting_data[224 + i * 4..228 + i * 4].copy_from_slice(&(100u32 + i as u32 * 50).to_le_bytes());
+            posting_data[244 + i * 4..248 + i * 4].copy_from_slice(&50u32.to_le_bytes());
+        }
+
+        // No deleted flags
+        posting_data[264] = 0b00000000;
+
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.description.contains("Too many invalid document IDs"));
+        assert_eq!(error.severity, 0.8);
+        assert!(error.is_recoverable);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_too_many_zero_lengths() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header_size = std::mem::size_of::<crate::posting_storage::PostingStorageHeader>();
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 320),
+            capacity: 10,
+            current_count: 10,
+            active_count: 10,
+            document_ids_offset: header_size as u64, // Start right after header
+            starts_offset: (header_size + 10 * 16) as u64, // After document IDs
+            lengths_offset: (header_size + 10 * 16 + 10 * 4) as u64, // After starts
+            deleted_flags_offset: (header_size + 10 * 16 + 10 * 4 + 10 * 4) as u64, // After lengths
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let data_size = 10 * 16 + 10 * 4 + 10 * 4 + 2;
+        let mut posting_data = vec![0u8; data_size]; // Document IDs + starts + lengths + deleted flags
+
+        // Add valid document IDs in ascending order to avoid ordering violations
+        for i in 0..10 {
+            let doc_id = DocumentId::from_raw(1000u128 + i as u128)
+                .raw()
+                .to_le_bytes();
+            posting_data[i * 16..(i + 1) * 16].copy_from_slice(&doc_id);
+        }
+
+        // Add valid start positions
+        let starts_offset = 10 * 16;
+        for i in 0..10 {
+            posting_data[starts_offset + i * 4..starts_offset + (i + 1) * 4]
+                .copy_from_slice(&(100u32 + i as u32 * 10).to_le_bytes());
+        }
+
+        // Add mostly zero lengths (more than 5% threshold) - 8 out of 10 = 80%
+        let lengths_offset = 10 * 16 + 10 * 4;
+        for i in 0..8 {
+            posting_data[lengths_offset + i * 4..lengths_offset + (i + 1) * 4].copy_from_slice(&0u32.to_le_bytes());
+            // Zero length
+        }
+        // Add a few valid lengths
+        posting_data[lengths_offset + 8 * 4..lengths_offset + 9 * 4].copy_from_slice(&50u32.to_le_bytes());
+        posting_data[lengths_offset + 9 * 4..lengths_offset + 10 * 4].copy_from_slice(&75u32.to_le_bytes());
+
+        // No deleted flags
+        let deleted_flags_offset = 10 * 16 + 10 * 4 + 10 * 4;
+        posting_data[deleted_flags_offset] = 0b00000000;
+        posting_data[deleted_flags_offset + 1] = 0b00000000;
+
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        assert!(result.is_err(), "Expected error but got success");
+        let error = result.unwrap_err();
+        assert!(error.description.contains("Too many zero-length postings:"));
+        assert_eq!(error.severity, 0.4);
+        assert!(error.is_recoverable);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_overflow_ranges() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 120),
+            capacity: 10,
+            current_count: 2,
+            active_count: 2,
+            document_ids_offset: 144,  // Must be >= header size (140 bytes)
+            starts_offset: 176,        // 144 + (2 * 16) = 176
+            lengths_offset: 184,       // 176 + (2 * 4) = 184
+            deleted_flags_offset: 192, // 184 + (2 * 4) = 192
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let mut posting_data = vec![0u8; 200];
+
+        // Add valid document IDs
+        let doc_id1 = DocumentId::new().raw().to_le_bytes();
+        let doc_id2 = DocumentId::new().raw().to_le_bytes();
+        posting_data[144..160].copy_from_slice(&doc_id1);
+        posting_data[160..176].copy_from_slice(&doc_id2);
+
+        // Add start positions that will overflow when added to lengths
+        posting_data[176..180].copy_from_slice(&(u32::MAX - 10).to_le_bytes());
+        posting_data[180..184].copy_from_slice(&100u32.to_le_bytes());
+
+        // Add lengths that cause overflow
+        posting_data[184..188].copy_from_slice(&20u32.to_le_bytes()); // This will overflow with start
+        posting_data[188..192].copy_from_slice(&50u32.to_le_bytes());
+
+        // No deleted flags
+        posting_data[192] = 0b00000000;
+
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        // The test should detect some form of data corruption
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.corruption_type, CorruptionType::DataCorruption);
+        assert!(error.is_recoverable);
+    }
+
+    #[test]
+    fn test_verify_posting_data_quality_active_count_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::default();
+        let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
+
+        let header = crate::posting_storage::PostingStorageHeader {
+            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 140),
+            capacity: 10,
+            current_count: 3,
+            active_count: 2,           // Claims 2 active but we'll make all 3 active
+            document_ids_offset: 144,  // Must be >= header size (140 bytes)
+            starts_offset: 192,        // 144 + (3 * 16) = 192
+            lengths_offset: 204,       // 192 + (3 * 4) = 204
+            deleted_flags_offset: 216, // 204 + (3 * 4) = 216
+            document_id_size: 16,
+            reserved: [0; 12],
+        };
+
+        let mut posting_data = vec![0u8; 220];
+
+        // Add valid document IDs
+        for i in 0..3 {
+            let doc_id = DocumentId::new().raw().to_le_bytes();
+            posting_data[144 + i * 16..160 + i * 16].copy_from_slice(&doc_id);
+        }
+
+        // Add valid start positions and lengths
+        for i in 0..3 {
+            posting_data[192 + i * 4..196 + i * 4].copy_from_slice(&(100u32 + i as u32 * 50).to_le_bytes());
+            posting_data[204 + i * 4..208 + i * 4].copy_from_slice(&50u32.to_le_bytes());
+        }
+
+        // All postings are active (no deleted flags set)
+        posting_data[216] = 0b00000000; // All bits 0 means all active
+
+        let result = checker.verify_posting_data_quality(&posting_data, &header);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.description.contains("Active count mismatch"));
+        assert!(error.description.contains("header claims 2, actual 3"));
+        assert_eq!(error.severity, 0.6);
+        assert!(error.is_recoverable);
+    }
+
+    #[test]
+    fn test_overflow_arithmetic() {
+        let start = u32::MAX - 10;
+        let length = 20u32;
+        assert!(
+            start.checked_add(length).is_none(),
+            "Expected overflow but got {:?}",
+            start.checked_add(length)
+        );
     }
 }

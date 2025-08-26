@@ -140,7 +140,11 @@ impl AccessPatternTracker {
             .collect();
 
         for other_doc in recent_accesses {
-            let distance = if let Some(pos) = self.access_history.iter().rposition(|e| e.document_id == other_doc) {
+            let distance = if let Some(pos) = self
+                .access_history
+                .iter()
+                .rposition(|e| e.document_id == other_doc)
+            {
                 self.access_history.len() - pos
             } else {
                 continue;
@@ -148,7 +152,8 @@ impl AccessPatternTracker {
 
             // Weight by recency (closer accesses get higher weight)
             let weight = 1.0 / (distance as f64 + 1.0);
-            self.cooccurrence.record_cooccurrence(document_id, other_doc, weight);
+            self.cooccurrence
+                .record_cooccurrence(document_id, other_doc, weight);
         }
     }
 
@@ -157,10 +162,14 @@ impl AccessPatternTracker {
         let mut predictions = Vec::new();
 
         // Sequential prediction: look for patterns in recent history
-        if let Some(_current_pos) = self.access_history.iter().rposition(|entry| entry.document_id == current_document) {
+        if let Some(_current_pos) = self
+            .access_history
+            .iter()
+            .rposition(|entry| entry.document_id == current_document)
+        {
             // Look for documents that followed this one in the past
             let mut sequence_scores: HashMap<DocumentId, f64> = HashMap::new();
-            
+
             for (i, entry) in self.access_history.iter().enumerate() {
                 if entry.document_id == current_document && i + 1 < self.access_history.len() {
                     let next_doc = self.access_history[i + 1].document_id;
@@ -173,11 +182,18 @@ impl AccessPatternTracker {
             // Add top sequential predictions
             let mut seq_predictions: Vec<_> = sequence_scores.into_iter().collect();
             seq_predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            predictions.extend(seq_predictions.into_iter().take(limit / 2).map(|(doc, _)| doc));
+            predictions.extend(
+                seq_predictions
+                    .into_iter()
+                    .take(limit / 2)
+                    .map(|(doc, _)| doc),
+            );
         }
 
         // Co-occurrence prediction: documents often accessed together
-        let cooccurrence_predictions = self.cooccurrence.get_predicted_documents(current_document, limit);
+        let cooccurrence_predictions = self
+            .cooccurrence
+            .get_predicted_documents(current_document, limit);
         predictions.extend(cooccurrence_predictions.into_iter().map(|(doc, _)| doc));
 
         // Remove duplicates and current document
@@ -522,8 +538,11 @@ impl AsyncDocumentTextStorage {
                     let mut tracker = access_tracker.write().await;
                     tracker.cleanup();
                     let (history_size, pattern_count) = tracker.get_stats();
-                    log::trace!("Access tracker stats: {} history entries, {} pattern groups", 
-                              history_size, pattern_count);
+                    log::trace!(
+                        "Access tracker stats: {} history entries, {} pattern groups",
+                        history_size,
+                        pattern_count
+                    );
                 }
 
                 // Update metrics
@@ -564,10 +583,10 @@ impl AsyncDocumentTextStorage {
                     let mut tracker = self.access_tracker.write().await;
                     tracker.record_access(document_id);
                 }
-                
+
                 // Trigger read-ahead prediction even for cache hits
                 self.trigger_read_ahead(document_id).await;
-                
+
                 self.record_read_ahead_hit();
                 self.record_async_read_success(start_time.elapsed().as_millis() as f64);
                 return Ok(text);
@@ -768,7 +787,7 @@ impl AsyncDocumentTextStorage {
     async fn trigger_read_ahead(&self, document_id: DocumentId) {
         // Always record that prediction was triggered
         self.record_read_ahead_prediction();
-        
+
         // Get predicted documents based on access patterns
         let predicted_documents = {
             let tracker = self.access_tracker.read().await;
@@ -781,8 +800,11 @@ impl AsyncDocumentTextStorage {
         }
 
         let prediction_count = predicted_documents.len();
-        log::trace!("Predicting {} documents for read-ahead: {:?}", 
-                   prediction_count, predicted_documents);
+        log::trace!(
+            "Predicting {} documents for read-ahead: {:?}",
+            prediction_count,
+            predicted_documents
+        );
 
         // Pre-load predicted documents into buffer asynchronously
         for predicted_id in predicted_documents {
@@ -808,8 +830,11 @@ impl AsyncDocumentTextStorage {
                         log::trace!("Pre-loaded document {} into read-ahead buffer", predicted_doc_id);
                     }
                     Err(e) => {
-                        log::debug!("Failed to pre-load document {} for read-ahead: {:?}", 
-                                  predicted_doc_id, e);
+                        log::debug!(
+                            "Failed to pre-load document {} for read-ahead: {:?}",
+                            predicted_doc_id,
+                            e
+                        );
                     }
                 }
             });
@@ -1125,11 +1150,7 @@ mod tests {
 
     #[test]
     fn test_access_pattern_tracker() {
-        let mut tracker = AccessPatternTracker::new(
-            100, 
-            Duration::from_secs(60),
-            50
-        );
+        let mut tracker = AccessPatternTracker::new(100, Duration::from_secs(60), 50);
 
         let doc1 = DocumentId::new();
         let doc2 = DocumentId::new();
@@ -1143,7 +1164,7 @@ mod tests {
         // Predictions should include doc2 and doc3 for doc1
         let predictions = tracker.predict_next_documents(doc1, 5);
         assert!(!predictions.is_empty());
-        
+
         // Check stats
         let (history_size, pattern_count) = tracker.get_stats();
         assert_eq!(history_size, 3);
@@ -1153,7 +1174,7 @@ mod tests {
     #[test]
     fn test_cooccurrence_map() {
         let mut cooccur = CooccurrenceMap::new(10);
-        
+
         let doc1 = DocumentId::new();
         let doc2 = DocumentId::new();
         let doc3 = DocumentId::new();
@@ -1166,7 +1187,7 @@ mod tests {
         // Test predictions
         let predictions = cooccur.get_predicted_documents(doc1, 2);
         assert_eq!(predictions.len(), 2);
-        
+
         // Should be sorted by strength (doc2 has weight 1.0, doc3 has 0.5)
         assert_eq!(predictions[0].0, doc2);
         assert_eq!(predictions[0].1, 1.0);
@@ -1181,13 +1202,14 @@ mod tests {
 
     #[test]
     fn test_access_pattern_sequence_prediction() {
-        let mut tracker = AccessPatternTracker::new(
-            100,
-            Duration::from_secs(300),
-            50
-        );
+        let mut tracker = AccessPatternTracker::new(100, Duration::from_secs(300), 50);
 
-        let docs = [DocumentId::new(), DocumentId::new(), DocumentId::new(), DocumentId::new()];
+        let docs = [
+            DocumentId::new(),
+            DocumentId::new(),
+            DocumentId::new(),
+            DocumentId::new(),
+        ];
 
         // Create a repeating access pattern: doc1 -> doc2 -> doc3 -> doc1 -> doc2 -> doc3
         for _ in 0..3 {
@@ -1199,7 +1221,7 @@ mod tests {
         // Test sequential prediction
         let predictions_from_doc1 = tracker.predict_next_documents(docs[0], 3);
         assert!(!predictions_from_doc1.is_empty());
-        
+
         let predictions_from_doc2 = tracker.predict_next_documents(docs[1], 3);
         assert!(!predictions_from_doc2.is_empty());
     }
@@ -1218,14 +1240,20 @@ mod tests {
         let text = "Test document for prediction".to_string();
 
         // Store document
-        async_storage.store_text_async(doc_id, text.clone()).await.unwrap();
+        async_storage
+            .store_text_async(doc_id, text.clone())
+            .await
+            .unwrap();
 
         // Read document - this should trigger read-ahead prediction
         let _ = async_storage.get_text_async(doc_id).await.unwrap();
 
         // Check that predictions were triggered (even if no predictions were made)
         let metrics = async_storage.get_metrics();
-        assert!(metrics.read_ahead_predictions > 0, "Expected at least one read-ahead prediction to be triggered");
+        assert!(
+            metrics.read_ahead_predictions > 0,
+            "Expected at least one read-ahead prediction to be triggered"
+        );
 
         async_storage.shutdown().await.unwrap();
     }
@@ -1258,14 +1286,14 @@ mod tests {
             let tracker = async_storage.access_tracker.read().await;
             tracker.get_stats()
         };
-        
+
         // History should be cleaned up or very small
         assert!(history_size <= 1);
 
         async_storage.shutdown().await.unwrap();
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_prediction_performance_with_many_documents() {
         let temp_dir = TempDir::new().unwrap();
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
@@ -1292,10 +1320,11 @@ mod tests {
         // Create random access patterns
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let start_time = std::time::Instant::now();
-        
-        for i in 0..200 {  // 200 accesses
+
+        for i in 0..200 {
+            // 200 accesses
             let mut hasher = DefaultHasher::new();
             i.hash(&mut hasher);
             let index = (hasher.finish() as usize) % num_docs;
@@ -1303,12 +1332,16 @@ mod tests {
         }
 
         let access_time = start_time.elapsed();
-        
+
         // Ensure prediction doesn't cause significant performance degradation
         assert!(access_time.as_millis() < 5000); // Should complete in reasonable time
-        
+
         let metrics = async_storage.get_metrics();
-        assert!(metrics.read_ahead_predictions > 0, "Expected predictions with {} reads", metrics.async_reads);
+        assert!(
+            metrics.read_ahead_predictions > 0,
+            "Expected predictions with {} reads",
+            metrics.async_reads
+        );
         assert_eq!(metrics.async_reads, 200);
 
         async_storage.shutdown().await.unwrap();
