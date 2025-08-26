@@ -56,27 +56,92 @@ pub struct DetailedIndexStats {
 
 /// Real-time performance monitoring system
 ///
-/// TODO: TECHNICAL DEBT - This struct uses 6 separate Arc<RwLock<T>> fields which creates
-/// potential for lock contention and complexity. Consider refactoring to:
-/// - Message-passing pattern with dedicated metrics collection thread
-/// - Atomic counters for simple metrics
-/// - Single RwLock for complex aggregated metrics
-///   This would reduce lock contention and improve performance
+/// Refactored to reduce lock contention by using:
+/// - Atomic counters for simple metrics that can be updated concurrently
+/// - Single RwLock for complex aggregated metrics that require coordination
+/// - Lock-free operation counters for high-frequency updates
 pub struct PerformanceMonitor {
-    /// Search operation metrics
-    search_metrics: Arc<RwLock<SearchMetrics>>,
-    /// Write operation tracking
-    write_metrics: Arc<RwLock<WriteMetrics>>,
-    /// Bloom filter performance
-    bloom_metrics: Arc<RwLock<BloomFilterMetrics>>,
-    /// Document text storage metrics
-    document_text_metrics: Arc<RwLock<DocumentTextMetrics>>,
-    /// Resource usage tracking
-    resource_metrics: Arc<RwLock<ResourceMetrics>>,
-    /// Historical data collection
-    historical_data: Arc<RwLock<HistoricalData>>,
+    /// Atomic counters for high-frequency simple metrics
+    counters: Arc<AtomicCounters>,
+    /// Complex metrics that require coordination (protected by single lock)
+    complex_metrics: Arc<RwLock<ComplexMetrics>>,
     /// System start time for uptime calculation
     start_time: Instant,
+}
+
+/// Atomic counters for lock-free metric updates
+#[derive(Debug)]
+pub struct AtomicCounters {
+    // Search counters
+    pub total_searches: std::sync::atomic::AtomicU64,
+    pub successful_searches: std::sync::atomic::AtomicU64,
+    pub failed_searches: std::sync::atomic::AtomicU64,
+    
+    // Write counters  
+    pub total_writes: std::sync::atomic::AtomicU64,
+    pub successful_writes: std::sync::atomic::AtomicU64,
+    pub failed_writes: std::sync::atomic::AtomicU64,
+    pub bytes_written: std::sync::atomic::AtomicU64,
+    
+    // Bloom filter counters
+    pub bloom_filter_hits: std::sync::atomic::AtomicU64,
+    pub bloom_filter_misses: std::sync::atomic::AtomicU64,
+    pub bloom_filter_false_positives: std::sync::atomic::AtomicU64,
+    
+    // Resource counters
+    pub file_descriptor_count: std::sync::atomic::AtomicUsize,
+    pub active_connections: std::sync::atomic::AtomicUsize,
+    pub total_operations: std::sync::atomic::AtomicU64,
+}
+
+impl Default for AtomicCounters {
+    fn default() -> Self {
+        Self {
+            total_searches: std::sync::atomic::AtomicU64::new(0),
+            successful_searches: std::sync::atomic::AtomicU64::new(0),
+            failed_searches: std::sync::atomic::AtomicU64::new(0),
+            total_writes: std::sync::atomic::AtomicU64::new(0),
+            successful_writes: std::sync::atomic::AtomicU64::new(0),
+            failed_writes: std::sync::atomic::AtomicU64::new(0),
+            bytes_written: std::sync::atomic::AtomicU64::new(0),
+            bloom_filter_hits: std::sync::atomic::AtomicU64::new(0),
+            bloom_filter_misses: std::sync::atomic::AtomicU64::new(0),
+            bloom_filter_false_positives: std::sync::atomic::AtomicU64::new(0),
+            file_descriptor_count: std::sync::atomic::AtomicUsize::new(0),
+            active_connections: std::sync::atomic::AtomicUsize::new(0),
+            total_operations: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+/// Complex metrics requiring coordination and calculation
+#[derive(Debug, Clone, Default)]
+pub struct ComplexMetrics {
+    // Search metrics requiring calculation
+    pub search_latency_samples: Vec<Duration>,
+    pub recent_search_times: std::collections::VecDeque<Instant>,
+    
+    // Write metrics requiring calculation
+    pub write_latency_samples: Vec<Duration>,
+    pub recent_write_times: std::collections::VecDeque<Instant>,
+    pub last_write_time: Option<Instant>,
+    
+    // Bloom filter metrics
+    pub bloom_filter_memory_usage: usize,
+    
+    // Document text metrics
+    pub text_storage_size: usize,
+    pub text_retrieval_cache_hits: u64,
+    pub text_retrieval_cache_misses: u64,
+    
+    // Resource metrics
+    pub memory_usage: usize,
+    pub memory_mapped_regions: usize,
+    pub wal_segment_count: usize,
+    
+    // Historical data
+    pub snapshots: std::collections::VecDeque<MetricsSnapshot>,
+    pub last_updated: SystemTime,
 }
 
 /// Write operation performance metrics
@@ -106,6 +171,30 @@ pub struct BloomFilterMetrics {
     pub false_positive_rate: f64,
     pub average_lookup_time_ns: f64,
     pub memory_usage_bytes: usize,
+}
+
+/// Metrics snapshot for historical tracking
+#[derive(Debug, Clone)]
+pub struct MetricsSnapshot {
+    pub timestamp: SystemTime,
+    pub total_operations: u64,
+    pub memory_usage: usize,
+    pub search_throughput: f64,
+    pub write_throughput: f64,
+    pub bloom_filter_hit_rate: f64,
+}
+
+impl Default for MetricsSnapshot {
+    fn default() -> Self {
+        Self {
+            timestamp: SystemTime::now(),
+            total_operations: 0,
+            memory_usage: 0,
+            search_throughput: 0.0,
+            write_throughput: 0.0,
+            bloom_filter_hit_rate: 0.0,
+        }
+    }
 }
 
 /// Basic document operation metrics
@@ -256,114 +345,101 @@ pub struct PercentileCalculator {
 }
 
 impl PerformanceMonitor {
-    /// Create a new performance monitor
+    /// Create a new performance monitor with reduced lock contention
     pub fn new() -> Self {
         Self {
-            search_metrics: Arc::new(RwLock::new(SearchMetrics::new())),
-            write_metrics: Arc::new(RwLock::new(WriteMetrics::default())),
-            bloom_metrics: Arc::new(RwLock::new(BloomFilterMetrics::default())),
-            document_text_metrics: Arc::new(RwLock::new(DocumentTextMetrics::default())),
-            resource_metrics: Arc::new(RwLock::new(ResourceMetrics::default())),
-            historical_data: Arc::new(RwLock::new(HistoricalData::new())),
+            counters: Arc::new(AtomicCounters::default()),
+            complex_metrics: Arc::new(RwLock::new(ComplexMetrics::default())),
             start_time: Instant::now(),
         }
     }
 
-    /// Record a search operation
+    /// Record a search operation with reduced lock contention
     pub async fn record_search(&self, latency: Duration, result_count: usize, success: bool) {
-        // Update search metrics with actual implementation
-        let mut metrics = self.search_metrics.write().await;
-        
-        // Update counters
-        metrics.total_searches += 1;
+        // Update simple counters atomically (lock-free)
+        self.counters.total_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if success {
-            metrics.successful_searches += 1;
-        }
-        
-        // Update timing and result statistics
-        let latency_ms = latency.as_millis() as u64;
-        metrics.total_search_time += latency;
-        metrics.total_results_returned += result_count;
-        
-        // Update min/max latencies
-        if latency_ms < metrics.min_search_latency_ms {
-            metrics.min_search_latency_ms = latency_ms;
-        }
-        if latency_ms > metrics.max_search_latency_ms {
-            metrics.max_search_latency_ms = latency_ms;
-        }
-        
-        // Update average calculations
-        metrics.average_search_latency_ms = metrics.total_search_time.as_millis() as u64 / metrics.total_searches;
-        metrics.average_results_per_search = if metrics.total_searches > 0 {
-            metrics.total_results_returned as f64 / metrics.total_searches as f64
+            self.counters.successful_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
-            0.0
-        };
-        
-        metrics.last_updated = SystemTime::now();
-    }
-
-    /// Record a write operation
-    pub async fn record_write(&self, latency: Duration, bytes_written: u64, success: bool) {
-        let mut metrics = self.write_metrics.write().await;
-        metrics.total_writes += 1;
-
-        if success {
-            metrics.successful_writes += 1;
-        } else {
-            metrics.failed_writes += 1;
+            self.counters.failed_searches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-
-        metrics.bytes_written += bytes_written;
-
-        // Update running average for latency
-        let latency_ms = latency.as_millis() as f64;
-        metrics.average_write_latency_ms = (metrics.average_write_latency_ms * (metrics.total_writes - 1) as f64
-            + latency_ms)
-            / metrics.total_writes as f64;
-
-        metrics.last_write_time = Some(Instant::now());
-
-        // Calculate throughput if we have recent writes
-        self.update_write_throughput(&mut metrics).await;
-    }
-
-    /// Update write throughput calculation
-    async fn update_write_throughput(&self, metrics: &mut WriteMetrics) {
-        if let Some(last_write) = metrics.last_write_time {
-            let elapsed = last_write.elapsed();
-            if elapsed >= Duration::from_secs(1) {
-                // Calculate ops per second over the last period
-                metrics.write_throughput_ops_per_sec = metrics.total_writes as f64 / elapsed.as_secs_f64();
+        self.counters.total_operations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        
+        // Update complex metrics that require coordination (single lock)
+        let mut complex = self.complex_metrics.write().await;
+        complex.search_latency_samples.push(latency);
+        complex.recent_search_times.push_back(Instant::now());
+        
+        // Keep only recent samples for performance (last 1000)
+        if complex.search_latency_samples.len() > 1000 {
+            complex.search_latency_samples.remove(0);
+        }
+        
+        // Keep only recent timestamps for throughput calculation (last 60 seconds)
+        let now = Instant::now();
+        while let Some(&front_time) = complex.recent_search_times.front() {
+            if now.duration_since(front_time) > Duration::from_secs(60) {
+                complex.recent_search_times.pop_front();
+            } else {
+                break;
             }
         }
+        
+        complex.last_updated = SystemTime::now();
     }
 
-    /// Record bloom filter operation
-    pub async fn record_bloom_filter_lookup(&self, hit: bool, lookup_time: Duration, false_positive: bool) {
-        let mut metrics = self.bloom_metrics.write().await;
-        metrics.total_lookups += 1;
-
-        if hit {
-            metrics.hits += 1;
+    /// Record a write operation with reduced lock contention
+    pub async fn record_write(&self, latency: Duration, bytes_written: u64, success: bool) {
+        // Update simple counters atomically (lock-free)
+        self.counters.total_writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if success {
+            self.counters.successful_writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
-            metrics.misses += 1;
+            self.counters.failed_writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        self.counters.bytes_written.fetch_add(bytes_written, std::sync::atomic::Ordering::Relaxed);
+        self.counters.total_operations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        
+        // Update complex metrics that require coordination (single lock)
+        let mut complex = self.complex_metrics.write().await;
+        complex.write_latency_samples.push(latency);
+        complex.recent_write_times.push_back(Instant::now());
+        complex.last_write_time = Some(Instant::now());
+        
+        // Keep only recent samples for performance (last 1000)
+        if complex.write_latency_samples.len() > 1000 {
+            complex.write_latency_samples.remove(0);
+        }
+        
+        // Keep only recent timestamps for throughput calculation (last 60 seconds)
+        let now = Instant::now();
+        while let Some(&front_time) = complex.recent_write_times.front() {
+            if now.duration_since(front_time) > Duration::from_secs(60) {
+                complex.recent_write_times.pop_front();
+            } else {
+                break;
+            }
+        }
+        
+        complex.last_updated = SystemTime::now();
+    }
 
+
+
+    /// Record bloom filter operation with reduced lock contention
+    pub async fn record_bloom_filter_lookup(&self, hit: bool, _lookup_time: Duration, false_positive: bool) {
+        // Update simple counters atomically (lock-free)
+        if hit {
+            self.counters.bloom_filter_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.counters.bloom_filter_misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        
         if false_positive {
-            metrics.false_positives += 1;
+            self.counters.bloom_filter_false_positives.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-
-        // Update rates
-        metrics.hit_rate = metrics.hits as f64 / metrics.total_lookups as f64;
-        metrics.false_positive_rate = metrics.false_positives as f64 / metrics.total_lookups as f64;
-
-        // Update average lookup time
-        let lookup_time_ns = lookup_time.as_nanos() as f64;
-        metrics.average_lookup_time_ns = (metrics.average_lookup_time_ns * (metrics.total_lookups - 1) as f64
-            + lookup_time_ns)
-            / metrics.total_lookups as f64;
+        
+        self.counters.total_operations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Update resource usage metrics
