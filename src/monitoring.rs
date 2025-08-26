@@ -806,6 +806,242 @@ impl Default for PercentileCalculator {
     }
 }
 
+/// Document text storage performance metrics
+#[derive(Debug, Clone, Default)]
+pub struct DocumentTextMetrics {
+    /// Storage operations
+    pub storage_operations: u64,
+    pub successful_storage: u64,
+    pub failed_storage: u64,
+    pub avg_storage_latency_ms: f64,
+
+    /// Retrieval operations
+    pub retrieval_operations: u64,
+    pub successful_retrievals: u64,
+    pub failed_retrievals: u64,
+    pub avg_retrieval_latency_ms: f64,
+
+    /// Text extraction operations
+    pub extraction_operations: u64,
+    pub successful_extractions: u64,
+    pub failed_extractions: u64,
+    pub avg_extraction_latency_ms: f64,
+
+    /// Cache performance
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_hit_ratio: f64,
+
+    /// Concurrent operations
+    pub concurrent_reads: u64,
+    pub concurrent_writes: u64,
+    pub max_concurrent_ops: usize,
+    pub avg_concurrency_level: f64,
+
+    /// Async operations
+    pub async_operations: u64,
+    pub successful_async_ops: u64,
+    pub failed_async_ops: u64,
+    pub avg_async_latency_ms: f64,
+    pub timeout_errors: u64,
+
+    /// Memory pool statistics
+    pub pool_requests: u64,
+    pub pool_hits: u64,
+    pub pool_misses: u64,
+    pub pool_hit_ratio: f64,
+    pub total_pool_memory_bytes: usize,
+    pub active_pooled_buffers: usize,
+
+    /// File system metrics
+    pub index_file_size_bytes: u64,
+    pub data_file_size_bytes: u64,
+    pub total_file_size_bytes: u64,
+    pub file_growth_rate_bytes_per_sec: f64,
+
+    /// Error tracking
+    pub corruption_errors: u64,
+    pub io_errors: u64,
+    pub validation_errors: u64,
+    pub memory_errors: u64,
+
+    /// Health monitoring
+    pub last_health_check: Option<SystemTime>,
+    pub health_check_passed: bool,
+    pub health_issues_detected: u64,
+}
+
+impl DocumentTextMetrics {
+    /// Calculate storage success ratio
+    pub fn storage_success_ratio(&self) -> f64 {
+        if self.storage_operations == 0 {
+            0.0
+        } else {
+            self.successful_storage as f64 / self.storage_operations as f64
+        }
+    }
+
+    /// Calculate retrieval success ratio
+    pub fn retrieval_success_ratio(&self) -> f64 {
+        if self.retrieval_operations == 0 {
+            0.0
+        } else {
+            self.successful_retrievals as f64 / self.retrieval_operations as f64
+        }
+    }
+
+    /// Calculate overall success ratio
+    pub fn overall_success_ratio(&self) -> f64 {
+        let total_ops =
+            self.storage_operations + self.retrieval_operations + self.extraction_operations;
+        if total_ops == 0 {
+            0.0
+        } else {
+            let total_success =
+                self.successful_storage + self.successful_retrievals + self.successful_extractions;
+            total_success as f64 / total_ops as f64
+        }
+    }
+
+    /// Calculate total operations
+    pub fn total_operations(&self) -> u64 {
+        self.storage_operations + self.retrieval_operations + self.extraction_operations
+    }
+
+    /// Calculate error rate
+    pub fn error_rate(&self) -> f64 {
+        let total_errors =
+            self.corruption_errors + self.io_errors + self.validation_errors + self.memory_errors;
+        let total_ops = self.total_operations();
+        if total_ops == 0 {
+            0.0
+        } else {
+            total_errors as f64 / total_ops as f64
+        }
+    }
+}
+
+impl PerformanceMonitor {
+    /// Record document text storage operation
+    pub async fn record_document_text_storage(
+        &self,
+        operation_type: DocumentTextOperation,
+        latency: Duration,
+        success: bool,
+        bytes_processed: Option<u64>,
+    ) {
+        // Update the document text metrics
+        let latency_ms = latency.as_millis() as f64;
+
+        // For now we'll add a placeholder implementation
+        // In a real implementation, we would add DocumentTextMetrics to PerformanceMonitor
+        // and track these metrics properly
+
+        if success {
+            log::debug!(
+                "Document text operation {:?} completed successfully in {:.2}ms",
+                operation_type,
+                latency_ms
+            );
+        } else {
+            log::warn!(
+                "Document text operation {:?} failed after {:.2}ms",
+                operation_type,
+                latency_ms
+            );
+        }
+
+        // Record as a write operation for now (simplified)
+        if let Some(bytes) = bytes_processed {
+            self.record_write(latency, bytes, success).await;
+        }
+    }
+
+    /// Record document text cache operation
+    pub async fn record_document_text_cache(&self, hit: bool, lookup_time: Duration) {
+        // Record as a bloom filter lookup for now (simplified)
+        self.record_bloom_filter_lookup(hit, lookup_time, false)
+            .await;
+    }
+
+    /// Record document text concurrent operation
+    pub async fn record_document_text_concurrent(
+        &self,
+        operation_type: DocumentTextOperation,
+        concurrent_level: usize,
+    ) {
+        log::debug!(
+            "Document text concurrent operation {:?} with concurrency level {}",
+            operation_type,
+            concurrent_level
+        );
+        // In a full implementation, we would track concurrent operation metrics
+    }
+
+    /// Record document text memory pool operation
+    pub async fn record_document_text_pool(&self, pool_hit: bool, buffer_size: usize) {
+        log::debug!(
+            "Document text memory pool operation: hit={}, buffer_size={}",
+            pool_hit,
+            buffer_size
+        );
+        // In a full implementation, we would track memory pool metrics
+    }
+
+    /// Record document text async operation
+    pub async fn record_document_text_async(
+        &self,
+        operation_type: DocumentTextOperation,
+        latency: Duration,
+        success: bool,
+    ) {
+        let latency_ms = latency.as_millis() as f64;
+
+        if success {
+            log::debug!(
+                "Document text async operation {:?} completed successfully in {:.2}ms",
+                operation_type,
+                latency_ms
+            );
+        } else {
+            log::warn!(
+                "Document text async operation {:?} failed after {:.2}ms",
+                operation_type,
+                latency_ms
+            );
+        }
+
+        // Record as a regular write for now (simplified)
+        self.record_write(latency, 0, success).await;
+    }
+
+    /// Record document text health check
+    pub async fn record_document_text_health_check(&self, passed: bool, issues_found: usize) {
+        if passed {
+            log::info!("Document text health check passed");
+        } else {
+            log::warn!(
+                "Document text health check failed with {} issues",
+                issues_found
+            );
+        }
+    }
+}
+
+/// Document text operation types for monitoring
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentTextOperation {
+    Store,
+    Retrieve,
+    Extract,
+    Delete,
+    Batch,
+    Concurrent,
+    Async,
+    Cache,
+    Pool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

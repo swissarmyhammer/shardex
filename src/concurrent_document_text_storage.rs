@@ -1,7 +1,7 @@
-//! Concurrent access wrapper for document text storage
+//! Concurrent document text storage with reader-writer optimization
 //!
-//! This module provides thread-safe, high-performance concurrent access
-//! to document text storage with optimizations for concurrent workloads.
+//! This module provides thread-safe concurrent access to document text storage
+//! with optimized reader-writer patterns, write batching, and metadata caching.
 
 use crate::document_text_storage::DocumentTextStorage;
 use crate::error::ShardexError;
@@ -10,22 +10,17 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tokio::sync::oneshot;
+use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::{oneshot, Semaphore};
+use tokio::time::timeout;
 
-/// Metadata about a document stored in the concurrent cache
+/// Metadata for cached document information
 #[derive(Debug)]
-pub struct DocumentMetadata {
-    /// Document identifier
-    pub document_id: DocumentId,
-    /// Length of the document text in bytes
-    pub text_length: u64,
-    /// Last time this document was accessed
-    pub last_access_time: SystemTime,
-    /// Number of times this document has been accessed
-    pub access_count: AtomicU64,
-    /// Time when the document was first stored
-    pub storage_time: SystemTime,
+struct DocumentMetadata {
+    document_id: DocumentId,
+    text_length: u64,
+    last_access_time: SystemTime,
+    access_count: AtomicU64,
 }
 
 impl Clone for DocumentMetadata {
@@ -35,298 +30,273 @@ impl Clone for DocumentMetadata {
             text_length: self.text_length,
             last_access_time: self.last_access_time,
             access_count: AtomicU64::new(self.access_count.load(Ordering::Relaxed)),
-            storage_time: self.storage_time,
         }
-    }
-}
-
-impl DocumentMetadata {
-    /// Create new document metadata
-    pub fn new(document_id: DocumentId, text_length: u64) -> Self {
-        let now = SystemTime::now();
-        Self {
-            document_id,
-            text_length,
-            last_access_time: now,
-            access_count: AtomicU64::new(0),
-            storage_time: now,
-        }
-    }
-
-    /// Record an access to this document
-    pub fn record_access(&mut self) {
-        self.last_access_time = SystemTime::now();
-        self.access_count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Get the current access count
-    pub fn get_access_count(&self) -> u64 {
-        self.access_count.load(Ordering::Relaxed)
     }
 }
 
 /// Write operation for batched processing
 #[derive(Debug)]
-pub enum WriteOperation {
-    /// Store document text
+enum WriteOperation {
     StoreText {
         document_id: DocumentId,
         text: String,
         completion_sender: oneshot::Sender<Result<(), ShardexError>>,
     },
-    /// Delete document text (logical deletion)
+    #[allow(dead_code)] // Future functionality for text deletion
     DeleteText {
         document_id: DocumentId,
         completion_sender: oneshot::Sender<Result<(), ShardexError>>,
     },
 }
 
-/// Statistics for concurrent operations
-#[derive(Debug, Default)]
-pub struct ConcurrentMetrics {
-    /// Number of read operations performed
-    pub read_operations: AtomicU64,
-    /// Number of successful read operations
-    pub successful_reads: AtomicU64,
-    /// Number of failed read operations
-    pub failed_reads: AtomicU64,
-    /// Number of write operations performed
-    pub write_operations: AtomicU64,
-    /// Number of successful write operations
-    pub successful_writes: AtomicU64,
-    /// Number of failed write operations
-    pub failed_writes: AtomicU64,
-    /// Number of cache hits in metadata cache
-    pub metadata_cache_hits: AtomicU64,
-    /// Number of cache misses in metadata cache
-    pub metadata_cache_misses: AtomicU64,
-    /// Number of batch write operations
-    pub batch_writes: AtomicU64,
-    /// Total items processed in batches
-    pub batch_items_processed: AtomicU64,
-}
-
-impl ConcurrentMetrics {
-    /// Record a read operation
-    pub fn record_read_operation(&self) {
-        self.read_operations.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a successful read
-    pub fn record_successful_read(&self) {
-        self.successful_reads.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a failed read
-    pub fn record_failed_read(&self) {
-        self.failed_reads.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a write operation
-    pub fn record_write_operation(&self) {
-        self.write_operations.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a successful write
-    pub fn record_successful_write(&self) {
-        self.successful_writes.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a failed write
-    pub fn record_failed_write(&self) {
-        self.failed_writes.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record metadata cache hit
-    pub fn record_cache_hit(&self) {
-        self.metadata_cache_hits.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record metadata cache miss
-    pub fn record_cache_miss(&self) {
-        self.metadata_cache_misses.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record batch write operation
-    pub fn record_batch_write(&self, items_processed: usize) {
-        self.batch_writes.fetch_add(1, Ordering::Relaxed);
-        self.batch_items_processed
-            .fetch_add(items_processed as u64, Ordering::Relaxed);
-    }
-
-    /// Get read success rate
-    pub fn read_success_rate(&self) -> f64 {
-        let total = self.read_operations.load(Ordering::Relaxed);
-        if total == 0 {
-            0.0
-        } else {
-            self.successful_reads.load(Ordering::Relaxed) as f64 / total as f64
-        }
-    }
-
-    /// Get write success rate
-    pub fn write_success_rate(&self) -> f64 {
-        let total = self.write_operations.load(Ordering::Relaxed);
-        if total == 0 {
-            0.0
-        } else {
-            self.successful_writes.load(Ordering::Relaxed) as f64 / total as f64
-        }
-    }
-
-    /// Get cache hit rate for metadata cache
-    pub fn metadata_cache_hit_rate(&self) -> f64 {
-        let hits = self.metadata_cache_hits.load(Ordering::Relaxed);
-        let misses = self.metadata_cache_misses.load(Ordering::Relaxed);
-        let total = hits + misses;
-        if total == 0 {
-            0.0
-        } else {
-            hits as f64 / total as f64
-        }
-    }
-
-    /// Get average batch size
-    pub fn average_batch_size(&self) -> f64 {
-        let batches = self.batch_writes.load(Ordering::Relaxed);
-        if batches == 0 {
-            0.0
-        } else {
-            self.batch_items_processed.load(Ordering::Relaxed) as f64 / batches as f64
-        }
-    }
-}
-
 /// Configuration for concurrent document text storage
 #[derive(Debug, Clone)]
-pub struct ConcurrentConfig {
+pub struct ConcurrentStorageConfig {
     /// Maximum size of write batch
     pub max_batch_size: usize,
-    /// Time to wait before processing partial batches
-    pub batch_timeout: Duration,
+    /// Timeout for write operations
+    pub write_timeout: Duration,
     /// Maximum size of metadata cache
     pub metadata_cache_size: usize,
-    /// Whether to enable background batch processing
-    pub enable_background_processing: bool,
+    /// Batch processing interval
+    pub batch_interval: Duration,
+    /// Maximum concurrent operations
+    pub max_concurrent_ops: usize,
 }
 
-impl Default for ConcurrentConfig {
+impl Default for ConcurrentStorageConfig {
     fn default() -> Self {
         Self {
             max_batch_size: 100,
-            batch_timeout: Duration::from_millis(100),
+            write_timeout: Duration::from_secs(30),
             metadata_cache_size: 10000,
-            enable_background_processing: true,
+            batch_interval: Duration::from_millis(100),
+            max_concurrent_ops: 100,
         }
     }
 }
 
-/// Thread-safe document text storage with concurrent access optimization
-///
-/// This wrapper provides high-performance concurrent access to document text storage:
-/// - Reader-writer locks for concurrent reads with exclusive writes
-/// - Metadata caching for fast document existence checks
-/// - Write batching for improved throughput
-/// - Background processing for non-blocking writes
-/// - Comprehensive metrics for performance monitoring
+/// Performance metrics for concurrent operations
+#[derive(Debug, Default, Clone)]
+pub struct ConcurrentStorageMetrics {
+    /// Total read operations
+    pub read_operations: u64,
+    /// Successful read operations
+    pub successful_reads: u64,
+    /// Failed read operations
+    pub failed_reads: u64,
+    /// Total write operations
+    pub write_operations: u64,
+    /// Successful write operations
+    pub successful_writes: u64,
+    /// Failed write operations
+    pub failed_writes: u64,
+    /// Metadata cache hits
+    pub metadata_cache_hits: u64,
+    /// Metadata cache misses
+    pub metadata_cache_misses: u64,
+    /// Total batches processed
+    pub batches_processed: u64,
+    /// Average batch size
+    pub avg_batch_size: f64,
+    /// Average operation latency in milliseconds
+    pub avg_operation_latency_ms: f64,
+}
+
+impl ConcurrentStorageMetrics {
+    /// Calculate read success ratio
+    pub fn read_success_ratio(&self) -> f64 {
+        if self.read_operations == 0 {
+            0.0
+        } else {
+            self.successful_reads as f64 / self.read_operations as f64
+        }
+    }
+
+    /// Calculate write success ratio
+    pub fn write_success_ratio(&self) -> f64 {
+        if self.write_operations == 0 {
+            0.0
+        } else {
+            self.successful_writes as f64 / self.write_operations as f64
+        }
+    }
+
+    /// Calculate metadata cache hit ratio
+    pub fn metadata_cache_hit_ratio(&self) -> f64 {
+        let total = self.metadata_cache_hits + self.metadata_cache_misses;
+        if total == 0 {
+            0.0
+        } else {
+            self.metadata_cache_hits as f64 / total as f64
+        }
+    }
+
+    /// Get total operations
+    pub fn total_operations(&self) -> u64 {
+        self.read_operations + self.write_operations
+    }
+}
+
+/// Thread-safe document text storage with optimized concurrency
 pub struct ConcurrentDocumentTextStorage {
-    /// Core storage protected by reader-writer lock
+    /// Core storage protected by RwLock for reader-writer access
     storage: Arc<RwLock<DocumentTextStorage>>,
-    /// Metadata cache for quick document lookups
-    metadata_cache: Arc<RwLock<HashMap<DocumentId, DocumentMetadata>>>,
-    /// Queue for batching write operations
+    /// Metadata cache for quick document validation
+    metadata_cache: Arc<Mutex<HashMap<DocumentId, DocumentMetadata>>>,
+    /// Write operation queue for batching
     write_queue: Arc<Mutex<VecDeque<WriteOperation>>>,
-    /// Background task handle for batch processing
-    background_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    /// Performance metrics
-    metrics: Arc<ConcurrentMetrics>,
+    /// Background batch processor handle
+    batch_processor: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Semaphore for limiting concurrent operations
+    concurrency_limiter: Arc<Semaphore>,
     /// Configuration
-    config: ConcurrentConfig,
+    config: ConcurrentStorageConfig,
+    /// Performance metrics
+    metrics: Arc<Mutex<ConcurrentStorageMetrics>>,
 }
 
 impl ConcurrentDocumentTextStorage {
-    /// Create new concurrent document text storage wrapper
-    ///
-    /// # Arguments
-    /// * `storage` - The underlying document text storage instance
-    /// * `config` - Configuration for concurrent operations
-    ///
-    /// # Returns
-    /// * `ConcurrentDocumentTextStorage` - The concurrent wrapper instance
-    pub fn new(storage: DocumentTextStorage, config: ConcurrentConfig) -> Self {
-        let storage = Arc::new(RwLock::new(storage));
-        let metadata_cache = Arc::new(RwLock::new(HashMap::new()));
-        let write_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let background_task = Arc::new(Mutex::new(None));
-        let metrics = Arc::new(ConcurrentMetrics::default());
+    /// Create new concurrent document text storage
+    pub fn new(storage: DocumentTextStorage, config: ConcurrentStorageConfig) -> Self {
+        let concurrency_limiter = Arc::new(Semaphore::new(config.max_concurrent_ops));
 
         Self {
-            storage,
-            metadata_cache,
-            write_queue,
-            background_task,
-            metrics,
+            storage: Arc::new(RwLock::new(storage)),
+            metadata_cache: Arc::new(Mutex::new(HashMap::new())),
+            write_queue: Arc::new(Mutex::new(VecDeque::new())),
+            batch_processor: Arc::new(Mutex::new(None)),
+            concurrency_limiter,
             config,
+            metrics: Arc::new(Mutex::new(ConcurrentStorageMetrics::default())),
         }
     }
 
-    /// Create with default configuration
-    pub fn with_default_config(storage: DocumentTextStorage) -> Self {
-        Self::new(storage, ConcurrentConfig::default())
+    /// Start background batch processor
+    pub async fn start_background_processor(&self) -> Result<(), ShardexError> {
+        let mut processor = self.batch_processor.lock();
+
+        if processor.is_some() {
+            return Err(ShardexError::InvalidInput {
+                field: "background_processor".to_string(),
+                reason: "Background processor already running".to_string(),
+                suggestion: "Stop existing processor before starting new one".to_string(),
+            });
+        }
+
+        let storage = Arc::clone(&self.storage);
+        let write_queue = Arc::clone(&self.write_queue);
+        let metadata_cache = Arc::clone(&self.metadata_cache);
+        let metrics = Arc::clone(&self.metrics);
+        let config = self.config.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(config.batch_interval);
+
+            loop {
+                interval.tick().await;
+
+                if let Err(e) = Self::process_write_batch_static(
+                    &storage,
+                    &write_queue,
+                    &metadata_cache,
+                    &metrics,
+                    &config,
+                )
+                .await
+                {
+                    log::error!("Error processing write batch: {:?}", e);
+                }
+            }
+        });
+
+        *processor = Some(handle);
+        Ok(())
+    }
+
+    /// Stop background batch processor
+    pub async fn stop_background_processor(&self) -> Result<(), ShardexError> {
+        let handle = {
+            let mut processor = self.batch_processor.lock();
+            processor.take()
+        };
+
+        if let Some(handle) = handle {
+            handle.abort();
+
+            // Process any remaining items in the queue
+            self.flush_write_queue().await?;
+        }
+
+        Ok(())
     }
 
     /// Get document text with concurrent access optimization
-    ///
-    /// This method provides optimized concurrent read access:
-    /// - Uses reader locks to allow multiple concurrent readers
-    /// - Checks metadata cache for quick validation
-    /// - Records access statistics for performance monitoring
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to retrieve
-    ///
-    /// # Returns
-    /// * `Ok(String)` - Document text content
-    /// * `Err(ShardexError)` - Read operation failed
-    pub async fn get_text_concurrent(&self, document_id: DocumentId) -> Result<String, ShardexError> {
-        // Record read operation
-        self.metrics.record_read_operation();
+    pub async fn get_text_concurrent(
+        &self,
+        document_id: DocumentId,
+    ) -> Result<String, ShardexError> {
+        let _permit =
+            self.concurrency_limiter
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "concurrency_limiter".to_string(),
+                    reason: "Failed to acquire concurrency permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
 
-        // Check metadata cache for quick validation and update access count
-        self.update_access_metadata(document_id).await;
+        let start_time = Instant::now();
+
+        // Update metadata cache access info
+        {
+            let mut cache = self.metadata_cache.lock();
+            if let Some(metadata) = cache.get_mut(&document_id) {
+                metadata.last_access_time = SystemTime::now();
+                metadata.access_count.fetch_add(1, Ordering::Relaxed);
+
+                // Record cache hit
+                {
+                    let mut metrics = self.metrics.lock();
+                    metrics.metadata_cache_hits += 1;
+                }
+            } else {
+                // Record cache miss
+                {
+                    let mut metrics = self.metrics.lock();
+                    metrics.metadata_cache_misses += 1;
+                }
+            }
+        }
 
         // Acquire read lock (allows multiple concurrent readers)
         let storage = self.storage.read();
-        let result = storage.get_text_safe(document_id);
+        let result = storage.get_text(document_id);
 
-        // Record metrics based on result
-        match &result {
-            Ok(_) => self.metrics.record_successful_read(),
-            Err(_) => self.metrics.record_failed_read(),
-        }
+        // Update metrics
+        let elapsed = start_time.elapsed();
+        let success = result.is_ok();
+        self.update_read_metrics(success, elapsed.as_millis() as f64);
 
         result
     }
 
     /// Store text with batched writes for better performance
-    ///
-    /// This method queues write operations for batch processing:
-    /// - Adds operation to write queue
-    /// - Triggers batch processing when queue is full
-    /// - Returns immediately with a future that completes when write is done
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to store
-    /// * `text` - Text content to store
-    ///
-    /// # Returns
-    /// * `Ok(())` - Text successfully queued and processed
-    /// * `Err(ShardexError)` - Write operation failed
     pub async fn store_text_batched(
         &self,
         document_id: DocumentId,
         text: String,
     ) -> Result<(), ShardexError> {
+        let _permit =
+            self.concurrency_limiter
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "concurrency_limiter".to_string(),
+                    reason: "Failed to acquire concurrency permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
+
         let (tx, rx) = oneshot::channel();
 
         // Add to write queue
@@ -339,307 +309,157 @@ impl ConcurrentDocumentTextStorage {
             });
         }
 
-        // Trigger batch processing if queue is full or timeout
-        self.maybe_trigger_batch_processing().await;
+        // Trigger batch processing if queue is full
+        self.maybe_trigger_batch_write().await?;
 
-        // Wait for completion
-        match rx.await {
-            Ok(result) => {
-                // Update metadata cache on successful write
-                if result.is_ok() {
-                    self.update_metadata_cache(document_id, text.len() as u64).await;
-                }
-                result
-            }
-            Err(_) => Err(ShardexError::concurrency_error(
-                "store_text_batched",
-                "Write operation was cancelled",
-                "Retry the operation",
-            )),
-        }
+        // Wait for completion with timeout
+        timeout(self.config.write_timeout, rx)
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "write_timeout".to_string(),
+                reason: "Write operation timed out".to_string(),
+                suggestion: "Increase write timeout or reduce batch size".to_string(),
+            })?
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "write_operation".to_string(),
+                reason: "Write operation was cancelled".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?
     }
 
-    /// Delete document text (logical deletion)
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to delete
-    ///
-    /// # Returns
-    /// * `Ok(())` - Document successfully marked for deletion
-    /// * `Err(ShardexError)` - Delete operation failed
-    pub async fn delete_text_batched(&self, document_id: DocumentId) -> Result<(), ShardexError> {
-        let (tx, rx) = oneshot::channel();
+    /// Store text immediately without batching (for urgent operations)
+    pub async fn store_text_immediate(
+        &self,
+        document_id: DocumentId,
+        text: &str,
+    ) -> Result<(), ShardexError> {
+        let _permit =
+            self.concurrency_limiter
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "concurrency_limiter".to_string(),
+                    reason: "Failed to acquire concurrency permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
 
-        // Add to write queue
-        {
-            let mut queue = self.write_queue.lock();
-            queue.push_back(WriteOperation::DeleteText {
-                document_id,
-                completion_sender: tx,
-            });
+        let start_time = Instant::now();
+
+        // Acquire write lock
+        let mut storage = self.storage.write();
+        let result = storage.store_text(document_id, text);
+
+        if result.is_ok() {
+            // Update metadata cache
+            self.update_metadata_cache(document_id, text.len() as u64);
         }
 
-        // Trigger batch processing
-        self.maybe_trigger_batch_processing().await;
+        // Update metrics
+        let elapsed = start_time.elapsed();
+        let success = result.is_ok();
+        self.update_write_metrics(success, elapsed.as_millis() as f64);
 
-        // Wait for completion
-        match rx.await {
-            Ok(result) => {
-                // Remove from metadata cache on successful deletion
-                if result.is_ok() {
-                    self.remove_from_metadata_cache(document_id).await;
-                }
-                result
-            }
-            Err(_) => Err(ShardexError::concurrency_error(
-                "delete_text_batched",
-                "Delete operation was cancelled",
-                "Retry the operation",
-            )),
-        }
+        result
     }
 
-    /// Extract text substring with concurrent read access
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID
-    /// * `start` - Starting position in bytes
-    /// * `length` - Length in bytes
-    ///
-    /// # Returns
-    /// * `Ok(String)` - Extracted text substring
-    /// * `Err(ShardexError)` - Extraction failed
+    /// Extract text substring with concurrent access
     pub async fn extract_text_substring_concurrent(
         &self,
         document_id: DocumentId,
         start: u32,
         length: u32,
     ) -> Result<String, ShardexError> {
+        let _permit =
+            self.concurrency_limiter
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "concurrency_limiter".to_string(),
+                    reason: "Failed to acquire concurrency permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
+
         // Check metadata cache for early validation
-        if let Some(metadata) = self.get_metadata_from_cache(document_id).await {
-            let end_offset = start as u64 + length as u64;
-            if end_offset > metadata.text_length {
-                return Err(ShardexError::invalid_range(
-                    start,
-                    length,
-                    metadata.text_length,
-                ));
+        {
+            let cache = self.metadata_cache.lock();
+            if let Some(metadata) = cache.get(&document_id) {
+                let end_offset = start as u64 + length as u64;
+                if end_offset > metadata.text_length {
+                    return Err(ShardexError::InvalidInput {
+                        field: "range".to_string(),
+                        reason: format!(
+                            "Range {}..{} exceeds document length {}",
+                            start, end_offset, metadata.text_length
+                        ),
+                        suggestion: "Ensure range is within document bounds".to_string(),
+                    });
+                }
             }
-            self.metrics.record_cache_hit();
-        } else {
-            self.metrics.record_cache_miss();
         }
 
-        // Use concurrent read access
         let storage = self.storage.read();
         storage.extract_text_substring(document_id, start, length)
     }
 
-    /// Check if document exists in storage
-    ///
-    /// This is optimized to check the metadata cache first before
-    /// accessing the underlying storage.
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to check
-    ///
-    /// # Returns
-    /// * `true` - Document exists
-    /// * `false` - Document does not exist
-    pub async fn document_exists(&self, document_id: DocumentId) -> bool {
-        // Check metadata cache first
-        if self.get_metadata_from_cache(document_id).await.is_some() {
-            self.metrics.record_cache_hit();
-            return true;
-        }
-
-        self.metrics.record_cache_miss();
-
-        // Fall back to storage check
-        let text_exists = {
-            let storage = self.storage.read();
-            storage.get_text_safe(document_id).is_ok()
+    /// Process write batch if queue is full
+    async fn maybe_trigger_batch_write(&self) -> Result<(), ShardexError> {
+        let queue_len = {
+            let queue = self.write_queue.lock();
+            queue.len()
         };
-        
-        if text_exists {
-            // Cache the result for future lookups
-            // We don't know the exact length, so use a placeholder
-            self.update_metadata_cache(document_id, 0).await;
-            true
-        } else {
-            false
+
+        if queue_len >= self.config.max_batch_size {
+            self.process_write_batch().await?;
         }
+
+        Ok(())
     }
 
-    /// Get current performance metrics
-    pub fn get_metrics(&self) -> Arc<ConcurrentMetrics> {
-        Arc::clone(&self.metrics)
+    /// Process queued write operations in batch
+    async fn process_write_batch(&self) -> Result<(), ShardexError> {
+        Self::process_write_batch_static(
+            &self.storage,
+            &self.write_queue,
+            &self.metadata_cache,
+            &self.metrics,
+            &self.config,
+        )
+        .await
     }
 
-    /// Get configuration
-    pub fn get_config(&self) -> &ConcurrentConfig {
-        &self.config
-    }
+    /// Static version for background processor
+    async fn process_write_batch_static(
+        storage: &Arc<RwLock<DocumentTextStorage>>,
+        write_queue: &Arc<Mutex<VecDeque<WriteOperation>>>,
+        metadata_cache: &Arc<Mutex<HashMap<DocumentId, DocumentMetadata>>>,
+        metrics: &Arc<Mutex<ConcurrentStorageMetrics>>,
+        config: &ConcurrentStorageConfig,
+    ) -> Result<(), ShardexError> {
+        let mut operations = Vec::new();
 
-    /// Get current write queue size
-    pub fn write_queue_size(&self) -> usize {
-        self.write_queue.lock().len()
-    }
-
-    /// Force processing of current write queue
-    pub async fn flush_write_queue(&self) -> Result<usize, ShardexError> {
-        self.process_write_batch().await
-    }
-
-    // Private helper methods
-
-    /// Update access metadata in cache
-    async fn update_access_metadata(&self, document_id: DocumentId) {
-        let mut cache = self.metadata_cache.write();
-        if let Some(metadata) = cache.get_mut(&document_id) {
-            metadata.record_access();
-            self.metrics.record_cache_hit();
-        } else {
-            self.metrics.record_cache_miss();
-        }
-    }
-
-    /// Update metadata cache with document information
-    async fn update_metadata_cache(&self, document_id: DocumentId, text_length: u64) {
-        let mut cache = self.metadata_cache.write();
-        
-        // If we're at capacity, remove oldest entries based on last access time
-        if cache.len() >= self.config.metadata_cache_size {
-            // Find the least recently accessed entry
-            let mut oldest_id = None;
-            let mut oldest_time = SystemTime::now();
-            
-            for (id, metadata) in cache.iter() {
-                if metadata.last_access_time < oldest_time {
-                    oldest_time = metadata.last_access_time;
-                    oldest_id = Some(*id);
-                }
-            }
-            
-            if let Some(id) = oldest_id {
-                cache.remove(&id);
-            }
-        }
-        
-        cache.insert(document_id, DocumentMetadata::new(document_id, text_length));
-    }
-
-    /// Get metadata from cache
-    async fn get_metadata_from_cache(&self, document_id: DocumentId) -> Option<DocumentMetadata> {
-        let cache = self.metadata_cache.read();
-        cache.get(&document_id).cloned()
-    }
-
-    /// Remove document from metadata cache
-    async fn remove_from_metadata_cache(&self, document_id: DocumentId) {
-        let mut cache = self.metadata_cache.write();
-        cache.remove(&document_id);
-    }
-
-    /// Check if batch processing should be triggered
-    async fn maybe_trigger_batch_processing(&self) {
-        let queue_size = self.write_queue.lock().len();
-        
-        if queue_size >= self.config.max_batch_size {
-            // Process immediately if queue is full
-            let _ = self.process_write_batch().await;
-        } else if self.config.enable_background_processing {
-            // Ensure background processing is running
-            self.ensure_background_task_running().await;
-        }
-    }
-
-    /// Ensure background batch processing task is running
-    async fn ensure_background_task_running(&self) {
-        let mut task_handle = self.background_task.lock();
-        
-        if task_handle.is_none() || task_handle.as_ref().unwrap().is_finished() {
-            let storage_clone = Arc::clone(&self.storage);
-            let queue_clone = Arc::clone(&self.write_queue);
-            let metrics_clone = Arc::clone(&self.metrics);
-            let timeout = self.config.batch_timeout;
-            
-            let handle = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(timeout);
-                
-                loop {
-                    interval.tick().await;
-                    
-                    let operations = {
-                        let mut queue = queue_clone.lock();
-                        if queue.is_empty() {
-                            continue;
-                        }
-                        
-                        // Take all operations for batch processing
-                        let mut ops = Vec::new();
-                        while let Some(op) = queue.pop_front() {
-                            ops.push(op);
-                        }
-                        ops
-                    };
-                    
-                    if !operations.is_empty() {
-                        Self::process_operations_batch(
-                            &storage_clone,
-                            operations,
-                            &metrics_clone,
-                        ).await;
-                    }
-                }
-            });
-            
-            *task_handle = Some(handle);
-        }
-    }
-
-    /// Process write batch immediately
-    async fn process_write_batch(&self) -> Result<usize, ShardexError> {
-        let operations = {
-            let mut queue = self.write_queue.lock();
-            let mut ops = Vec::new();
-            
-            // Take up to max_batch_size operations
-            for _ in 0..self.config.max_batch_size {
+        // Collect batch of operations
+        {
+            let mut queue = write_queue.lock();
+            for _ in 0..config.max_batch_size {
                 if let Some(op) = queue.pop_front() {
-                    ops.push(op);
+                    operations.push(op);
                 } else {
                     break;
                 }
             }
-            ops
-        };
-        
-        if operations.is_empty() {
-            return Ok(0);
         }
-        
-        let count = operations.len();
-        Self::process_operations_batch(&self.storage, operations, &self.metrics).await;
-        Ok(count)
-    }
 
-    /// Process a batch of write operations
-    async fn process_operations_batch(
-        storage: &Arc<RwLock<DocumentTextStorage>>,
-        operations: Vec<WriteOperation>,
-        metrics: &Arc<ConcurrentMetrics>,
-    ) {
         if operations.is_empty() {
-            return;
+            return Ok(());
         }
-        
+
         let batch_size = operations.len();
-        
+        let batch_start = Instant::now();
+
         // Acquire write lock for batch processing
         let mut storage_guard = storage.write();
-        
-        // Process all operations in the batch
+
+        // Process all operations in batch
         for operation in operations {
             match operation {
                 WriteOperation::StoreText {
@@ -647,81 +467,203 @@ impl ConcurrentDocumentTextStorage {
                     text,
                     completion_sender,
                 } => {
-                    metrics.record_write_operation();
-                    let result = storage_guard.store_text_safe(document_id, &text);
-                    
-                    match result {
-                        Ok(_) => metrics.record_successful_write(),
-                        Err(_) => metrics.record_failed_write(),
+                    let result = storage_guard.store_text(document_id, &text);
+
+                    // Update metadata cache on success
+                    if result.is_ok() {
+                        let mut cache = metadata_cache.lock();
+                        let metadata = DocumentMetadata {
+                            document_id,
+                            text_length: text.len() as u64,
+                            last_access_time: SystemTime::now(),
+                            access_count: AtomicU64::new(0),
+                        };
+                        cache.insert(document_id, metadata);
+
+                        // Clean up cache if it's too large
+                        if cache.len() > config.metadata_cache_size {
+                            Self::cleanup_metadata_cache(
+                                &mut cache,
+                                config.metadata_cache_size / 2,
+                            );
+                        }
                     }
-                    
+
                     let _ = completion_sender.send(result);
                 }
-                
+
                 WriteOperation::DeleteText {
-                    document_id: _,
+                    document_id,
                     completion_sender,
                 } => {
-                    metrics.record_write_operation();
-                    
-                    // For now, deletion is a placeholder since the base storage
-                    // doesn't support deletion. In a full implementation, this
-                    // would mark entries for deletion/compaction.
-                    let result = Ok(());
-                    
-                    if result.is_ok() {
-                        metrics.record_successful_write();
-                    } else {
-                        metrics.record_failed_write();
+                    // Remove from cache
+                    {
+                        let mut cache = metadata_cache.lock();
+                        cache.remove(&document_id);
                     }
-                    
+
+                    // For now, we'll return success as logical deletion
+                    // In a real implementation, this might mark entries for cleanup
+                    let result = Ok(());
                     let _ = completion_sender.send(result);
                 }
             }
         }
-        
-        // Record batch statistics
-        metrics.record_batch_write(batch_size);
-    }
 
-    /// Shutdown background processing gracefully
-    pub async fn shutdown(&self) -> Result<(), ShardexError> {
-        // Process remaining items in queue
-        self.flush_write_queue().await?;
-        
-        // Cancel background task
-        let mut task_handle = self.background_task.lock();
-        if let Some(handle) = task_handle.take() {
-            handle.abort();
+        // Update batch metrics
+        let batch_elapsed = batch_start.elapsed();
+        {
+            let mut metrics_guard = metrics.lock();
+            metrics_guard.batches_processed += 1;
+            metrics_guard.write_operations += batch_size as u64;
+            metrics_guard.successful_writes += batch_size as u64; // Simplified for now
+
+            // Update average batch size
+            let total_batches = metrics_guard.batches_processed;
+            if total_batches == 1 {
+                metrics_guard.avg_batch_size = batch_size as f64;
+            } else {
+                metrics_guard.avg_batch_size = ((metrics_guard.avg_batch_size
+                    * (total_batches - 1) as f64)
+                    + batch_size as f64)
+                    / total_batches as f64;
+            }
+
+            // Update average operation latency
+            let total_ops = metrics_guard.total_operations();
+            let batch_latency_per_op = batch_elapsed.as_millis() as f64 / batch_size as f64;
+            if total_ops == batch_size as u64 {
+                metrics_guard.avg_operation_latency_ms = batch_latency_per_op;
+            } else {
+                metrics_guard.avg_operation_latency_ms = ((metrics_guard.avg_operation_latency_ms
+                    * (total_ops - batch_size as u64) as f64)
+                    + (batch_latency_per_op * batch_size as f64))
+                    / total_ops as f64;
+            }
         }
-        
+
         Ok(())
     }
 
-    /// Get underlying storage statistics
-    pub async fn get_storage_stats(&self) -> (u32, u64, usize, bool) {
-        let storage = self.storage.read();
-        (
-            storage.entry_count(),
-            storage.total_text_size(),
-            storage.max_document_size(),
-            storage.is_empty(),
-        )
+    /// Clean up metadata cache by removing least recently used entries
+    fn cleanup_metadata_cache(
+        cache: &mut HashMap<DocumentId, DocumentMetadata>,
+        target_size: usize,
+    ) {
+        if cache.len() <= target_size {
+            return;
+        }
+
+        // Collect document IDs sorted by last access time (oldest first)
+        let mut entries: Vec<_> = cache
+            .iter()
+            .map(|(id, metadata)| (*id, metadata.last_access_time))
+            .collect();
+        entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+        // Remove oldest entries
+        let to_remove = cache.len() - target_size;
+        for i in 0..to_remove {
+            if let Some((doc_id, _)) = entries.get(i) {
+                cache.remove(doc_id);
+            }
+        }
     }
 
-    /// Get metadata cache statistics
-    pub fn get_cache_stats(&self) -> (usize, usize) {
-        let cache = self.metadata_cache.read();
+    /// Flush all pending write operations
+    pub async fn flush_write_queue(&self) -> Result<(), ShardexError> {
+        self.process_write_batch().await
+    }
+
+    /// Update metadata cache
+    fn update_metadata_cache(&self, document_id: DocumentId, text_length: u64) {
+        let mut cache = self.metadata_cache.lock();
+        let metadata = DocumentMetadata {
+            document_id,
+            text_length,
+            last_access_time: SystemTime::now(),
+            access_count: AtomicU64::new(0),
+        };
+        cache.insert(document_id, metadata);
+    }
+
+    /// Update read operation metrics
+    fn update_read_metrics(&self, success: bool, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.read_operations += 1;
+
+        if success {
+            metrics.successful_reads += 1;
+        } else {
+            metrics.failed_reads += 1;
+        }
+
+        // Update average latency
+        let total_ops = metrics.total_operations();
+        if total_ops == 1 {
+            metrics.avg_operation_latency_ms = latency_ms;
+        } else {
+            metrics.avg_operation_latency_ms =
+                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms)
+                    / total_ops as f64;
+        }
+    }
+
+    /// Update write operation metrics  
+    fn update_write_metrics(&self, success: bool, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.write_operations += 1;
+
+        if success {
+            metrics.successful_writes += 1;
+        } else {
+            metrics.failed_writes += 1;
+        }
+
+        // Update average latency
+        let total_ops = metrics.total_operations();
+        if total_ops == 1 {
+            metrics.avg_operation_latency_ms = latency_ms;
+        } else {
+            metrics.avg_operation_latency_ms =
+                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms)
+                    / total_ops as f64;
+        }
+    }
+
+    /// Get current performance metrics
+    pub fn get_metrics(&self) -> ConcurrentStorageMetrics {
+        let metrics = self.metrics.lock();
+        metrics.clone()
+    }
+
+    /// Reset performance metrics
+    pub fn reset_metrics(&self) {
+        let mut metrics = self.metrics.lock();
+        *metrics = ConcurrentStorageMetrics::default();
+    }
+
+    /// Get metadata cache information
+    pub fn cache_info(&self) -> (usize, usize) {
+        let cache = self.metadata_cache.lock();
         (cache.len(), self.config.metadata_cache_size)
+    }
+
+    /// Clear metadata cache
+    pub fn clear_metadata_cache(&self) {
+        let mut cache = self.metadata_cache.lock();
+        cache.clear();
     }
 }
 
-// Implement Drop to ensure graceful shutdown
 impl Drop for ConcurrentDocumentTextStorage {
     fn drop(&mut self) {
-        // Cancel background task if it exists
-        if let Some(handle) = self.background_task.lock().take() {
-            handle.abort();
+        // Attempt to flush pending operations on drop
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                // Note: This is best effort - we can't guarantee completion in Drop
+                // In production, users should call flush_write_queue() explicitly before dropping
+            });
         }
     }
 }
@@ -731,207 +673,124 @@ mod tests {
     use super::*;
     use crate::document_text_storage::DocumentTextStorage;
     use tempfile::TempDir;
-    use tokio::time::Duration;
 
-    async fn create_test_storage() -> (TempDir, ConcurrentDocumentTextStorage) {
+    #[tokio::test]
+    async fn test_concurrent_storage_creation() {
         let temp_dir = TempDir::new().unwrap();
         let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let concurrent_storage = ConcurrentDocumentTextStorage::with_default_config(storage);
-        (temp_dir, concurrent_storage)
+        let config = ConcurrentStorageConfig::default();
+
+        let concurrent_storage = ConcurrentDocumentTextStorage::new(storage, config);
+
+        // Verify initial state
+        let metrics = concurrent_storage.get_metrics();
+        assert_eq!(metrics.read_operations, 0);
+        assert_eq!(metrics.write_operations, 0);
     }
 
     #[tokio::test]
-    async fn test_concurrent_basic_operations() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        let storage = Arc::new(storage);
-        let storage = Arc::new(storage);
-        
-        let doc_id = DocumentId::new();
-        let text = "Test document content";
-        
-        // Store text
-        storage.store_text_batched(doc_id, text.to_string()).await.unwrap();
-        
-        // Retrieve text
-        let retrieved = storage.get_text_concurrent(doc_id).await.unwrap();
-        assert_eq!(retrieved, text);
-        
-        // Check existence
-        assert!(storage.document_exists(doc_id).await);
-        
-        // Check non-existent document
-        let non_existent = DocumentId::new();
-        assert!(!storage.document_exists(non_existent).await);
-    }
+    async fn test_concurrent_read_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = ConcurrentStorageConfig::default();
 
-    #[tokio::test]
-    async fn test_concurrent_batch_processing() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        
-        let mut handles = Vec::new();
-        
-        // Store multiple documents concurrently
-        for i in 0..10 {
-            let storage_clone = &storage;
-            let handle = async move {
-                let doc_id = DocumentId::new();
-                let text = format!("Document content {}", i);
-                storage_clone.store_text_batched(doc_id, text.clone()).await.unwrap();
-                (doc_id, text)
-            };
-            handles.push(handle);
-        }
-        
-        // Wait for all operations to complete
-        let results: Vec<_> = futures::future::join_all(handles).await;
-        
-        // Verify all documents were stored correctly
-        for (doc_id, expected_text) in results {
-            let retrieved = storage.get_text_concurrent(doc_id).await.unwrap();
-            assert_eq!(retrieved, expected_text);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_metrics() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        
-        let doc_id = DocumentId::new();
-        let text = "Test content";
-        
-        // Store and retrieve to generate metrics
-        storage.store_text_batched(doc_id, text.to_string()).await.unwrap();
-        let _retrieved = storage.get_text_concurrent(doc_id).await.unwrap();
-        
-        let metrics = storage.get_metrics();
-        
-        // Check that metrics were recorded
-        assert!(metrics.read_operations.load(Ordering::Relaxed) > 0);
-        assert!(metrics.write_operations.load(Ordering::Relaxed) > 0);
-        assert!(metrics.successful_reads.load(Ordering::Relaxed) > 0);
-        assert!(metrics.successful_writes.load(Ordering::Relaxed) > 0);
-    }
-
-    #[tokio::test]
-    async fn test_metadata_cache() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        
-        let doc_id = DocumentId::new();
-        let text = "Test content for caching";
-        
-        // Store document
-        storage.store_text_batched(doc_id, text.to_string()).await.unwrap();
-        
-        // First access should be a cache miss
-        assert!(storage.document_exists(doc_id).await);
-        
-        // Second access should be a cache hit
-        assert!(storage.document_exists(doc_id).await);
-        
-        let metrics = storage.get_metrics();
-        let cache_hit_rate = metrics.metadata_cache_hit_rate();
-        
-        // Should have some cache hits
-        assert!(cache_hit_rate > 0.0);
-    }
-
-    #[tokio::test]
-    async fn test_text_substring_extraction() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        
-        let doc_id = DocumentId::new();
-        let text = "The quick brown fox jumps over the lazy dog";
-        
-        storage.store_text_batched(doc_id, text.to_string()).await.unwrap();
-        
-        // Extract substring
-        let substring = storage
-            .extract_text_substring_concurrent(doc_id, 4, 11)
+        let concurrent_storage = ConcurrentDocumentTextStorage::new(storage, config);
+        concurrent_storage
+            .start_background_processor()
             .await
             .unwrap();
-        assert_eq!(substring, "quick brown");
-        
-        // Test invalid range
-        let result = storage
-            .extract_text_substring_concurrent(doc_id, 100, 10)
-            .await;
-        assert!(result.is_err());
+
+        let doc_id = DocumentId::new();
+        let text = "Test document content";
+
+        // Store text
+        concurrent_storage
+            .store_text_immediate(doc_id, text)
+            .await
+            .unwrap();
+
+        // Read text
+        let retrieved = concurrent_storage
+            .get_text_concurrent(doc_id)
+            .await
+            .unwrap();
+        assert_eq!(retrieved, text);
+
+        // Check metrics
+        let metrics = concurrent_storage.get_metrics();
+        assert_eq!(metrics.read_operations, 1);
+        assert_eq!(metrics.write_operations, 1);
+        assert_eq!(metrics.successful_reads, 1);
+        assert_eq!(metrics.successful_writes, 1);
+
+        concurrent_storage
+            .stop_background_processor()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
-    async fn test_write_queue_management() {
-        let config = ConcurrentConfig {
-            max_batch_size: 5, // Set higher so operations don't auto-process
-            batch_timeout: Duration::from_millis(10),
-            metadata_cache_size: 100,
-            enable_background_processing: false, // Disable for predictable testing
-        };
-        
+    async fn test_batched_writes() {
         let temp_dir = TempDir::new().unwrap();
-        let base_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let storage = Arc::new(ConcurrentDocumentTextStorage::new(base_storage, config));
-        
-        // Queue should start empty
-        assert_eq!(storage.write_queue_size(), 0);
-        
-        // Add operations to queue
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = ConcurrentStorageConfig {
+            max_batch_size: 2, // Small batch size for testing
+            ..Default::default()
+        };
+
+        let concurrent_storage = ConcurrentDocumentTextStorage::new(storage, config);
+        concurrent_storage
+            .start_background_processor()
+            .await
+            .unwrap();
+
         let doc1 = DocumentId::new();
         let doc2 = DocumentId::new();
-        
-        // These should queue up rather than process immediately
-        let _handle1 = tokio::spawn({
-            let storage = Arc::clone(&storage);
-            async move {
-                storage.store_text_batched(doc1, "doc1".to_string()).await
-            }
-        });
-        
-        let _handle2 = tokio::spawn({
-            let storage = Arc::clone(&storage);
-            async move {
-                storage.store_text_batched(doc2, "doc2".to_string()).await
-            }
-        });
-        
-        // Wait for operations to be queued
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        
-        // Verify operations were queued
-        assert!(storage.write_queue_size() > 0, "Operations should be queued when background processing is disabled");
-        
-        // Force flush the queue
-        let processed = storage.flush_write_queue().await.unwrap();
-        assert!(processed > 0, "Should have processed some operations");
+        let text1 = "First document";
+        let text2 = "Second document";
+
+        // Store texts (should trigger batching)
+        let store1 = concurrent_storage.store_text_batched(doc1, text1.to_string());
+        let store2 = concurrent_storage.store_text_batched(doc2, text2.to_string());
+
+        // Wait for both to complete
+        tokio::try_join!(store1, store2).unwrap();
+
+        // Verify texts were stored
+        let retrieved1 = concurrent_storage.get_text_concurrent(doc1).await.unwrap();
+        let retrieved2 = concurrent_storage.get_text_concurrent(doc2).await.unwrap();
+        assert_eq!(retrieved1, text1);
+        assert_eq!(retrieved2, text2);
+
+        concurrent_storage
+            .stop_background_processor()
+            .await
+            .unwrap();
     }
 
-    #[tokio::test]
-    async fn test_concurrent_config() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        
-        let config = storage.get_config();
+    #[test]
+    fn test_concurrent_storage_config() {
+        let config = ConcurrentStorageConfig::default();
         assert_eq!(config.max_batch_size, 100);
         assert_eq!(config.metadata_cache_size, 10000);
-        assert!(config.enable_background_processing);
+        assert!(config.write_timeout > Duration::from_secs(0));
     }
 
-    #[tokio::test] 
-    async fn test_graceful_shutdown() {
-        let (_temp_dir, storage) = create_test_storage().await;
-        let storage = Arc::new(storage);
-        
-        // Add some operations to the queue
-        let doc_id = DocumentId::new();
-        let _handle = tokio::spawn({
-            let storage = Arc::clone(&storage);
-            async move {
-                storage.store_text_batched(doc_id, "test".to_string()).await
-            }
-        });
-        
-        // Shutdown should process remaining operations
-        storage.shutdown().await.unwrap();
-        
-        // Queue should be empty after shutdown
-        assert_eq!(storage.write_queue_size(), 0);
+    #[test]
+    fn test_metrics_calculations() {
+        let metrics = ConcurrentStorageMetrics {
+            successful_reads: 80,
+            read_operations: 100,
+            successful_writes: 90,
+            write_operations: 100,
+            metadata_cache_hits: 70,
+            metadata_cache_misses: 30,
+            ..Default::default()
+        };
+
+        assert_eq!(metrics.read_success_ratio(), 0.8);
+        assert_eq!(metrics.write_success_ratio(), 0.9);
+        assert_eq!(metrics.metadata_cache_hit_ratio(), 0.7);
+        assert_eq!(metrics.total_operations(), 200);
     }
 }

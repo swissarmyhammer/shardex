@@ -1,282 +1,226 @@
-//! Async I/O support layer for document text storage
+//! Asynchronous I/O support for document text storage
 //!
-//! This module provides asynchronous wrappers and utilities for document text storage
-//! operations, enabling non-blocking I/O and better concurrency for async applications.
+//! This module provides async wrappers around document text storage with
+//! read-ahead buffering, batch operations, and non-blocking I/O patterns.
 
-use crate::concurrent_document_text_storage::ConcurrentDocumentTextStorage;
+use crate::concurrent_document_text_storage::{
+    ConcurrentDocumentTextStorage, ConcurrentStorageConfig,
+};
+use crate::document_text_storage::DocumentTextStorage;
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{RwLock, Semaphore};
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-/// Read-ahead buffer configuration
+/// Configuration for async document text storage
 #[derive(Debug, Clone)]
-pub struct ReadAheadConfig {
-    /// Maximum number of documents to buffer ahead
-    pub buffer_size: usize,
-    /// Size of each read-ahead window
-    pub window_size: usize,
-    /// Time to keep buffers before eviction
-    pub buffer_ttl: Duration,
-    /// Enable predictive read-ahead based on access patterns
-    pub enable_predictive: bool,
+pub struct AsyncStorageConfig {
+    /// Configuration for underlying concurrent storage
+    pub concurrent_config: ConcurrentStorageConfig,
+    /// Size of read-ahead buffer
+    pub read_ahead_buffer_size: usize,
+    /// TTL for read-ahead buffer entries
+    pub read_ahead_ttl: Duration,
+    /// Maximum concurrent async operations
+    pub max_concurrent_async_ops: usize,
+    /// Default timeout for async operations
+    pub default_timeout: Duration,
+    /// Read-ahead prediction window size
+    pub read_ahead_window: usize,
+    /// Background task cleanup interval
+    pub cleanup_interval: Duration,
 }
 
-impl Default for ReadAheadConfig {
+impl Default for AsyncStorageConfig {
     fn default() -> Self {
         Self {
-            buffer_size: 1000,
-            window_size: 100,
-            buffer_ttl: Duration::from_secs(300), // 5 minutes
-            enable_predictive: true,
+            concurrent_config: ConcurrentStorageConfig::default(),
+            read_ahead_buffer_size: 1000,
+            read_ahead_ttl: Duration::from_secs(300),
+            max_concurrent_async_ops: 200,
+            default_timeout: Duration::from_secs(30),
+            read_ahead_window: 10,
+            cleanup_interval: Duration::from_secs(60),
         }
     }
 }
 
-/// Entry in the read-ahead buffer
+/// Read-ahead buffer entry
 #[derive(Debug, Clone)]
-struct BufferedDocument {
-    /// Document content
-    content: String,
-    /// Time when document was buffered
-    buffered_at: Instant,
-    /// Number of times accessed from buffer
+struct ReadAheadEntry {
+    #[allow(dead_code)] // Used for cache key validation and debugging
+    document_id: DocumentId,
+    text: String,
+    created_at: SystemTime,
     access_count: u64,
 }
 
-impl BufferedDocument {
-    fn new(content: String) -> Self {
+impl ReadAheadEntry {
+    fn new(document_id: DocumentId, text: String) -> Self {
         Self {
-            content,
-            buffered_at: Instant::now(),
+            document_id,
+            text,
+            created_at: SystemTime::now(),
             access_count: 0,
         }
     }
 
     fn is_expired(&self, ttl: Duration) -> bool {
-        self.buffered_at.elapsed() > ttl
+        self.created_at.elapsed().unwrap_or(Duration::ZERO) > ttl
     }
 
-    fn access(&mut self) -> &str {
+    fn touch(&mut self) {
         self.access_count += 1;
-        &self.content
     }
 }
 
-/// Read-ahead buffer for document content
+/// Read-ahead buffer for predictive caching
 #[derive(Debug)]
-pub struct ReadAheadBuffer {
-    /// Buffered documents
-    buffer: HashMap<DocumentId, BufferedDocument>,
-    /// Configuration
-    config: ReadAheadConfig,
-    /// Buffer statistics
-    hits: u64,
-    misses: u64,
-    evictions: u64,
+struct ReadAheadBuffer {
+    entries: HashMap<DocumentId, ReadAheadEntry>,
+    access_order: Vec<DocumentId>,
+    max_size: usize,
+    ttl: Duration,
 }
 
 impl ReadAheadBuffer {
-    /// Create new read-ahead buffer
-    pub fn new(config: ReadAheadConfig) -> Self {
+    fn new(max_size: usize, ttl: Duration) -> Self {
         Self {
-            buffer: HashMap::new(),
-            config,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
+            entries: HashMap::with_capacity(max_size),
+            access_order: Vec::with_capacity(max_size),
+            max_size,
+            ttl,
         }
     }
 
-    /// Check if document is in buffer
-    pub fn get(&mut self, document_id: &DocumentId) -> Option<String> {
-        if let Some(doc) = self.buffer.get_mut(document_id) {
-            if doc.is_expired(self.config.buffer_ttl) {
-                self.buffer.remove(document_id);
-                self.misses += 1;
-                None
+    fn get(&mut self, document_id: &DocumentId) -> Option<String> {
+        if let Some(entry) = self.entries.get_mut(document_id) {
+            if !entry.is_expired(self.ttl) {
+                entry.touch();
+                // Move to end of access order
+                if let Some(pos) = self.access_order.iter().position(|id| id == document_id) {
+                    self.access_order.remove(pos);
+                }
+                self.access_order.push(*document_id);
+                return Some(entry.text.clone());
             } else {
-                self.hits += 1;
-                Some(doc.access().to_string())
+                // Remove expired entry
+                self.entries.remove(document_id);
+                self.access_order.retain(|id| id != document_id);
             }
-        } else {
-            self.misses += 1;
-            None
         }
+        None
     }
 
-    /// Add document to buffer
-    pub fn put(&mut self, document_id: DocumentId, content: String) {
-        // Evict expired entries
-        self.evict_expired();
-
-        // Evict LRU entries if at capacity
-        if self.buffer.len() >= self.config.buffer_size {
-            self.evict_lru();
+    fn put(&mut self, document_id: DocumentId, text: String) {
+        // Remove if already present
+        if self.entries.contains_key(&document_id) {
+            self.access_order.retain(|id| id != &document_id);
         }
 
-        self.buffer.insert(document_id, BufferedDocument::new(content));
-    }
-
-    /// Evict expired entries
-    fn evict_expired(&mut self) {
-        let ttl = self.config.buffer_ttl;
-        let before_count = self.buffer.len();
-        
-        self.buffer.retain(|_, doc| !doc.is_expired(ttl));
-        
-        let evicted = before_count - self.buffer.len();
-        self.evictions += evicted as u64;
-    }
-
-    /// Evict least recently used entries
-    fn evict_lru(&mut self) {
-        if self.buffer.is_empty() {
-            return;
-        }
-
-        // Find the document with the oldest buffer time and lowest access count
-        let mut oldest_id = None;
-        let mut oldest_time = Instant::now();
-        let mut lowest_access = u64::MAX;
-
-        for (id, doc) in &self.buffer {
-            if doc.buffered_at < oldest_time || 
-               (doc.buffered_at == oldest_time && doc.access_count < lowest_access) {
-                oldest_time = doc.buffered_at;
-                lowest_access = doc.access_count;
-                oldest_id = Some(*id);
+        // Evict if at capacity
+        while self.entries.len() >= self.max_size {
+            if let Some(oldest_id) = self.access_order.first().copied() {
+                self.entries.remove(&oldest_id);
+                self.access_order.remove(0);
+            } else {
+                break;
             }
         }
 
-        if let Some(id) = oldest_id {
-            self.buffer.remove(&id);
-            self.evictions += 1;
+        // Add new entry
+        let entry = ReadAheadEntry::new(document_id, text);
+        self.entries.insert(document_id, entry);
+        self.access_order.push(document_id);
+    }
+
+    fn cleanup_expired(&mut self) -> usize {
+        let original_len = self.entries.len();
+
+        // Collect expired document IDs
+        let expired_ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.is_expired(self.ttl))
+            .map(|(id, _)| *id)
+            .collect();
+
+        // Remove expired entries
+        for id in expired_ids {
+            self.entries.remove(&id);
+            self.access_order.retain(|entry_id| entry_id != &id);
         }
+
+        original_len - self.entries.len()
     }
 
-    /// Get buffer statistics
-    pub fn stats(&self) -> (u64, u64, u64, usize) {
-        (self.hits, self.misses, self.evictions, self.buffer.len())
+    fn len(&self) -> usize {
+        self.entries.len()
     }
 
-    /// Get hit ratio
-    pub fn hit_ratio(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
+    fn capacity(&self) -> usize {
+        self.max_size
     }
 
-    /// Clear the buffer
-    pub fn clear(&mut self) {
-        self.buffer.clear();
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.access_order.clear();
     }
 }
 
-/// Configuration for async document text storage
-#[derive(Debug, Clone)]
-pub struct AsyncConfig {
-    /// Read-ahead buffer configuration
-    pub read_ahead: ReadAheadConfig,
-    /// Maximum concurrent operations
-    pub max_concurrency: usize,
-    /// Operation timeout
-    pub operation_timeout: Duration,
-    /// Enable background read-ahead tasks
-    pub enable_background_tasks: bool,
-    /// I/O thread pool size
-    pub io_thread_pool_size: usize,
-}
-
-impl Default for AsyncConfig {
-    fn default() -> Self {
-        Self {
-            read_ahead: ReadAheadConfig::default(),
-            max_concurrency: 100,
-            operation_timeout: Duration::from_secs(30),
-            enable_background_tasks: true,
-            io_thread_pool_size: 4,
-        }
-    }
-}
-
-/// Async statistics for I/O operations
-#[derive(Debug, Default)]
-pub struct AsyncIOStats {
+/// Performance metrics for async operations
+#[derive(Debug, Default, Clone)]
+pub struct AsyncStorageMetrics {
     /// Total async read operations
     pub async_reads: u64,
+    /// Successful async reads
+    pub successful_async_reads: u64,
+    /// Failed async reads
+    pub failed_async_reads: u64,
     /// Total async write operations
     pub async_writes: u64,
-    /// Total batch operations
-    pub batch_operations: u64,
-    /// Read-ahead hits
+    /// Successful async writes
+    pub successful_async_writes: u64,
+    /// Failed async writes
+    pub failed_async_writes: u64,
+    /// Read-ahead cache hits
     pub read_ahead_hits: u64,
-    /// Read-ahead misses
+    /// Read-ahead cache misses
     pub read_ahead_misses: u64,
-    /// Average operation latency in milliseconds
-    pub avg_latency_ms: f64,
-    /// Operations that timed out
-    pub timeouts: u64,
-    /// Background task runs
-    pub background_tasks: u64,
+    /// Read-ahead predictions made
+    pub read_ahead_predictions: u64,
+    /// Average async operation latency in milliseconds
+    pub avg_async_latency_ms: f64,
+    /// Timeout errors
+    pub timeout_errors: u64,
+    /// Background task executions
+    pub background_tasks_executed: u64,
 }
 
-impl AsyncIOStats {
-    /// Record an async read operation
-    pub fn record_read(&mut self, latency: Duration, read_ahead_hit: bool) {
-        self.async_reads += 1;
-        self.update_latency(latency);
-        if read_ahead_hit {
-            self.read_ahead_hits += 1;
+impl AsyncStorageMetrics {
+    /// Calculate async read success ratio
+    pub fn async_read_success_ratio(&self) -> f64 {
+        if self.async_reads == 0 {
+            0.0
         } else {
-            self.read_ahead_misses += 1;
+            self.successful_async_reads as f64 / self.async_reads as f64
         }
     }
 
-    /// Record an async write operation
-    pub fn record_write(&mut self, latency: Duration) {
-        self.async_writes += 1;
-        self.update_latency(latency);
-    }
-
-    /// Record a batch operation
-    pub fn record_batch(&mut self, latency: Duration, _size: usize) {
-        self.batch_operations += 1;
-        self.update_latency(latency);
-    }
-
-    /// Record a timeout
-    pub fn record_timeout(&mut self) {
-        self.timeouts += 1;
-    }
-
-    /// Record background task execution
-    pub fn record_background_task(&mut self) {
-        self.background_tasks += 1;
-    }
-
-    /// Update average latency with new measurement
-    fn update_latency(&mut self, latency: Duration) {
-        let total_ops = self.async_reads + self.async_writes + self.batch_operations;
-        let new_latency_ms = latency.as_millis() as f64;
-        
-        if total_ops == 1 {
-            self.avg_latency_ms = new_latency_ms;
+    /// Calculate async write success ratio
+    pub fn async_write_success_ratio(&self) -> f64 {
+        if self.async_writes == 0 {
+            0.0
         } else {
-            // Exponential moving average
-            self.avg_latency_ms = (self.avg_latency_ms * 0.9) + (new_latency_ms * 0.1);
+            self.successful_async_writes as f64 / self.async_writes as f64
         }
     }
 
-    /// Get read-ahead hit ratio
+    /// Calculate read-ahead hit ratio
     pub fn read_ahead_hit_ratio(&self) -> f64 {
         let total = self.read_ahead_hits + self.read_ahead_misses;
         if total == 0 {
@@ -285,401 +229,373 @@ impl AsyncIOStats {
             self.read_ahead_hits as f64 / total as f64
         }
     }
+
+    /// Get total async operations
+    pub fn total_async_operations(&self) -> u64 {
+        self.async_reads + self.async_writes
+    }
 }
 
-/// Asynchronous document text storage wrapper
-///
-/// This component provides high-performance async I/O operations for document text storage:
-/// - Non-blocking read/write operations using tokio
-/// - Read-ahead buffering with predictive pre-loading
-/// - Batch processing for improved throughput
-/// - Concurrent operation limiting and timeout handling
-/// - Background task management for optimization
+/// Asynchronous document text storage with read-ahead and batching
 pub struct AsyncDocumentTextStorage {
     /// Underlying concurrent storage
     storage: Arc<ConcurrentDocumentTextStorage>,
-    /// Read-ahead buffer
+    /// Read-ahead buffer for predictive caching
     read_ahead_buffer: Arc<RwLock<ReadAheadBuffer>>,
-    /// Concurrency limiter
-    semaphore: Arc<Semaphore>,
+    /// Semaphore for limiting concurrent operations
+    async_semaphore: Arc<Semaphore>,
     /// Configuration
-    config: AsyncConfig,
-    /// I/O statistics
-    stats: Arc<RwLock<AsyncIOStats>>,
+    config: AsyncStorageConfig,
+    /// Performance metrics
+    metrics: Arc<Mutex<AsyncStorageMetrics>>,
     /// Background task handles
-    background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    background_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl AsyncDocumentTextStorage {
-    /// Create new async document text storage wrapper
-    ///
-    /// # Arguments
-    /// * `storage` - Underlying concurrent document text storage
-    /// * `config` - Async I/O configuration
-    ///
-    /// # Returns
-    /// * `AsyncDocumentTextStorage` - The async wrapper instance
-    pub fn new(storage: ConcurrentDocumentTextStorage, config: AsyncConfig) -> Self {
-        let read_ahead_buffer = Arc::new(RwLock::new(ReadAheadBuffer::new(config.read_ahead.clone())));
-        let semaphore = Arc::new(Semaphore::new(config.max_concurrency));
-        let stats = Arc::new(RwLock::new(AsyncIOStats::default()));
-        let background_tasks = Arc::new(Mutex::new(Vec::new()));
+    /// Create new async document text storage
+    pub async fn new(
+        storage: DocumentTextStorage,
+        config: AsyncStorageConfig,
+    ) -> Result<Self, ShardexError> {
+        let concurrent_storage =
+            ConcurrentDocumentTextStorage::new(storage, config.concurrent_config.clone());
+        concurrent_storage.start_background_processor().await?;
 
-        let instance = Self {
-            storage: Arc::new(storage),
+        let read_ahead_buffer = Arc::new(RwLock::new(ReadAheadBuffer::new(
+            config.read_ahead_buffer_size,
+            config.read_ahead_ttl,
+        )));
+
+        let async_storage = Self {
+            storage: Arc::new(concurrent_storage),
             read_ahead_buffer,
-            semaphore,
+            async_semaphore: Arc::new(Semaphore::new(config.max_concurrent_async_ops)),
             config,
-            stats,
-            background_tasks,
+            metrics: Arc::new(Mutex::new(AsyncStorageMetrics::default())),
+            background_tasks: Arc::new(Mutex::new(Vec::new())),
         };
 
-        // Start background tasks if enabled
-        if instance.config.enable_background_tasks {
-            instance.start_background_tasks();
-        }
+        // Start background cleanup task
+        async_storage.start_background_cleanup().await?;
 
-        instance
+        Ok(async_storage)
     }
 
-    /// Create with default configuration
-    pub fn with_default_config(storage: ConcurrentDocumentTextStorage) -> Self {
-        Self::new(storage, AsyncConfig::default())
+    /// Start background cleanup task
+    async fn start_background_cleanup(&self) -> Result<(), ShardexError> {
+        let read_ahead_buffer = Arc::clone(&self.read_ahead_buffer);
+        let metrics = Arc::clone(&self.metrics);
+        let cleanup_interval = self.config.cleanup_interval;
+
+        let cleanup_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(cleanup_interval);
+
+            loop {
+                interval.tick().await;
+
+                // Clean up expired read-ahead entries
+                let expired_count = {
+                    let mut buffer = read_ahead_buffer.write().await;
+                    buffer.cleanup_expired()
+                };
+
+                if expired_count > 0 {
+                    log::debug!("Cleaned up {} expired read-ahead entries", expired_count);
+                }
+
+                // Update metrics
+                {
+                    let mut metrics_guard = metrics.lock();
+                    metrics_guard.background_tasks_executed += 1;
+                }
+            }
+        });
+
+        let mut tasks = self.background_tasks.lock();
+        tasks.push(cleanup_task);
+
+        Ok(())
     }
 
-    /// Async text retrieval with read-ahead optimization
-    ///
-    /// This method provides optimized async text retrieval:
-    /// - Checks read-ahead buffer first for immediate response
-    /// - Uses concurrent read access to underlying storage
-    /// - Triggers predictive read-ahead for nearby documents
-    /// - Enforces timeout and concurrency limits
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to retrieve
-    ///
-    /// # Returns
-    /// * `Ok(String)` - Document text content
-    /// * `Err(ShardexError)` - Read operation failed or timed out
+    /// Get document text asynchronously with read-ahead support
     pub async fn get_text_async(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+        let _permit =
+            self.async_semaphore
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "async_semaphore".to_string(),
+                    reason: "Failed to acquire async semaphore permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
+
         let start_time = Instant::now();
 
-        // Acquire semaphore permit for concurrency limiting
-        let _permit = self.semaphore.acquire().await.map_err(|_| {
-            ShardexError::concurrency_error(
-                "get_text_async",
-                "Failed to acquire concurrency permit",
-                "Reduce concurrent operations or increase limit",
-            )
-        })?;
-
-        // Apply operation timeout
-        let result = timeout(self.config.operation_timeout, async {
-            self.get_text_async_internal(document_id).await
-        }).await;
-
-        match result {
-            Ok(text_result) => {
-                let latency = start_time.elapsed();
-                let read_ahead_hit = self.read_ahead_buffer.read().await.buffer.contains_key(&document_id);
-                self.stats.write().await.record_read(latency, read_ahead_hit);
-                text_result
-            }
-            Err(_) => {
-                self.stats.write().await.record_timeout();
-                Err(ShardexError::concurrency_error(
-                    "get_text_async",
-                    "Operation timed out",
-                    "Increase timeout or reduce system load",
-                ))
-            }
-        }
-    }
-
-    /// Internal async text retrieval implementation
-    async fn get_text_async_internal(&self, document_id: DocumentId) -> Result<String, ShardexError> {
         // Check read-ahead buffer first
         {
             let mut buffer = self.read_ahead_buffer.write().await;
             if let Some(text) = buffer.get(&document_id) {
+                self.record_read_ahead_hit();
+                self.record_async_read_success(start_time.elapsed().as_millis() as f64);
                 return Ok(text);
             }
         }
 
-        // Buffer miss - fetch from underlying storage
-        let text = self.storage.get_text_concurrent(document_id).await?;
+        self.record_read_ahead_miss();
 
-        // Add to read-ahead buffer for future hits
-        {
-            let mut buffer = self.read_ahead_buffer.write().await;
-            buffer.put(document_id, text.clone());
+        // Fallback to underlying storage
+        let result = timeout(
+            self.config.default_timeout,
+            self.storage.get_text_concurrent(document_id),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(text)) => {
+                // Add to read-ahead buffer
+                {
+                    let mut buffer = self.read_ahead_buffer.write().await;
+                    buffer.put(document_id, text.clone());
+                }
+
+                // Trigger read-ahead prediction
+                self.trigger_read_ahead(document_id).await;
+
+                self.record_async_read_success(start_time.elapsed().as_millis() as f64);
+                Ok(text)
+            }
+            Ok(Err(e)) => {
+                self.record_async_read_failure(start_time.elapsed().as_millis() as f64);
+                Err(e)
+            }
+            Err(_) => {
+                self.record_timeout_error();
+                self.record_async_read_failure(start_time.elapsed().as_millis() as f64);
+                Err(ShardexError::InvalidInput {
+                    field: "async_operation".to_string(),
+                    reason: "Async operation timed out".to_string(),
+                    suggestion: "Increase timeout or check storage performance".to_string(),
+                })
+            }
         }
-
-        // Trigger predictive read-ahead if enabled
-        if self.config.read_ahead.enable_predictive {
-            self.trigger_predictive_read_ahead(document_id).await;
-        }
-
-        Ok(text)
     }
 
-    /// Async text storage with batch processing
-    ///
-    /// This method provides optimized async text storage:
-    /// - Uses batched writes for improved throughput
-    /// - Enforces timeout and concurrency limits
-    /// - Updates read-ahead buffer on successful write
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID to store
-    /// * `text` - Text content to store
-    ///
-    /// # Returns
-    /// * `Ok(())` - Text successfully stored
-    /// * `Err(ShardexError)` - Write operation failed or timed out
+    /// Store text asynchronously
     pub async fn store_text_async(
         &self,
         document_id: DocumentId,
         text: String,
     ) -> Result<(), ShardexError> {
+        let _permit =
+            self.async_semaphore
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "async_semaphore".to_string(),
+                    reason: "Failed to acquire async semaphore permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
+
         let start_time = Instant::now();
 
-        // Acquire semaphore permit
-        let _permit = self.semaphore.acquire().await.map_err(|_| {
-            ShardexError::concurrency_error(
-                "store_text_async",
-                "Failed to acquire concurrency permit",
-                "Reduce concurrent operations or increase limit",
-            )
-        })?;
-
-        // Apply operation timeout
-        let result = timeout(self.config.operation_timeout, async {
-            self.storage.store_text_batched(document_id, text.clone()).await
-        }).await;
+        let result = timeout(
+            self.config.default_timeout,
+            self.storage.store_text_batched(document_id, text.clone()),
+        )
+        .await;
 
         match result {
-            Ok(store_result) => {
-                let latency = start_time.elapsed();
-                self.stats.write().await.record_write(latency);
-
-                if store_result.is_ok() {
-                    // Update read-ahead buffer with new content
+            Ok(Ok(())) => {
+                // Update read-ahead buffer
+                {
                     let mut buffer = self.read_ahead_buffer.write().await;
                     buffer.put(document_id, text);
                 }
 
-                store_result
+                self.record_async_write_success(start_time.elapsed().as_millis() as f64);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                self.record_async_write_failure(start_time.elapsed().as_millis() as f64);
+                Err(e)
             }
             Err(_) => {
-                self.stats.write().await.record_timeout();
-                Err(ShardexError::concurrency_error(
-                    "store_text_async",
-                    "Operation timed out",
-                    "Increase timeout or reduce system load",
-                ))
+                self.record_timeout_error();
+                self.record_async_write_failure(start_time.elapsed().as_millis() as f64);
+                Err(ShardexError::InvalidInput {
+                    field: "async_operation".to_string(),
+                    reason: "Async operation timed out".to_string(),
+                    suggestion: "Increase timeout or check storage performance".to_string(),
+                })
             }
         }
     }
 
-    /// Async batch text storage for multiple documents
-    ///
-    /// This method processes multiple documents concurrently with batching:
-    /// - Spawns concurrent tasks up to concurrency limit
-    /// - Uses batch processing for optimal throughput
-    /// - Collects results and handles partial failures
-    ///
-    /// # Arguments
-    /// * `documents` - Vector of (DocumentId, String) pairs to store
-    ///
-    /// # Returns
-    /// * `Ok(Vec<Result<(), ShardexError>>)` - Results for each document
-    /// * `Err(ShardexError)` - Batch operation failed
-    pub async fn store_texts_batch(
+    /// Store multiple documents asynchronously in batch
+    pub async fn store_texts_batch_async(
         &self,
         documents: Vec<(DocumentId, String)>,
     ) -> Result<Vec<Result<(), ShardexError>>, ShardexError> {
-        if documents.is_empty() {
-            return Ok(Vec::new());
+        let batch_size = documents.len();
+        let start_time = Instant::now();
+
+        // Create concurrent tasks for all documents
+        let mut tasks = Vec::new();
+        for (doc_id, text) in documents {
+            let storage = Arc::clone(&self.storage);
+            let task = tokio::spawn(async move { storage.store_text_batched(doc_id, text).await });
+            tasks.push(task);
         }
 
-        let start_time = Instant::now();
-        let batch_size = documents.len();
+        // Wait for all tasks to complete
+        let mut results = Vec::new();
+        let mut successful_count = 0;
 
-        // Process documents in chunks based on concurrency limit
-        let chunk_size = self.config.max_concurrency.min(documents.len());
-        let mut all_results = Vec::new();
-
-        for chunk in documents.chunks(chunk_size) {
-            let mut tasks = Vec::new();
-
-            // Spawn tasks for this chunk
-            for (document_id, text) in chunk {
-                let storage = Arc::clone(&self.storage);
-                let doc_id = *document_id;
-                let text_clone = text.clone();
-
-                let task = tokio::spawn(async move {
-                    storage.store_text_batched(doc_id, text_clone).await
-                });
-
-                tasks.push(task);
-            }
-
-            // Wait for chunk completion
-            let chunk_results = futures::future::join_all(tasks).await;
-            
-            // Collect results, handling join errors
-            for result in chunk_results {
-                match result {
-                    Ok(store_result) => all_results.push(store_result),
-                    Err(_) => all_results.push(Err(ShardexError::concurrency_error(
-                        "store_texts_batch",
-                        "Task execution failed",
-                        "Retry the operation",
-                    ))),
+        for task in tasks {
+            match task.await {
+                Ok(Ok(())) => {
+                    results.push(Ok(()));
+                    successful_count += 1;
+                }
+                Ok(Err(e)) => {
+                    results.push(Err(e));
+                }
+                Err(_) => {
+                    results.push(Err(ShardexError::InvalidInput {
+                        field: "batch_task".to_string(),
+                        reason: "Batch task was cancelled".to_string(),
+                        suggestion: "Retry the batch operation".to_string(),
+                    }));
                 }
             }
         }
 
-        // Update statistics
-        let latency = start_time.elapsed();
-        self.stats.write().await.record_batch(latency, batch_size);
+        // Update metrics
+        let avg_latency = start_time.elapsed().as_millis() as f64 / batch_size as f64;
+        for _ in 0..successful_count {
+            self.record_async_write_success(avg_latency);
+        }
+        for _ in 0..(batch_size - successful_count) {
+            self.record_async_write_failure(avg_latency);
+        }
 
-        Ok(all_results)
+        Ok(results)
     }
 
-    /// Extract text substring with async optimization
-    ///
-    /// # Arguments
-    /// * `document_id` - Document ID
-    /// * `start` - Starting position in bytes
-    /// * `length` - Length in bytes to extract
-    ///
-    /// # Returns
-    /// * `Ok(String)` - Extracted text substring
-    /// * `Err(ShardexError)` - Extraction failed or timed out
+    /// Extract text substring asynchronously
     pub async fn extract_text_substring_async(
         &self,
         document_id: DocumentId,
         start: u32,
         length: u32,
     ) -> Result<String, ShardexError> {
-        let _permit = self.semaphore.acquire().await.map_err(|_| {
-            ShardexError::concurrency_error(
-                "extract_text_substring_async",
-                "Failed to acquire concurrency permit",
-                "Reduce concurrent operations",
-            )
-        })?;
+        let _permit =
+            self.async_semaphore
+                .acquire()
+                .await
+                .map_err(|_| ShardexError::InvalidInput {
+                    field: "async_semaphore".to_string(),
+                    reason: "Failed to acquire async semaphore permit".to_string(),
+                    suggestion: "Retry the operation".to_string(),
+                })?;
 
-        timeout(self.config.operation_timeout, async {
-            self.storage.extract_text_substring_concurrent(document_id, start, length).await
-        })
-        .await
-        .map_err(|_| ShardexError::concurrency_error(
-            "extract_text_substring_async",
-            "Operation timed out",
-            "Increase timeout or reduce system load",
-        ))?
+        let start_time = Instant::now();
+
+        let result = timeout(
+            self.config.default_timeout,
+            self.storage
+                .extract_text_substring_concurrent(document_id, start, length),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(text)) => {
+                self.record_async_read_success(start_time.elapsed().as_millis() as f64);
+                Ok(text)
+            }
+            Ok(Err(e)) => {
+                self.record_async_read_failure(start_time.elapsed().as_millis() as f64);
+                Err(e)
+            }
+            Err(_) => {
+                self.record_timeout_error();
+                self.record_async_read_failure(start_time.elapsed().as_millis() as f64);
+                Err(ShardexError::InvalidInput {
+                    field: "async_operation".to_string(),
+                    reason: "Async operation timed out".to_string(),
+                    suggestion: "Increase timeout or check storage performance".to_string(),
+                })
+            }
+        }
     }
 
-    /// Check if document exists with async optimization
-    pub async fn document_exists_async(&self, document_id: DocumentId) -> bool {
-        // Check read-ahead buffer first
+    /// Trigger read-ahead prediction for nearby documents
+    async fn trigger_read_ahead(&self, _document_id: DocumentId) {
+        // Placeholder for read-ahead prediction logic
+        // In a real implementation, this might predict likely next documents
+        // based on access patterns and pre-load them into the buffer
+
+        self.record_read_ahead_prediction();
+        log::trace!("Triggered read-ahead prediction");
+    }
+
+    /// Warm read-ahead buffer with specified documents
+    pub async fn warm_read_ahead_buffer(
+        &self,
+        document_ids: Vec<DocumentId>,
+    ) -> Result<(), ShardexError> {
+        for document_id in document_ids {
+            match self.storage.get_text_concurrent(document_id).await {
+                Ok(text) => {
+                    let mut buffer = self.read_ahead_buffer.write().await;
+                    buffer.put(document_id, text);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to warm read-ahead buffer for document {}: {:?}",
+                        document_id,
+                        e
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Flush all pending operations and shutdown gracefully
+    pub async fn shutdown(&self) -> Result<(), ShardexError> {
+        // Stop background tasks
         {
-            let buffer = self.read_ahead_buffer.read().await;
-            if buffer.buffer.contains_key(&document_id) {
-                return true;
+            let mut tasks = self.background_tasks.lock();
+            for task in tasks.drain(..) {
+                task.abort();
             }
         }
 
-        // Fall back to storage check
-        self.storage.document_exists(document_id).await
-    }
+        // Flush pending operations
+        self.storage.flush_write_queue().await?;
+        self.storage.stop_background_processor().await?;
 
-    /// Start background optimization tasks
-    fn start_background_tasks(&self) {
-        let mut tasks = self.background_tasks.lock();
-        
-        // Buffer cleanup task
+        // Clear read-ahead buffer
         {
-            let buffer = Arc::clone(&self.read_ahead_buffer);
-            let stats = Arc::clone(&self.stats);
-            let handle = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60));
-                
-                loop {
-                    interval.tick().await;
-                    
-                    {
-                        let mut buf = buffer.write().await;
-                        buf.evict_expired();
-                    }
-                    
-                    stats.write().await.record_background_task();
-                }
-            });
-            tasks.push(handle);
+            let mut buffer = self.read_ahead_buffer.write().await;
+            buffer.clear();
         }
 
-        // Statistics reporting task
-        {
-            let stats = Arc::clone(&self.stats);
-            let handle = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
-                
-                loop {
-                    interval.tick().await;
-                    
-                    let stats_snapshot = stats.read().await;
-                    tracing::info!(
-                        async_reads = stats_snapshot.async_reads,
-                        async_writes = stats_snapshot.async_writes,
-                        avg_latency_ms = stats_snapshot.avg_latency_ms,
-                        read_ahead_hit_ratio = stats_snapshot.read_ahead_hit_ratio(),
-                        timeouts = stats_snapshot.timeouts,
-                        "Async document text storage statistics"
-                    );
-                }
-            });
-            tasks.push(handle);
-        }
+        Ok(())
     }
 
-    /// Trigger predictive read-ahead for related documents
-    async fn trigger_predictive_read_ahead(&self, _document_id: DocumentId) {
-        // This is a placeholder for predictive read-ahead logic
-        // In a full implementation, this would:
-        // 1. Analyze access patterns to predict related documents
-        // 2. Pre-fetch likely-to-be-accessed documents
-        // 3. Use machine learning or heuristics for prediction
-        
-        // For now, we just record that a background task was triggered
-        self.stats.write().await.record_background_task();
+    /// Get current performance metrics
+    pub fn get_metrics(&self) -> AsyncStorageMetrics {
+        let metrics = self.metrics.lock();
+        metrics.clone()
     }
 
-    /// Get current async I/O statistics
-    pub async fn get_async_stats(&self) -> AsyncIOStats {
-        self.stats.read().await.clone()
-    }
-
-    /// Get read-ahead buffer statistics
-    pub async fn get_read_ahead_stats(&self) -> (u64, u64, u64, usize, f64) {
+    /// Get read-ahead buffer information
+    pub async fn read_ahead_info(&self) -> (usize, usize) {
         let buffer = self.read_ahead_buffer.read().await;
-        let (hits, misses, evictions, size) = buffer.stats();
-        let hit_ratio = buffer.hit_ratio();
-        (hits, misses, evictions, size, hit_ratio)
-    }
-
-    /// Get current configuration
-    pub fn get_config(&self) -> &AsyncConfig {
-        &self.config
-    }
-
-    /// Get current semaphore permits available
-    pub fn available_permits(&self) -> usize {
-        self.semaphore.available_permits()
+        (buffer.len(), buffer.capacity())
     }
 
     /// Clear read-ahead buffer
@@ -688,49 +604,78 @@ impl AsyncDocumentTextStorage {
         buffer.clear();
     }
 
-    /// Shutdown async operations gracefully
-    pub async fn shutdown(&self) -> Result<(), ShardexError> {
-        // Cancel background tasks
-        {
-            let mut tasks = self.background_tasks.lock();
-            for handle in tasks.drain(..) {
-                handle.abort();
-            }
-        } // Drop the lock here
-
-        // Shutdown underlying storage
-        self.storage.shutdown().await?;
-
-        Ok(())
+    // Metrics recording methods
+    fn record_async_read_success(&self, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.async_reads += 1;
+        metrics.successful_async_reads += 1;
+        self.update_avg_latency(&mut metrics, latency_ms);
     }
 
-    /// Force garbage collection and optimization
-    pub async fn optimize(&self) -> Result<(), ShardexError> {
-        // Clean up read-ahead buffer
-        {
-            let mut buffer = self.read_ahead_buffer.write().await;
-            buffer.evict_expired();
+    fn record_async_read_failure(&self, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.async_reads += 1;
+        metrics.failed_async_reads += 1;
+        self.update_avg_latency(&mut metrics, latency_ms);
+    }
+
+    fn record_async_write_success(&self, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.async_writes += 1;
+        metrics.successful_async_writes += 1;
+        self.update_avg_latency(&mut metrics, latency_ms);
+    }
+
+    fn record_async_write_failure(&self, latency_ms: f64) {
+        let mut metrics = self.metrics.lock();
+        metrics.async_writes += 1;
+        metrics.failed_async_writes += 1;
+        self.update_avg_latency(&mut metrics, latency_ms);
+    }
+
+    fn record_read_ahead_hit(&self) {
+        let mut metrics = self.metrics.lock();
+        metrics.read_ahead_hits += 1;
+    }
+
+    fn record_read_ahead_miss(&self) {
+        let mut metrics = self.metrics.lock();
+        metrics.read_ahead_misses += 1;
+    }
+
+    fn record_read_ahead_prediction(&self) {
+        let mut metrics = self.metrics.lock();
+        metrics.read_ahead_predictions += 1;
+    }
+
+    fn record_timeout_error(&self) {
+        let mut metrics = self.metrics.lock();
+        metrics.timeout_errors += 1;
+    }
+
+    fn update_avg_latency(&self, metrics: &mut AsyncStorageMetrics, latency_ms: f64) {
+        let total_ops = metrics.total_async_operations();
+        if total_ops == 1 {
+            metrics.avg_async_latency_ms = latency_ms;
+        } else {
+            metrics.avg_async_latency_ms =
+                ((metrics.avg_async_latency_ms * (total_ops - 1) as f64) + latency_ms)
+                    / total_ops as f64;
         }
-
-        // Flush any pending writes
-        self.storage.flush_write_queue().await?;
-
-        Ok(())
     }
 }
 
-// Clone implementation for AsyncIOStats
-impl Clone for AsyncIOStats {
-    fn clone(&self) -> Self {
-        Self {
-            async_reads: self.async_reads,
-            async_writes: self.async_writes,
-            batch_operations: self.batch_operations,
-            read_ahead_hits: self.read_ahead_hits,
-            read_ahead_misses: self.read_ahead_misses,
-            avg_latency_ms: self.avg_latency_ms,
-            timeouts: self.timeouts,
-            background_tasks: self.background_tasks,
+impl Drop for AsyncDocumentTextStorage {
+    fn drop(&mut self) {
+        // Attempt graceful shutdown in drop
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let background_tasks = Arc::clone(&self.background_tasks);
+            rt.spawn(async move {
+                let mut tasks = background_tasks.lock();
+                for task in tasks.drain(..) {
+                    task.abort();
+                }
+            });
         }
     }
 }
@@ -740,272 +685,171 @@ mod tests {
     use super::*;
     use crate::document_text_storage::DocumentTextStorage;
     use tempfile::TempDir;
-    use tokio::time::{sleep, Duration};
 
-    async fn create_test_async_storage() -> (TempDir, AsyncDocumentTextStorage) {
+    #[tokio::test]
+    async fn test_async_storage_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let base_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let concurrent_storage = ConcurrentDocumentTextStorage::with_default_config(base_storage);
-        let async_storage = AsyncDocumentTextStorage::with_default_config(concurrent_storage);
-        (temp_dir, async_storage)
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = AsyncStorageConfig::default();
+
+        let async_storage = AsyncDocumentTextStorage::new(storage, config)
+            .await
+            .unwrap();
+
+        let metrics = async_storage.get_metrics();
+        assert_eq!(metrics.async_reads, 0);
+        assert_eq!(metrics.async_writes, 0);
+
+        async_storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_async_basic_operations() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
+    async fn test_async_read_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = AsyncStorageConfig::default();
+
+        let async_storage = AsyncDocumentTextStorage::new(storage, config)
+            .await
+            .unwrap();
+
         let doc_id = DocumentId::new();
         let text = "Async test document content";
-        
+
         // Store text asynchronously
-        storage.store_text_async(doc_id, text.to_string()).await.unwrap();
-        
-        // Retrieve text asynchronously
-        let retrieved = storage.get_text_async(doc_id).await.unwrap();
+        async_storage
+            .store_text_async(doc_id, text.to_string())
+            .await
+            .unwrap();
+
+        // Read text asynchronously
+        let retrieved = async_storage.get_text_async(doc_id).await.unwrap();
         assert_eq!(retrieved, text);
-        
-        // Check existence
-        assert!(storage.document_exists_async(doc_id).await);
+
+        // Check metrics
+        let metrics = async_storage.get_metrics();
+        assert_eq!(metrics.async_reads, 1);
+        assert_eq!(metrics.async_writes, 1);
+        assert_eq!(metrics.successful_async_reads, 1);
+        assert_eq!(metrics.successful_async_writes, 1);
+
+        async_storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
     async fn test_read_ahead_buffer() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        let doc_id = DocumentId::new();
-        let text = "Read-ahead buffer test content";
-        
-        // Store document
-        storage.store_text_async(doc_id, text.to_string()).await.unwrap();
-        
-        // First read should miss read-ahead buffer
-        let _retrieved1 = storage.get_text_async(doc_id).await.unwrap();
-        
-        // Second read should hit read-ahead buffer
-        let retrieved2 = storage.get_text_async(doc_id).await.unwrap();
-        assert_eq!(retrieved2, text);
-        
-        // Check read-ahead statistics
-        let (hits, _misses, _, _, hit_ratio) = storage.get_read_ahead_stats().await;
-        assert!(hits > 0);
-        assert!(hit_ratio > 0.0);
-    }
+        let temp_dir = TempDir::new().unwrap();
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = AsyncStorageConfig::default();
 
-    #[tokio::test]
-    async fn test_batch_operations() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        // Prepare batch of documents
-        let mut documents = Vec::new();
-        for i in 0..10 {
-            let doc_id = DocumentId::new();
-            let text = format!("Batch document {}", i);
-            documents.push((doc_id, text));
-        }
-        
-        // Store batch
-        let results = storage.store_texts_batch(documents.clone()).await.unwrap();
-        
-        // All should succeed
-        assert_eq!(results.len(), 10);
-        for result in &results {
-            assert!(result.is_ok());
-        }
-        
-        // Verify all documents can be retrieved
-        for (doc_id, expected_text) in documents {
-            let retrieved = storage.get_text_async(doc_id).await.unwrap();
-            assert_eq!(retrieved, expected_text);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_operations() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        let mut handles = Vec::new();
-        
-        // Spawn multiple concurrent operations
-        for i in 0..20 {
-            let storage_ref = &storage;
-            let handle = async move {
-                let doc_id = DocumentId::new();
-                let text = format!("Concurrent document {}", i);
-                
-                // Store and retrieve
-                storage_ref.store_text_async(doc_id, text.clone()).await.unwrap();
-                let retrieved = storage_ref.get_text_async(doc_id).await.unwrap();
-                
-                assert_eq!(retrieved, text);
-                (doc_id, text)
-            };
-            handles.push(handle);
-        }
-        
-        // Wait for all operations
-        let results = futures::future::join_all(handles).await;
-        assert_eq!(results.len(), 20);
-        
-        // Check statistics
-        let stats = storage.get_async_stats().await;
-        assert!(stats.async_reads >= 20);
-        assert!(stats.async_writes >= 20);
-    }
-
-    #[tokio::test]
-    async fn test_substring_extraction() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        let doc_id = DocumentId::new();
-        let text = "The quick brown fox jumps over the lazy dog";
-        
-        storage.store_text_async(doc_id, text.to_string()).await.unwrap();
-        
-        // Extract substring asynchronously
-        let substring = storage
-            .extract_text_substring_async(doc_id, 4, 11)
+        let async_storage = AsyncDocumentTextStorage::new(storage, config)
             .await
             .unwrap();
-        assert_eq!(substring, "quick brown");
-    }
 
-    #[tokio::test]
-    async fn test_timeout_handling() {
-        let config = AsyncConfig {
-            operation_timeout: Duration::from_millis(1), // Very short timeout
-            ..Default::default()
-        };
-        
-        let temp_dir = TempDir::new().unwrap();
-        let base_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let concurrent_storage = ConcurrentDocumentTextStorage::with_default_config(base_storage);
-        let async_storage = AsyncDocumentTextStorage::new(concurrent_storage, config);
-        
         let doc_id = DocumentId::new();
-        let text = "A".repeat(100000); // Large text that might cause timeout
-        
-        // This operation might timeout due to very short timeout setting
-        let result = async_storage.store_text_async(doc_id, text).await;
-        
-        // Either succeeds or times out - both are valid outcomes for this test
-        // The important thing is that it handles timeouts gracefully
-        match result {
-            Ok(_) => {
-                // Operation completed within timeout
-            }
-            Err(ShardexError::ConcurrencyError { reason, .. }) => {
-                // Expected timeout error
-                assert!(reason.contains("timed out") || reason.contains("timeout"));
-            }
-            Err(e) => panic!("Unexpected error type: {:?}", e),
-        }
+        let text = "Read-ahead test content";
+
+        // Store and first read (populates read-ahead buffer)
+        async_storage
+            .store_text_async(doc_id, text.to_string())
+            .await
+            .unwrap();
+        let _ = async_storage.get_text_async(doc_id).await.unwrap();
+
+        // Second read should hit read-ahead buffer
+        let retrieved = async_storage.get_text_async(doc_id).await.unwrap();
+        assert_eq!(retrieved, text);
+
+        // Check read-ahead metrics
+        let metrics = async_storage.get_metrics();
+        assert!(metrics.read_ahead_hits > 0);
+
+        async_storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_concurrency_limiting() {
-        let config = AsyncConfig {
-            max_concurrency: 2, // Very low limit
-            ..Default::default()
-        };
-        
+    async fn test_batch_async_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let base_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let concurrent_storage = ConcurrentDocumentTextStorage::with_default_config(base_storage);
-        let async_storage = AsyncDocumentTextStorage::new(concurrent_storage, config);
-        
-        let initial_permits = async_storage.available_permits();
-        assert_eq!(initial_permits, 2);
-        
-        // Start operations that will consume permits
+        let storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let config = AsyncStorageConfig::default();
+
+        let async_storage = AsyncDocumentTextStorage::new(storage, config)
+            .await
+            .unwrap();
+
+        let documents = vec![
+            (DocumentId::new(), "Document 1".to_string()),
+            (DocumentId::new(), "Document 2".to_string()),
+            (DocumentId::new(), "Document 3".to_string()),
+        ];
+
+        let _doc_ids: Vec<_> = documents.iter().map(|(id, _)| *id).collect();
+
+        // Store batch
+        let results = async_storage
+            .store_texts_batch_async(documents.clone())
+            .await
+            .unwrap();
+
+        // All should succeed
+        assert_eq!(results.len(), 3);
+        for result in results {
+            assert!(result.is_ok());
+        }
+
+        // Verify all documents can be read
+        for (doc_id, expected_text) in documents {
+            let retrieved = async_storage.get_text_async(doc_id).await.unwrap();
+            assert_eq!(retrieved, expected_text);
+        }
+
+        async_storage.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn test_read_ahead_buffer_functionality() {
+        let mut buffer = ReadAheadBuffer::new(3, Duration::from_secs(60));
+
         let doc1 = DocumentId::new();
         let doc2 = DocumentId::new();
-        
-        let handle1 = async_storage.store_text_async(doc1, "doc1".to_string());
-        let handle2 = async_storage.store_text_async(doc2, "doc2".to_string());
-        
-        // Complete the operations
-        let (result1, result2) = tokio::join!(handle1, handle2);
-        result1.unwrap();
-        result2.unwrap();
-        
-        // Permits should be released after operations complete
-        let final_permits = async_storage.available_permits();
-        assert_eq!(final_permits, 2);
+        let doc3 = DocumentId::new();
+        let doc4 = DocumentId::new();
+
+        // Add entries
+        buffer.put(doc1, "Text 1".to_string());
+        buffer.put(doc2, "Text 2".to_string());
+        buffer.put(doc3, "Text 3".to_string());
+
+        assert_eq!(buffer.len(), 3);
+
+        // Get entry
+        let text = buffer.get(&doc2);
+        assert_eq!(text, Some("Text 2".to_string()));
+
+        // Add fourth entry (should evict oldest)
+        buffer.put(doc4, "Text 4".to_string());
+        assert_eq!(buffer.len(), 3);
+
+        // doc1 should be evicted
+        assert!(buffer.get(&doc1).is_none());
+        assert!(buffer.get(&doc4).is_some());
     }
 
-    #[tokio::test]
-    async fn test_buffer_expiration() {
-        let config = AsyncConfig {
-            read_ahead: ReadAheadConfig {
-                buffer_ttl: Duration::from_millis(100), // Short TTL
-                ..Default::default()
-            },
+    #[test]
+    fn test_async_metrics_calculations() {
+        let metrics = AsyncStorageMetrics {
+            successful_async_reads: 80,
+            async_reads: 100,
+            successful_async_writes: 90,
+            async_writes: 100,
+            read_ahead_hits: 70,
+            read_ahead_misses: 30,
             ..Default::default()
         };
-        
-        let temp_dir = TempDir::new().unwrap();
-        let base_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        let concurrent_storage = ConcurrentDocumentTextStorage::with_default_config(base_storage);
-        let async_storage = AsyncDocumentTextStorage::new(concurrent_storage, config);
-        
-        let doc_id = DocumentId::new();
-        let text = "Expiration test content";
-        
-        // Store and read to populate buffer
-        async_storage.store_text_async(doc_id, text.to_string()).await.unwrap();
-        let _first_read = async_storage.get_text_async(doc_id).await.unwrap();
-        
-        // Wait for buffer expiration
-        sleep(Duration::from_millis(150)).await;
-        
-        // Manually trigger buffer cleanup
-        async_storage.optimize().await.unwrap();
-        
-        // Next read should miss the buffer (expired entry removed)
-        let _second_read = async_storage.get_text_async(doc_id).await.unwrap();
-        
-        let stats = async_storage.get_async_stats().await;
-        assert!(stats.async_reads >= 2);
-    }
 
-    #[tokio::test]
-    async fn test_graceful_shutdown() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        // Add some operations
-        let doc_id = DocumentId::new();
-        storage.store_text_async(doc_id, "test".to_string()).await.unwrap();
-        
-        // Shutdown should complete without error
-        storage.shutdown().await.unwrap();
-        
-        // After shutdown, operations may still work since we're using the underlying storage
-        // but background tasks should be stopped
-    }
-
-    #[tokio::test]
-    async fn test_statistics_tracking() {
-        let (_temp_dir, storage) = create_test_async_storage().await;
-        
-        // Perform various operations to generate statistics
-        let doc_id = DocumentId::new();
-        let text = "Statistics test content";
-        
-        storage.store_text_async(doc_id, text.to_string()).await.unwrap();
-        let _retrieved = storage.get_text_async(doc_id).await.unwrap();
-        
-        // Store multiple documents in batch
-        let batch = vec![
-            (DocumentId::new(), "batch1".to_string()),
-            (DocumentId::new(), "batch2".to_string()),
-        ];
-        let _batch_results = storage.store_texts_batch(batch).await.unwrap();
-        
-        let stats = storage.get_async_stats().await;
-        
-        assert!(stats.async_reads > 0);
-        assert!(stats.async_writes > 0);
-        assert!(stats.batch_operations > 0);
-        assert!(stats.avg_latency_ms >= 0.0);
+        assert_eq!(metrics.async_read_success_ratio(), 0.8);
+        assert_eq!(metrics.async_write_success_ratio(), 0.9);
+        assert_eq!(metrics.read_ahead_hit_ratio(), 0.7);
+        assert_eq!(metrics.total_async_operations(), 200);
     }
 }

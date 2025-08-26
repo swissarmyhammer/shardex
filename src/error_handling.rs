@@ -1,6 +1,6 @@
 //! Comprehensive error handling and recovery system for document text storage
 //!
-//! This module provides comprehensive error handling, recovery mechanisms, and resilience 
+//! This module provides comprehensive error handling, recovery mechanisms, and resilience
 //! patterns for document text storage operations. It includes:
 //! - Proactive health monitoring and error detection
 //! - Automatic recovery mechanisms for common failure scenarios
@@ -61,7 +61,7 @@ impl TextStorageHealthMonitor {
     /// Perform comprehensive health check
     pub async fn check_health(&mut self) -> Result<TextStorageHealth, ShardexError> {
         let now = SystemTime::now();
-        
+
         // Check if enough time has elapsed since last check
         if let Some(last_check) = self.last_check {
             if now.duration_since(last_check).unwrap_or(Duration::ZERO) < self.check_interval {
@@ -76,8 +76,8 @@ impl TextStorageHealthMonitor {
         if let Err(e) = self.check_file_integrity().await {
             match e {
                 ShardexError::TextCorruption(msg) => {
-                    self.health_status = TextStorageHealth::Corrupted { 
-                        corruption_details: msg.clone() 
+                    self.health_status = TextStorageHealth::Corrupted {
+                        corruption_details: msg.clone(),
                     };
                     self.last_check = Some(now);
                     return Ok(self.health_status.clone());
@@ -118,20 +118,23 @@ impl TextStorageHealthMonitor {
     async fn check_file_integrity(&self) -> Result<(), ShardexError> {
         // Note: These methods will be added to DocumentTextStorage in the next step
         // For now, we'll implement basic checks that don't require new storage methods
-        
+
         // Check that entry count is reasonable
         let entry_count = self.storage.entry_count();
         if entry_count > 1_000_000 {
             return Err(ShardexError::text_corruption(format!(
-                "Unexpectedly large entry count: {}", entry_count
+                "Unexpectedly large entry count: {}",
+                entry_count
             )));
         }
 
         // Check that total text size is reasonable
         let total_size = self.storage.total_text_size();
-        if total_size > 100 * 1024 * 1024 * 1024 {  // 100GB
+        if total_size > 100 * 1024 * 1024 * 1024 {
+            // 100GB
             return Err(ShardexError::text_corruption(format!(
-                "Unexpectedly large total text size: {} bytes", total_size
+                "Unexpectedly large total text size: {} bytes",
+                total_size
             )));
         }
 
@@ -139,7 +142,8 @@ impl TextStorageHealthMonitor {
         let utilization = self.storage.utilization_ratio();
         if !(0.0..=1.0).contains(&utilization) {
             return Err(ShardexError::text_corruption(format!(
-                "Invalid utilization ratio: {}", utilization
+                "Invalid utilization ratio: {}",
+                utilization
             )));
         }
 
@@ -155,15 +159,15 @@ impl TextStorageHealthMonitor {
 
         // Sample every 100th entry to check consistency without full scan
         let sample_interval = 100.max(entry_count / 100); // At least every 100, max 100 samples
-        
+
         for _i in (0..entry_count).step_by(sample_interval as usize) {
             // For now, just check that the storage can handle basic operations
             // In the extended DocumentTextStorage, we would have methods to validate specific entries
-            
+
             // Check that storage is still responsive
             if self.storage.is_empty() && entry_count > 0 {
                 return Err(ShardexError::text_corruption(
-                    "Storage reports empty but has entries".to_string()
+                    "Storage reports empty but has entries".to_string(),
                 ));
             }
         }
@@ -175,16 +179,17 @@ impl TextStorageHealthMonitor {
     async fn check_disk_space(&self) -> Result<(), ShardexError> {
         // This is a simplified check - in production, would use platform-specific APIs
         let total_text_size = self.storage.total_text_size();
-        
+
         // Warn if we're using a lot of space (this is a heuristic)
-        if total_text_size > 10 * 1024 * 1024 * 1024 { // > 10GB
+        if total_text_size > 10 * 1024 * 1024 * 1024 {
+            // > 10GB
             return Err(ShardexError::resource_exhausted(
                 "disk_space",
                 format!("Text storage is using {} bytes", total_text_size),
-                "Consider cleaning up old data or increasing disk capacity"
+                "Consider cleaning up old data or increasing disk capacity",
             ));
         }
-        
+
         Ok(())
     }
 
@@ -192,18 +197,19 @@ impl TextStorageHealthMonitor {
     async fn check_file_growth_patterns(&self) -> Option<String> {
         let total_size = self.storage.total_text_size();
         let entry_count = self.storage.entry_count();
-        
+
         if entry_count > 0 {
             let average_entry_size = total_size / entry_count as u64;
-            
+
             // Warn if average entry size seems unusually large
-            if average_entry_size > 1024 * 1024 { // > 1MB average
+            if average_entry_size > 1024 * 1024 {
+                // > 1MB average
                 return Some(format!(
-                    "Large average entry size detected: {} bytes per entry", 
+                    "Large average entry size detected: {} bytes per entry",
                     average_entry_size
                 ));
             }
-            
+
             // Warn if we have many entries but very small total size (possible corruption)
             if entry_count > 1000 && total_size < 1024 {
                 return Some(format!(
@@ -212,7 +218,7 @@ impl TextStorageHealthMonitor {
                 ));
             }
         }
-        
+
         None
     }
 
@@ -241,12 +247,14 @@ impl TextStorageHealthMonitor {
             // For now, we'll use the existing resource metrics update
             let total_size = self.storage.total_text_size() as usize;
             let entry_count = self.storage.entry_count() as usize;
-            
-            monitor.update_resource_metrics(
-                total_size,           // Memory usage (approximation)
-                total_size * 2,       // Disk usage (approximation for index + data)
-                entry_count / 1000,   // File descriptors (approximation)
-            ).await;
+
+            monitor
+                .update_resource_metrics(
+                    total_size,         // Memory usage (approximation)
+                    total_size * 2,     // Disk usage (approximation for index + data)
+                    entry_count / 1000, // File descriptors (approximation)
+                )
+                .await;
         }
     }
 }
@@ -340,10 +348,7 @@ impl TextStorageRecoveryManager {
 
         // Note: We can't access the storage directly here since it's in a Mutex
         // We'll pass a placeholder and set up the backup manager differently
-        let backup_manager = BackupManager::new(
-            backup_directory,
-            retention_policy,
-        )?;
+        let backup_manager = BackupManager::new(backup_directory, retention_policy)?;
 
         Ok(Self {
             storage,
@@ -359,19 +364,15 @@ impl TextStorageRecoveryManager {
         error: &ShardexError,
     ) -> Result<RecoveryResult, ShardexError> {
         match error {
-            ShardexError::TextCorruption(msg) => {
-                self.recover_from_corruption(msg).await
-            }
-            
-            ShardexError::Io(io_error) => {
-                self.recover_from_io_error(io_error).await
-            }
-            
+            ShardexError::TextCorruption(msg) => self.recover_from_corruption(msg).await,
+
+            ShardexError::Io(io_error) => self.recover_from_io_error(io_error).await,
+
             ShardexError::InvalidRange { .. } => {
                 // Range errors usually indicate data corruption
                 self.recover_from_data_inconsistency().await
             }
-            
+
             ShardexError::DocumentTooLarge { .. } => {
                 // Size limit errors are not recoverable by the system
                 Ok(RecoveryResult::RequiresManualIntervention {
@@ -383,15 +384,18 @@ impl TextStorageRecoveryManager {
                     ],
                 })
             }
-            
+
             _ => Ok(RecoveryResult::NotRecoverable),
         }
     }
 
     /// Recover from text corruption
-    async fn recover_from_corruption(&mut self, corruption_msg: &str) -> Result<RecoveryResult, ShardexError> {
+    async fn recover_from_corruption(
+        &mut self,
+        corruption_msg: &str,
+    ) -> Result<RecoveryResult, ShardexError> {
         tracing::warn!("Attempting recovery from corruption: {}", corruption_msg);
-        
+
         // Create backup if configured
         if self.recovery_config.backup_before_recovery {
             match self.backup_manager.create_emergency_backup().await {
@@ -434,7 +438,10 @@ impl TextStorageRecoveryManager {
     }
 
     /// Recover from I/O errors
-    async fn recover_from_io_error(&mut self, _io_error: &std::io::Error) -> Result<RecoveryResult, ShardexError> {
+    async fn recover_from_io_error(
+        &mut self,
+        _io_error: &std::io::Error,
+    ) -> Result<RecoveryResult, ShardexError> {
         // For I/O errors, we primarily check if it's a transient issue
         Ok(RecoveryResult::RequiresManualIntervention {
             reason: "I/O error detected".to_string(),
@@ -462,7 +469,7 @@ impl TextStorageRecoveryManager {
     /// Recover index file from data file
     async fn recover_index_file(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to rebuild index file from data file");
-        
+
         // This would require significant extension of DocumentTextStorage
         // For now, return manual intervention required
         Ok(RecoveryResult::RequiresManualIntervention {
@@ -478,7 +485,7 @@ impl TextStorageRecoveryManager {
     /// Recover data file consistency
     async fn recover_data_file(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to recover data file consistency");
-        
+
         // This would require methods to truncate and repair data files
         Ok(RecoveryResult::RequiresManualIntervention {
             reason: "Data file corruption requires repair".to_string(),
@@ -493,7 +500,7 @@ impl TextStorageRecoveryManager {
     /// Recover entry consistency issues
     async fn recover_entry_consistency(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to recover entry consistency");
-        
+
         Ok(RecoveryResult::RequiresManualIntervention {
             reason: "Entry consistency issues detected".to_string(),
             suggested_actions: vec![
@@ -559,9 +566,7 @@ impl BackupManager {
         retention_policy: BackupRetentionPolicy,
     ) -> Result<Self, ShardexError> {
         // Create backup directory if it doesn't exist
-        std::fs::create_dir_all(&backup_directory).map_err(|e| {
-            ShardexError::Io(e)
-        })?;
+        std::fs::create_dir_all(&backup_directory).map_err(ShardexError::Io)?;
 
         Ok(Self {
             backup_directory,
@@ -578,19 +583,25 @@ impl BackupManager {
                 .unwrap_or_default()
                 .as_secs()
         );
-        
+
         self.create_backup(Some(emergency_id)).await
     }
 
     /// Create full backup of text storage
-    pub async fn create_backup(&self, backup_name: Option<String>) -> Result<BackupInfo, ShardexError> {
+    pub async fn create_backup(
+        &self,
+        backup_name: Option<String>,
+    ) -> Result<BackupInfo, ShardexError> {
         let backup_id = backup_name.unwrap_or_else(|| {
-            format!("backup_{}", SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs())
+            format!(
+                "backup_{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            )
         });
-        
+
         let backup_path = self.backup_directory.join(&backup_id);
         std::fs::create_dir_all(&backup_path)?;
 
@@ -599,7 +610,7 @@ impl BackupManager {
         let backup_info = BackupInfo {
             id: backup_id,
             created_at: SystemTime::now(),
-            size: 0, // Would calculate actual backup size
+            size: 0,       // Would calculate actual backup size
             file_count: 0, // Would count actual files
             compression_used: self.retention_policy.compression_enabled,
         };
@@ -614,7 +625,11 @@ impl BackupManager {
         // Apply retention policy
         self.apply_retention_policy().await?;
 
-        tracing::info!("Created backup: {} ({} bytes)", backup_info.id, backup_info.size);
+        tracing::info!(
+            "Created backup: {} ({} bytes)",
+            backup_info.id,
+            backup_info.size
+        );
         Ok(backup_info)
     }
 
@@ -629,10 +644,12 @@ impl BackupManager {
             if entry.file_type()?.is_dir() {
                 let backup_path = entry.path();
                 let metadata_path = backup_path.join("backup_info.json");
-                
+
                 if metadata_path.exists() {
                     if let Ok(metadata_content) = std::fs::read_to_string(&metadata_path) {
-                        if let Ok(backup_info) = serde_json::from_str::<BackupInfo>(&metadata_content) {
+                        if let Ok(backup_info) =
+                            serde_json::from_str::<BackupInfo>(&metadata_content)
+                        {
                             backups.push((backup_path, backup_info));
                         }
                     }
@@ -647,8 +664,11 @@ impl BackupManager {
 
         // Remove excess backups and old backups
         for (i, (backup_path, backup_info)) in backups.iter().enumerate() {
-            let should_remove = i >= self.retention_policy.max_backups ||
-                now.duration_since(backup_info.created_at).unwrap_or_default() > self.retention_policy.max_age;
+            let should_remove = i >= self.retention_policy.max_backups
+                || now
+                    .duration_since(backup_info.created_at)
+                    .unwrap_or_default()
+                    > self.retention_policy.max_age;
 
             if should_remove {
                 tracing::info!("Removing old backup: {}", backup_info.id);
@@ -672,7 +692,9 @@ impl BackupManager {
                 let metadata_path = entry.path().join("backup_info.json");
                 if metadata_path.exists() {
                     if let Ok(metadata_content) = std::fs::read_to_string(&metadata_path) {
-                        if let Ok(backup_info) = serde_json::from_str::<BackupInfo>(&metadata_content) {
+                        if let Ok(backup_info) =
+                            serde_json::from_str::<BackupInfo>(&metadata_content)
+                        {
                             backups.push(backup_info);
                         }
                     }
@@ -687,14 +709,17 @@ impl BackupManager {
     }
 
     /// Restore from backup
-    pub async fn restore_from_backup(&self, backup_id: &str) -> Result<RestoreResult, ShardexError> {
+    pub async fn restore_from_backup(
+        &self,
+        backup_id: &str,
+    ) -> Result<RestoreResult, ShardexError> {
         let backup_path = self.backup_directory.join(backup_id);
-        
+
         if !backup_path.exists() {
             return Err(ShardexError::invalid_input(
                 "backup_id",
                 format!("Backup {} not found", backup_id),
-                "List available backups and select valid ID"
+                "List available backups and select valid ID",
             ));
         }
 
@@ -715,39 +740,30 @@ impl BackupManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::document_text_storage::DocumentTextStorage;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_health_monitor_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(
-            DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap()
-        );
-        
-        let monitor = TextStorageHealthMonitor::new(
-            storage,
-            Duration::from_secs(60),
-            None,
-        );
-        
-        assert!(matches!(monitor.current_health(), TextStorageHealth::Healthy));
+        let storage = Arc::new(DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap());
+
+        let monitor = TextStorageHealthMonitor::new(storage, Duration::from_secs(60), None);
+
+        assert!(matches!(
+            monitor.current_health(),
+            TextStorageHealth::Healthy
+        ));
     }
 
     #[tokio::test]
     async fn test_health_check_empty_storage() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(
-            DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap()
-        );
-        
-        let mut monitor = TextStorageHealthMonitor::new(
-            storage,
-            Duration::from_millis(100),
-            None,
-        );
-        
+        let storage = Arc::new(DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap());
+
+        let mut monitor = TextStorageHealthMonitor::new(storage, Duration::from_millis(100), None);
+
         let health = monitor.check_health().await.unwrap();
         assert!(matches!(health, TextStorageHealth::Healthy));
     }
@@ -768,12 +784,9 @@ mod tests {
             max_age: Duration::from_secs(3600),
             compression_enabled: false,
         };
-        
-        let backup_manager = BackupManager::new(
-            temp_dir.path().to_path_buf(),
-            policy,
-        );
-        
+
+        let backup_manager = BackupManager::new(temp_dir.path().to_path_buf(), policy);
+
         assert!(backup_manager.is_ok());
     }
 
@@ -785,13 +798,13 @@ mod tests {
             max_age: Duration::from_secs(3600),
             compression_enabled: false,
         };
-        
-        let backup_manager = BackupManager::new(
-            temp_dir.path().to_path_buf(),
-            policy,
-        ).unwrap();
-        
-        let backup_info = backup_manager.create_backup(Some("test_backup".to_string())).await.unwrap();
+
+        let backup_manager = BackupManager::new(temp_dir.path().to_path_buf(), policy).unwrap();
+
+        let backup_info = backup_manager
+            .create_backup(Some("test_backup".to_string()))
+            .await
+            .unwrap();
         assert_eq!(backup_info.id, "test_backup");
         assert!(!backup_info.compression_used);
     }
@@ -804,15 +817,15 @@ mod tests {
             max_age: Duration::from_secs(3600),
             compression_enabled: false,
         };
-        
-        let backup_manager = BackupManager::new(
-            temp_dir.path().to_path_buf(),
-            policy,
-        ).unwrap();
-        
+
+        let backup_manager = BackupManager::new(temp_dir.path().to_path_buf(), policy).unwrap();
+
         // Create a backup
-        backup_manager.create_backup(Some("test_backup".to_string())).await.unwrap();
-        
+        backup_manager
+            .create_backup(Some("test_backup".to_string()))
+            .await
+            .unwrap();
+
         // List backups
         let backups = backup_manager.list_backups().await.unwrap();
         assert_eq!(backups.len(), 1);
@@ -827,12 +840,9 @@ mod tests {
             max_age: Duration::from_secs(3600),
             compression_enabled: false,
         };
-        
-        let backup_manager = BackupManager::new(
-            temp_dir.path().to_path_buf(),
-            policy,
-        ).unwrap();
-        
+
+        let backup_manager = BackupManager::new(temp_dir.path().to_path_buf(), policy).unwrap();
+
         let backup_info = backup_manager.create_emergency_backup().await.unwrap();
         assert!(backup_info.id.starts_with("emergency_"));
     }

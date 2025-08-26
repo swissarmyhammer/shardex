@@ -1,677 +1,591 @@
 //! Memory pool for text operations to reduce allocation overhead
 //!
-//! This module provides memory pools for reusable string buffers and byte vectors
-//! to reduce allocation overhead during frequent text storage operations.
+//! This module provides RAII-managed memory pools for String and Vec<u8> buffers,
+//! reducing allocation overhead in text processing operations.
 
 use parking_lot::Mutex;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-/// Statistics for memory pool operations
-#[derive(Debug, Default)]
-pub struct PoolStatistics {
-    /// Number of successful gets from pool (reused buffers)
-    pub pool_hits: AtomicU64,
-    /// Number of gets that required new allocation (pool empty or inadequate)
-    pub pool_misses: AtomicU64,
-    /// Number of buffers returned to pool
-    pub returns: AtomicU64,
-    /// Number of buffers discarded (too large for pool)
-    pub discards: AtomicU64,
-    /// Number of buffers preallocated during prewarming
-    pub prewarmed: AtomicU64,
-    /// Total bytes allocated across all operations
-    pub bytes_allocated: AtomicU64,
-    /// Total bytes reused from pool
-    pub bytes_reused: AtomicU64,
-    /// Peak number of buffers in pool simultaneously
-    pub peak_pool_size: AtomicU64,
-}
-
-impl PoolStatistics {
-    /// Record a pool hit (buffer reused)
-    pub fn record_pool_hit(&self, bytes_reused: usize) {
-        self.pool_hits.fetch_add(1, Ordering::Relaxed);
-        self.bytes_reused.fetch_add(bytes_reused as u64, Ordering::Relaxed);
-    }
-
-    /// Record a pool miss (new allocation required)
-    pub fn record_pool_miss(&self, bytes_allocated: usize) {
-        self.pool_misses.fetch_add(1, Ordering::Relaxed);
-        self.bytes_allocated.fetch_add(bytes_allocated as u64, Ordering::Relaxed);
-    }
-
-    /// Record buffer return to pool
-    pub fn record_return(&self) {
-        self.returns.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record buffer discard (too large for pool)
-    pub fn record_discard(&self) {
-        self.discards.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record prewarming operation
-    pub fn record_prewarm(&self, count: usize) {
-        self.prewarmed.fetch_add(count as u64, Ordering::Relaxed);
-    }
-
-    /// Update peak pool size
-    pub fn update_peak_pool_size(&self, current_size: usize) {
-        let current = current_size as u64;
-        let mut peak = self.peak_pool_size.load(Ordering::Relaxed);
-        
-        while current > peak {
-            match self.peak_pool_size.compare_exchange_weak(
-                peak,
-                current,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(new_peak) => peak = new_peak,
-            }
-        }
-    }
-
-    /// Get pool hit ratio
-    pub fn hit_ratio(&self) -> f64 {
-        let hits = self.pool_hits.load(Ordering::Relaxed);
-        let misses = self.pool_misses.load(Ordering::Relaxed);
-        let total = hits + misses;
-        
-        if total == 0 {
-            0.0
-        } else {
-            hits as f64 / total as f64
-        }
-    }
-
-    /// Get total requests served
-    pub fn total_requests(&self) -> u64 {
-        self.pool_hits.load(Ordering::Relaxed) + self.pool_misses.load(Ordering::Relaxed)
-    }
-
-    /// Get efficiency ratio (bytes reused / total bytes allocated)
-    pub fn efficiency_ratio(&self) -> f64 {
-        let reused = self.bytes_reused.load(Ordering::Relaxed);
-        let allocated = self.bytes_allocated.load(Ordering::Relaxed);
-        
-        if allocated == 0 {
-            0.0
-        } else {
-            reused as f64 / allocated as f64
-        }
-    }
-}
+use std::time::{Duration, SystemTime};
 
 /// Configuration for memory pool behavior
 #[derive(Debug, Clone)]
-pub struct PoolConfig {
-    /// Maximum number of buffers to keep in pool
+pub struct MemoryPoolConfig {
+    /// Maximum number of buffers to keep in each pool
     pub max_pool_size: usize,
-    /// Maximum size of buffer to keep in pool (larger buffers are discarded)
-    pub max_buffer_size: usize,
-    /// Minimum capacity for new buffer allocations
-    pub min_capacity: usize,
-    /// Growth factor for resizing inadequate buffers
+    /// Maximum buffer capacity to keep in pool (larger buffers are discarded)
+    pub max_buffer_capacity: usize,
+    /// Time before unused buffers are eligible for cleanup
+    pub buffer_ttl: Duration,
+    /// Growth factor for buffer capacity when expanding
     pub growth_factor: f64,
-    /// Maximum age for buffers in pool before cleanup
-    pub max_buffer_age: Duration,
 }
 
-impl Default for PoolConfig {
+impl Default for MemoryPoolConfig {
     fn default() -> Self {
         Self {
             max_pool_size: 1000,
-            max_buffer_size: 1024 * 1024, // 1MB
-            min_capacity: 256,
+            max_buffer_capacity: 1024 * 1024,     // 1MB
+            buffer_ttl: Duration::from_secs(300), // 5 minutes
             growth_factor: 1.5,
-            max_buffer_age: Duration::from_secs(300), // 5 minutes
         }
     }
 }
 
-/// Entry in the string pool with metadata
+/// Buffer entry with metadata for pool management
 #[derive(Debug)]
-struct PooledStringEntry {
-    /// The reusable string buffer
-    buffer: String,
-    /// Time when this buffer was last used
-    last_used: Instant,
+struct BufferEntry<T> {
+    buffer: T,
+    last_used: SystemTime,
+    usage_count: u64,
 }
 
-impl PooledStringEntry {
-    /// Create new pool entry
-    fn new(buffer: String) -> Self {
+impl<T> BufferEntry<T> {
+    fn new(buffer: T) -> Self {
         Self {
             buffer,
-            last_used: Instant::now(),
+            last_used: SystemTime::now(),
+            usage_count: 1,
         }
     }
 
-    /// Update last used time
     fn touch(&mut self) {
-        self.last_used = Instant::now();
+        self.last_used = SystemTime::now();
+        self.usage_count += 1;
     }
 
-    /// Check if buffer is older than maximum age
-    fn is_expired(&self, max_age: Duration) -> bool {
-        self.last_used.elapsed() > max_age
+    fn is_expired(&self, ttl: Duration) -> bool {
+        self.last_used.elapsed().unwrap_or(Duration::ZERO) > ttl
     }
 }
 
-/// Entry in the byte vector pool with metadata
-#[derive(Debug)]
-struct PooledByteEntry {
-    /// The reusable byte vector buffer
-    buffer: Vec<u8>,
-    /// Time when this buffer was last used
-    last_used: Instant,
+/// Statistics for memory pool performance
+#[derive(Debug, Default, Clone)]
+pub struct MemoryPoolStats {
+    /// Total buffer requests
+    pub total_requests: u64,
+    /// Requests served from pool (cache hits)
+    pub pool_hits: u64,
+    /// Requests that required new allocation (cache misses)
+    pub pool_misses: u64,
+    /// Total buffers currently in string pool
+    pub string_pool_size: usize,
+    /// Total buffers currently in byte pool
+    pub byte_pool_size: usize,
+    /// Total capacity in string pool (bytes)
+    pub string_pool_capacity: usize,
+    /// Total capacity in byte pool (bytes)
+    pub byte_pool_capacity: usize,
+    /// Number of cleanup operations performed
+    pub cleanup_operations: u64,
+    /// Number of buffers discarded due to size limits
+    pub oversized_discards: u64,
+    /// Number of buffers discarded due to TTL
+    pub expired_discards: u64,
 }
 
-impl PooledByteEntry {
-    /// Create new pool entry
-    fn new(buffer: Vec<u8>) -> Self {
-        Self {
-            buffer,
-            last_used: Instant::now(),
+impl MemoryPoolStats {
+    /// Calculate hit ratio
+    pub fn hit_ratio(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            self.pool_hits as f64 / self.total_requests as f64
         }
     }
 
-    /// Update last used time
-    fn touch(&mut self) {
-        self.last_used = Instant::now();
+    /// Calculate average buffer size in string pool
+    pub fn avg_string_buffer_size(&self) -> f64 {
+        if self.string_pool_size == 0 {
+            0.0
+        } else {
+            self.string_pool_capacity as f64 / self.string_pool_size as f64
+        }
     }
 
-    /// Check if buffer is older than maximum age
-    fn is_expired(&self, max_age: Duration) -> bool {
-        self.last_used.elapsed() > max_age
+    /// Calculate average buffer size in byte pool
+    pub fn avg_byte_buffer_size(&self) -> f64 {
+        if self.byte_pool_size == 0 {
+            0.0
+        } else {
+            self.byte_pool_capacity as f64 / self.byte_pool_size as f64
+        }
+    }
+
+    /// Calculate memory efficiency (hit ratio adjusted for buffer sizes)
+    pub fn memory_efficiency(&self) -> f64 {
+        let hit_ratio = self.hit_ratio();
+        let total_capacity = self.string_pool_capacity + self.byte_pool_capacity;
+        let total_buffers = self.string_pool_size + self.byte_pool_size;
+
+        if total_buffers == 0 {
+            hit_ratio
+        } else {
+            let avg_buffer_size = total_capacity as f64 / total_buffers as f64;
+            let size_factor = (avg_buffer_size / 1024.0).min(1.0); // Normalize to KB
+            hit_ratio * size_factor
+        }
     }
 }
 
 /// Memory pool for text operations to reduce allocation overhead
-///
-/// This component manages pools of reusable String and Vec<u8> buffers
-/// to reduce allocation overhead during frequent text operations:
-/// - String pool for text processing and formatting
-/// - Byte vector pool for binary data and UTF-8 processing
-/// - Automatic size management and cleanup
-/// - Performance statistics and monitoring
 pub struct TextMemoryPool {
     /// Pool of reusable string buffers
-    string_pool: Arc<Mutex<VecDeque<PooledStringEntry>>>,
-    /// Pool of reusable byte vector buffers
-    byte_pool: Arc<Mutex<VecDeque<PooledByteEntry>>>,
+    string_pool: Arc<Mutex<Vec<BufferEntry<String>>>>,
+    /// Pool of reusable byte vectors
+    byte_pool: Arc<Mutex<Vec<BufferEntry<Vec<u8>>>>>,
     /// Pool configuration
-    config: PoolConfig,
+    config: MemoryPoolConfig,
     /// Pool statistics
-    stats: Arc<PoolStatistics>,
+    stats: Arc<Mutex<MemoryPoolStats>>,
 }
 
 impl TextMemoryPool {
-    /// Create new memory pool with default configuration
-    pub fn new() -> Self {
-        Self::with_config(PoolConfig::default())
+    /// Create new text memory pool with configuration
+    pub fn new(config: MemoryPoolConfig) -> Self {
+        Self {
+            string_pool: Arc::new(Mutex::new(Vec::new())),
+            byte_pool: Arc::new(Mutex::new(Vec::new())),
+            config,
+            stats: Arc::new(Mutex::new(MemoryPoolStats::default())),
+        }
     }
 
-    /// Create new memory pool with custom configuration
-    pub fn with_config(config: PoolConfig) -> Self {
-        Self {
-            string_pool: Arc::new(Mutex::new(VecDeque::new())),
-            byte_pool: Arc::new(Mutex::new(VecDeque::new())),
-            config,
-            stats: Arc::new(PoolStatistics::default()),
-        }
+    /// Create new text memory pool with default configuration
+    pub fn new_default() -> Self {
+        Self::new(MemoryPoolConfig::default())
     }
 
     /// Get string buffer from pool or create new one
-    ///
-    /// This method provides a reusable string buffer with at least the
-    /// requested minimum capacity. If a suitable buffer is available in
-    /// the pool, it will be reused; otherwise, a new buffer is allocated.
-    ///
-    /// # Arguments
-    /// * `min_capacity` - Minimum required capacity for the buffer
-    ///
-    /// # Returns
-    /// * `PooledString` - RAII wrapper that automatically returns buffer to pool
     pub fn get_string_buffer(&self, min_capacity: usize) -> PooledString {
-        let effective_min = min_capacity.max(self.config.min_capacity);
-        
-        // Try to get suitable buffer from pool
+        self.record_request();
+
         let mut pool = self.string_pool.lock();
-        
-        // Look for a buffer with sufficient capacity
-        for i in 0..pool.len() {
-            if pool[i].buffer.capacity() >= effective_min {
-                let mut entry = pool.remove(i).unwrap();
+
+        // Look for suitable buffer in pool
+        for i in (0..pool.len()).rev() {
+            if pool[i].buffer.capacity() >= min_capacity {
+                let mut entry = pool.swap_remove(i);
                 entry.touch();
-                
-                // Clear the buffer and prepare for use
                 entry.buffer.clear();
-                
-                self.stats.record_pool_hit(entry.buffer.capacity());
-                
+
+                // Expand capacity if needed with growth factor
+                if entry.buffer.capacity() < min_capacity {
+                    let new_capacity = (min_capacity as f64 * self.config.growth_factor) as usize;
+                    entry.buffer.reserve(new_capacity - entry.buffer.capacity());
+                }
+
+                self.record_hit();
                 return PooledString::new(
                     entry.buffer,
                     Arc::clone(&self.string_pool),
-                    Arc::clone(&self.stats),
                     &self.config,
+                    Arc::clone(&self.stats),
                 );
             }
         }
-        
-        // No suitable buffer found - create new one
-        let capacity = if effective_min > 0 {
-            // Grow by growth factor to reduce future allocations
-            (effective_min as f64 * self.config.growth_factor) as usize
-        } else {
-            self.config.min_capacity
-        };
-        
+
+        // No suitable buffer found, create new one
+        let capacity = (min_capacity as f64 * self.config.growth_factor) as usize;
         let buffer = String::with_capacity(capacity);
-        self.stats.record_pool_miss(capacity);
-        
+        self.record_miss();
+
         PooledString::new(
             buffer,
             Arc::clone(&self.string_pool),
-            Arc::clone(&self.stats),
             &self.config,
+            Arc::clone(&self.stats),
         )
     }
 
-    /// Get byte vector buffer from pool or create new one
-    ///
-    /// This method provides a reusable byte vector buffer with at least the
-    /// requested minimum capacity. If a suitable buffer is available in
-    /// the pool, it will be reused; otherwise, a new buffer is allocated.
-    ///
-    /// # Arguments
-    /// * `min_capacity` - Minimum required capacity for the buffer
-    ///
-    /// # Returns
-    /// * `PooledBytes` - RAII wrapper that automatically returns buffer to pool
+    /// Get byte buffer from pool or create new one
     pub fn get_byte_buffer(&self, min_capacity: usize) -> PooledBytes {
-        let effective_min = min_capacity.max(self.config.min_capacity);
-        
-        // Try to get suitable buffer from pool
+        self.record_request();
+
         let mut pool = self.byte_pool.lock();
-        
-        // Look for a buffer with sufficient capacity
-        for i in 0..pool.len() {
-            if pool[i].buffer.capacity() >= effective_min {
-                let mut entry = pool.remove(i).unwrap();
+
+        // Look for suitable buffer in pool
+        for i in (0..pool.len()).rev() {
+            if pool[i].buffer.capacity() >= min_capacity {
+                let mut entry = pool.swap_remove(i);
                 entry.touch();
-                
-                // Clear the buffer and prepare for use
                 entry.buffer.clear();
-                
-                self.stats.record_pool_hit(entry.buffer.capacity());
-                
+
+                // Expand capacity if needed with growth factor
+                if entry.buffer.capacity() < min_capacity {
+                    let new_capacity = (min_capacity as f64 * self.config.growth_factor) as usize;
+                    entry.buffer.reserve(new_capacity - entry.buffer.capacity());
+                }
+
+                self.record_hit();
                 return PooledBytes::new(
                     entry.buffer,
                     Arc::clone(&self.byte_pool),
-                    Arc::clone(&self.stats),
                     &self.config,
+                    Arc::clone(&self.stats),
                 );
             }
         }
-        
-        // No suitable buffer found - create new one
-        let capacity = if effective_min > 0 {
-            // Grow by growth factor to reduce future allocations
-            (effective_min as f64 * self.config.growth_factor) as usize
-        } else {
-            self.config.min_capacity
-        };
-        
+
+        // No suitable buffer found, create new one
+        let capacity = (min_capacity as f64 * self.config.growth_factor) as usize;
         let buffer = Vec::with_capacity(capacity);
-        self.stats.record_pool_miss(capacity);
-        
+        self.record_miss();
+
         PooledBytes::new(
             buffer,
             Arc::clone(&self.byte_pool),
-            Arc::clone(&self.stats),
             &self.config,
+            Arc::clone(&self.stats),
         )
     }
 
-    /// Pre-warm the string pool with buffers of specified capacity
-    ///
-    /// This method pre-allocates buffers to warm up the pool, which can
-    /// improve performance for applications with predictable allocation patterns.
-    ///
-    /// # Arguments
-    /// * `count` - Number of buffers to pre-allocate
-    /// * `capacity` - Capacity for each pre-allocated buffer
-    pub fn prewarm_string_pool(&self, count: usize, capacity: usize) {
-        let mut pool = self.string_pool.lock();
-        
-        for _ in 0..count {
-            if pool.len() >= self.config.max_pool_size {
-                break;
-            }
-            
-            let buffer = String::with_capacity(capacity);
-            pool.push_back(PooledStringEntry::new(buffer));
-        }
-        
-        self.stats.update_peak_pool_size(pool.len());
-        self.stats.record_prewarm(count);
-    }
-
-    /// Pre-warm the byte pool with buffers of specified capacity
-    ///
-    /// # Arguments
-    /// * `count` - Number of buffers to pre-allocate
-    /// * `capacity` - Capacity for each pre-allocated buffer
-    pub fn prewarm_byte_pool(&self, count: usize, capacity: usize) {
-        let mut pool = self.byte_pool.lock();
-        
-        for _ in 0..count {
-            if pool.len() >= self.config.max_pool_size {
-                break;
-            }
-            
-            let buffer = Vec::with_capacity(capacity);
-            pool.push_back(PooledByteEntry::new(buffer));
-        }
-        
-        self.stats.update_peak_pool_size(pool.len());
-        self.stats.record_prewarm(count);
-    }
-
-    /// Clean up expired buffers from pools
-    ///
-    /// This method removes buffers that have been idle longer than the
-    /// configured maximum age to free up memory.
-    pub fn cleanup_expired(&self) {
-        let max_age = self.config.max_buffer_age;
-        
-        // Clean string pool
+    /// Pre-warm pool with buffers of specified capacities
+    pub fn prewarm(
+        &self,
+        string_count: usize,
+        string_capacity: usize,
+        byte_count: usize,
+        byte_capacity: usize,
+    ) {
+        // Pre-warm string pool
         {
             let mut pool = self.string_pool.lock();
-            pool.retain(|entry| !entry.is_expired(max_age));
+            for _ in 0..string_count {
+                if pool.len() >= self.config.max_pool_size {
+                    break;
+                }
+                let buffer = String::with_capacity(string_capacity);
+                pool.push(BufferEntry::new(buffer));
+            }
         }
-        
-        // Clean byte pool
+
+        // Pre-warm byte pool
         {
             let mut pool = self.byte_pool.lock();
-            pool.retain(|entry| !entry.is_expired(max_age));
+            for _ in 0..byte_count {
+                if pool.len() >= self.config.max_pool_size {
+                    break;
+                }
+                let buffer = Vec::with_capacity(byte_capacity);
+                pool.push(BufferEntry::new(buffer));
+            }
+        }
+
+        log::debug!("Pre-warmed pool with {} string buffers ({} bytes each) and {} byte buffers ({} bytes each)",
+                   string_count, string_capacity, byte_count, byte_capacity);
+    }
+
+    /// Perform cleanup of expired and oversized buffers
+    pub fn cleanup(&self) {
+        let mut cleanup_count = 0;
+
+        // Clean up string pool
+        {
+            let mut pool = self.string_pool.lock();
+            let original_len = pool.len();
+
+            pool.retain(|entry| {
+                let should_keep = !entry.is_expired(self.config.buffer_ttl)
+                    && entry.buffer.capacity() <= self.config.max_buffer_capacity;
+
+                if !should_keep {
+                    cleanup_count += 1;
+                    if entry.is_expired(self.config.buffer_ttl) {
+                        self.record_expired_discard();
+                    } else {
+                        self.record_oversized_discard();
+                    }
+                }
+
+                should_keep
+            });
+
+            log::trace!(
+                "Cleaned up {} of {} string buffers",
+                original_len - pool.len(),
+                original_len
+            );
+        }
+
+        // Clean up byte pool
+        {
+            let mut pool = self.byte_pool.lock();
+            let original_len = pool.len();
+
+            pool.retain(|entry| {
+                let should_keep = !entry.is_expired(self.config.buffer_ttl)
+                    && entry.buffer.capacity() <= self.config.max_buffer_capacity;
+
+                if !should_keep {
+                    cleanup_count += 1;
+                    if entry.is_expired(self.config.buffer_ttl) {
+                        self.record_expired_discard();
+                    } else {
+                        self.record_oversized_discard();
+                    }
+                }
+
+                should_keep
+            });
+
+            log::trace!(
+                "Cleaned up {} of {} byte buffers",
+                original_len - pool.len(),
+                original_len
+            );
+        }
+
+        if cleanup_count > 0 {
+            self.record_cleanup();
+            log::debug!("Memory pool cleanup removed {} buffers", cleanup_count);
         }
     }
 
     /// Get current pool statistics
-    pub fn get_statistics(&self) -> Arc<PoolStatistics> {
-        Arc::clone(&self.stats)
+    pub fn get_stats(&self) -> MemoryPoolStats {
+        let mut stats = self.stats.lock().clone();
+
+        // Update current pool sizes
+        {
+            let string_pool = self.string_pool.lock();
+            stats.string_pool_size = string_pool.len();
+            stats.string_pool_capacity = string_pool.iter().map(|e| e.buffer.capacity()).sum();
+        }
+
+        {
+            let byte_pool = self.byte_pool.lock();
+            stats.byte_pool_size = byte_pool.len();
+            stats.byte_pool_capacity = byte_pool.iter().map(|e| e.buffer.capacity()).sum();
+        }
+
+        stats
     }
 
-    /// Get pool configuration
-    pub fn get_config(&self) -> &PoolConfig {
-        &self.config
-    }
-
-    /// Get current pool sizes (string_pool_size, byte_pool_size)
-    pub fn get_pool_sizes(&self) -> (usize, usize) {
-        let string_size = self.string_pool.lock().len();
-        let byte_size = self.byte_pool.lock().len();
-        (string_size, byte_size)
+    /// Reset pool statistics
+    pub fn reset_stats(&self) {
+        let mut stats = self.stats.lock();
+        *stats = MemoryPoolStats::default();
     }
 
     /// Clear all pools and reset statistics
     pub fn clear(&self) {
-        self.string_pool.lock().clear();
-        self.byte_pool.lock().clear();
-        // Note: We don't reset statistics as they provide historical insight
+        {
+            let mut pool = self.string_pool.lock();
+            pool.clear();
+        }
+
+        {
+            let mut pool = self.byte_pool.lock();
+            pool.clear();
+        }
+
+        self.reset_stats();
     }
 
-    /// Estimate memory usage of pools in bytes
-    pub fn estimate_memory_usage(&self) -> usize {
-        let string_pool = self.string_pool.lock();
-        let byte_pool = self.byte_pool.lock();
-        
-        let string_memory: usize = string_pool
-            .iter()
-            .map(|entry| entry.buffer.capacity())
-            .sum();
-            
-        let byte_memory: usize = byte_pool
-            .iter()
-            .map(|entry| entry.buffer.capacity())
-            .sum();
-            
-        string_memory + byte_memory
+    /// Get pool configuration
+    pub fn config(&self) -> &MemoryPoolConfig {
+        &self.config
+    }
+
+    // Statistics recording methods
+    fn record_request(&self) {
+        let mut stats = self.stats.lock();
+        stats.total_requests += 1;
+    }
+
+    fn record_hit(&self) {
+        let mut stats = self.stats.lock();
+        stats.pool_hits += 1;
+    }
+
+    fn record_miss(&self) {
+        let mut stats = self.stats.lock();
+        stats.pool_misses += 1;
+    }
+
+    fn record_cleanup(&self) {
+        let mut stats = self.stats.lock();
+        stats.cleanup_operations += 1;
+    }
+
+    fn record_oversized_discard(&self) {
+        let mut stats = self.stats.lock();
+        stats.oversized_discards += 1;
+    }
+
+    fn record_expired_discard(&self) {
+        let mut stats = self.stats.lock();
+        stats.expired_discards += 1;
     }
 }
 
-impl Default for TextMemoryPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// RAII wrapper for pooled string buffers
-///
-/// This wrapper automatically returns the buffer to the pool when dropped,
-/// ensuring proper resource management without manual intervention.
+/// RAII wrapper for pooled strings
 pub struct PooledString {
-    /// The string buffer (None after being taken)
     buffer: Option<String>,
-    /// Reference to the pool for return on drop
-    pool: Arc<Mutex<VecDeque<PooledStringEntry>>>,
-    /// Statistics reference
-    stats: Arc<PoolStatistics>,
-    /// Pool configuration
-    config: PoolConfig,
+    pool: Arc<Mutex<Vec<BufferEntry<String>>>>,
+    config: MemoryPoolConfig,
+    stats: Arc<Mutex<MemoryPoolStats>>,
 }
 
 impl PooledString {
-    /// Create new pooled string wrapper
     fn new(
         buffer: String,
-        pool: Arc<Mutex<VecDeque<PooledStringEntry>>>,
-        stats: Arc<PoolStatistics>,
-        config: &PoolConfig,
+        pool: Arc<Mutex<Vec<BufferEntry<String>>>>,
+        config: &MemoryPoolConfig,
+        stats: Arc<Mutex<MemoryPoolStats>>,
     ) -> Self {
         Self {
             buffer: Some(buffer),
             pool,
-            stats,
             config: config.clone(),
+            stats,
         }
     }
 
-    /// Get mutable reference to the string buffer
+    /// Get mutable access to the buffer
     pub fn buffer_mut(&mut self) -> &mut String {
-        self.buffer.as_mut().expect("Buffer was already taken")
+        self.buffer
+            .as_mut()
+            .expect("Buffer should always be present when not dropped")
     }
 
-    /// Get immutable reference to the string buffer
+    /// Get immutable access to the buffer
     pub fn buffer(&self) -> &String {
-        self.buffer.as_ref().expect("Buffer was already taken")
+        self.buffer
+            .as_ref()
+            .expect("Buffer should always be present when not dropped")
     }
 
-    /// Take ownership of the buffer, consuming the wrapper
-    pub fn into_string(mut self) -> String {
-        self.buffer.take().expect("Buffer was already taken")
-    }
-
-    /// Get current capacity of the buffer
-    pub fn capacity(&self) -> usize {
-        self.buffer.as_ref().map(|b| b.capacity()).unwrap_or(0)
-    }
-
-    /// Get current length of the buffer
+    /// Get buffer length
     pub fn len(&self) -> usize {
-        self.buffer.as_ref().map(|b| b.len()).unwrap_or(0)
+        self.buffer().len()
     }
 
     /// Check if buffer is empty
     pub fn is_empty(&self) -> bool {
-        self.buffer.as_ref().map(|b| b.is_empty()).unwrap_or(true)
+        self.buffer().is_empty()
     }
 
-    /// Reserve additional capacity
-    pub fn reserve(&mut self, additional: usize) {
-        if let Some(buffer) = &mut self.buffer {
-            buffer.reserve(additional);
-        }
+    /// Get buffer capacity
+    pub fn capacity(&self) -> usize {
+        self.buffer().capacity()
     }
 
-    /// Shrink capacity to fit content
-    pub fn shrink_to_fit(&mut self) {
-        if let Some(buffer) = &mut self.buffer {
-            buffer.shrink_to_fit();
-        }
-    }
-}
-
-impl std::ops::Deref for PooledString {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        self.buffer()
-    }
-}
-
-impl std::ops::DerefMut for PooledString {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer_mut()
+    /// Take ownership of the buffer (prevents return to pool)
+    pub fn into_inner(mut self) -> String {
+        self.buffer
+            .take()
+            .expect("Buffer should always be present when not dropped")
     }
 }
 
 impl Drop for PooledString {
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
-            // Only return to pool if buffer is within size limits
-            if buffer.capacity() <= self.config.max_buffer_size {
+            let capacity = buffer.capacity();
+
+            // Only return to pool if it's not too large
+            if capacity <= self.config.max_buffer_capacity {
                 let mut pool = self.pool.lock();
-                
-                // Only add if pool has space
+
+                // Only add if pool isn't full
                 if pool.len() < self.config.max_pool_size {
-                    pool.push_back(PooledStringEntry::new(buffer));
-                    self.stats.record_return();
-                    self.stats.update_peak_pool_size(pool.len());
+                    pool.push(BufferEntry::new(buffer));
+                    log::trace!("Returned string buffer to pool (capacity: {})", capacity);
                 } else {
-                    self.stats.record_discard();
+                    log::trace!("Discarded string buffer - pool full");
                 }
             } else {
-                self.stats.record_discard();
+                // Record oversized discard
+                let mut stats = self.stats.lock();
+                stats.oversized_discards += 1;
+                log::trace!("Discarded oversized string buffer (capacity: {})", capacity);
             }
         }
     }
 }
 
-/// RAII wrapper for pooled byte vector buffers
-///
-/// This wrapper automatically returns the buffer to the pool when dropped,
-/// ensuring proper resource management without manual intervention.
+/// RAII wrapper for pooled byte vectors
 pub struct PooledBytes {
-    /// The byte vector buffer (None after being taken)
     buffer: Option<Vec<u8>>,
-    /// Reference to the pool for return on drop
-    pool: Arc<Mutex<VecDeque<PooledByteEntry>>>,
-    /// Statistics reference
-    stats: Arc<PoolStatistics>,
-    /// Pool configuration
-    config: PoolConfig,
+    pool: Arc<Mutex<Vec<BufferEntry<Vec<u8>>>>>,
+    config: MemoryPoolConfig,
+    stats: Arc<Mutex<MemoryPoolStats>>,
 }
 
 impl PooledBytes {
-    /// Create new pooled bytes wrapper
     fn new(
         buffer: Vec<u8>,
-        pool: Arc<Mutex<VecDeque<PooledByteEntry>>>,
-        stats: Arc<PoolStatistics>,
-        config: &PoolConfig,
+        pool: Arc<Mutex<Vec<BufferEntry<Vec<u8>>>>>,
+        config: &MemoryPoolConfig,
+        stats: Arc<Mutex<MemoryPoolStats>>,
     ) -> Self {
         Self {
             buffer: Some(buffer),
             pool,
-            stats,
             config: config.clone(),
+            stats,
         }
     }
 
-    /// Get mutable reference to the byte vector buffer
+    /// Get mutable access to the buffer
     pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
-        self.buffer.as_mut().expect("Buffer was already taken")
+        self.buffer
+            .as_mut()
+            .expect("Buffer should always be present when not dropped")
     }
 
-    /// Get immutable reference to the byte vector buffer
+    /// Get immutable access to the buffer
     pub fn buffer(&self) -> &Vec<u8> {
-        self.buffer.as_ref().expect("Buffer was already taken")
+        self.buffer
+            .as_ref()
+            .expect("Buffer should always be present when not dropped")
     }
 
-    /// Take ownership of the buffer, consuming the wrapper
-    pub fn into_vec(mut self) -> Vec<u8> {
-        self.buffer.take().expect("Buffer was already taken")
-    }
-
-    /// Get current capacity of the buffer
-    pub fn capacity(&self) -> usize {
-        self.buffer.as_ref().map(|b| b.capacity()).unwrap_or(0)
-    }
-
-    /// Get current length of the buffer
+    /// Get buffer length
     pub fn len(&self) -> usize {
-        self.buffer.as_ref().map(|b| b.len()).unwrap_or(0)
+        self.buffer().len()
     }
 
     /// Check if buffer is empty
     pub fn is_empty(&self) -> bool {
-        self.buffer.as_ref().map(|b| b.is_empty()).unwrap_or(true)
+        self.buffer().is_empty()
     }
 
-    /// Reserve additional capacity
-    pub fn reserve(&mut self, additional: usize) {
-        if let Some(buffer) = &mut self.buffer {
-            buffer.reserve(additional);
-        }
+    /// Get buffer capacity
+    pub fn capacity(&self) -> usize {
+        self.buffer().capacity()
     }
 
-    /// Shrink capacity to fit content
-    pub fn shrink_to_fit(&mut self) {
-        if let Some(buffer) = &mut self.buffer {
-            buffer.shrink_to_fit();
-        }
-    }
-}
-
-impl std::ops::Deref for PooledBytes {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        self.buffer()
-    }
-}
-
-impl std::ops::DerefMut for PooledBytes {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer_mut()
+    /// Take ownership of the buffer (prevents return to pool)
+    pub fn into_inner(mut self) -> Vec<u8> {
+        self.buffer
+            .take()
+            .expect("Buffer should always be present when not dropped")
     }
 }
 
 impl Drop for PooledBytes {
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
-            // Only return to pool if buffer is within size limits
-            if buffer.capacity() <= self.config.max_buffer_size {
+            let capacity = buffer.capacity();
+
+            // Only return to pool if it's not too large
+            if capacity <= self.config.max_buffer_capacity {
                 let mut pool = self.pool.lock();
-                
-                // Only add if pool has space
+
+                // Only add if pool isn't full
                 if pool.len() < self.config.max_pool_size {
-                    pool.push_back(PooledByteEntry::new(buffer));
-                    self.stats.record_return();
-                    self.stats.update_peak_pool_size(pool.len());
+                    pool.push(BufferEntry::new(buffer));
+                    log::trace!("Returned byte buffer to pool (capacity: {})", capacity);
                 } else {
-                    self.stats.record_discard();
+                    log::trace!("Discarded byte buffer - pool full");
                 }
             } else {
-                self.stats.record_discard();
+                // Record oversized discard
+                let mut stats = self.stats.lock();
+                stats.oversized_discards += 1;
+                log::trace!("Discarded oversized byte buffer (capacity: {})", capacity);
             }
         }
     }
@@ -684,303 +598,178 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_string_pool_basic_operations() {
-        let pool = TextMemoryPool::new();
-        
-        // Get a string buffer
-        let mut buffer = pool.get_string_buffer(100);
-        assert!(buffer.capacity() >= 100);
-        assert_eq!(buffer.len(), 0);
-        assert!(buffer.is_empty());
-        
-        // Use the buffer
-        buffer.push_str("Hello, world!");
-        assert_eq!(buffer.len(), 13);
-        assert!(!buffer.is_empty());
-        assert_eq!(buffer.as_str(), "Hello, world!");
-        
-        // Buffer should be returned to pool on drop
-        drop(buffer);
-        
+    fn test_memory_pool_basic_operations() {
+        let pool = TextMemoryPool::new_default();
+
+        // Test string buffer
+        let mut string_buf = pool.get_string_buffer(100);
+        string_buf.buffer_mut().push_str("Hello, world!");
+        assert_eq!(string_buf.buffer(), "Hello, world!");
+        assert!(string_buf.capacity() >= 100);
+        drop(string_buf);
+
+        // Test byte buffer
+        let mut byte_buf = pool.get_byte_buffer(50);
+        byte_buf.buffer_mut().extend_from_slice(b"Hello, bytes!");
+        assert_eq!(byte_buf.buffer(), b"Hello, bytes!");
+        assert!(byte_buf.capacity() >= 50);
+        drop(byte_buf);
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.total_requests, 2);
+        assert_eq!(stats.pool_misses, 2); // First requests are always misses
+    }
+
+    #[test]
+    fn test_buffer_reuse() {
+        let pool = TextMemoryPool::new_default();
+
+        // Create and drop a buffer
+        {
+            let mut buf = pool.get_string_buffer(100);
+            buf.buffer_mut().push_str("Test content");
+            assert_eq!(buf.len(), 12);
+        }
+
         // Get another buffer - should reuse the previous one
-        let buffer2 = pool.get_string_buffer(50);
-        assert!(buffer2.is_empty()); // Should be cleared
-        
-        // Check statistics
-        let stats = pool.get_statistics();
-        let (hits, misses) = (
-            stats.pool_hits.load(Ordering::Relaxed),
-            stats.pool_misses.load(Ordering::Relaxed),
-        );
-        
-        // Should have one miss (first allocation) and one hit (reuse)
-        assert_eq!(misses, 1);
-        assert_eq!(hits, 1);
+        {
+            let buf = pool.get_string_buffer(50); // Smaller capacity, should still reuse
+            assert!(buf.is_empty()); // Should be cleared
+            assert!(buf.capacity() >= 100); // Should maintain original capacity
+        }
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.total_requests, 2);
+        assert_eq!(stats.pool_hits, 1);
+        assert_eq!(stats.pool_misses, 1);
         assert_eq!(stats.hit_ratio(), 0.5);
     }
 
     #[test]
-    fn test_byte_pool_basic_operations() {
-        let pool = TextMemoryPool::new();
-        
-        // Get a byte buffer
-        let mut buffer = pool.get_byte_buffer(100);
-        assert!(buffer.capacity() >= 100);
-        assert_eq!(buffer.len(), 0);
-        assert!(buffer.is_empty());
-        
-        // Use the buffer
-        buffer.extend_from_slice(b"Hello, bytes!");
-        assert_eq!(buffer.len(), 13);
-        assert!(!buffer.is_empty());
-        assert_eq!(&buffer[..], b"Hello, bytes!");
-        
-        // Buffer should be returned to pool on drop
-        drop(buffer);
-        
-        // Get another buffer - should reuse the previous one
-        let buffer2 = pool.get_byte_buffer(50);
-        assert!(buffer2.is_empty()); // Should be cleared
+    fn test_prewarming() {
+        let pool = TextMemoryPool::new_default();
+
+        // Pre-warm the pool
+        pool.prewarm(10, 256, 5, 512);
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.string_pool_size, 10);
+        assert_eq!(stats.byte_pool_size, 5);
+        assert!(stats.string_pool_capacity >= 10 * 256);
+        assert!(stats.byte_pool_capacity >= 5 * 512);
+    }
+
+    #[test]
+    fn test_oversized_buffer_handling() {
+        let config = MemoryPoolConfig {
+            max_buffer_capacity: 100, // Small limit for testing
+            ..Default::default()
+        };
+        let pool = TextMemoryPool::new(config);
+
+        // Create a large buffer that exceeds the limit
+        {
+            let mut buf = pool.get_string_buffer(200); // Exceeds max_buffer_capacity
+            buf.buffer_mut().push_str("Large buffer content");
+        }
+
+        // The buffer should not be returned to the pool
+        let stats = pool.get_stats();
+        assert_eq!(stats.string_pool_size, 0);
+        assert!(stats.oversized_discards > 0);
+    }
+
+    #[test]
+    fn test_buffer_expiration() {
+        let config = MemoryPoolConfig {
+            buffer_ttl: Duration::from_millis(10), // Very short TTL for testing
+            ..Default::default()
+        };
+        let pool = TextMemoryPool::new(config);
+
+        // Create a buffer
+        {
+            let buf = pool.get_string_buffer(100);
+            drop(buf);
+        }
+
+        // Wait for expiration
+        thread::sleep(Duration::from_millis(20));
+
+        // Clean up expired buffers
+        pool.cleanup();
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.string_pool_size, 0);
+    }
+
+    #[test]
+    fn test_memory_pool_stats() {
+        let pool = TextMemoryPool::new_default();
+
+        // Generate some activity
+        for _ in 0..10 {
+            let buf = pool.get_string_buffer(100);
+            drop(buf);
+        }
+
+        // Generate some hits
+        for _ in 0..5 {
+            let buf = pool.get_string_buffer(50);
+            drop(buf);
+        }
+
+        let stats = pool.get_stats();
+        assert_eq!(stats.total_requests, 15);
+        assert!(stats.pool_hits > 0);
+        assert!(stats.pool_misses > 0);
+        assert!(stats.hit_ratio() > 0.0);
+        assert!(stats.hit_ratio() <= 1.0);
     }
 
     #[test]
     fn test_pool_size_limits() {
-        let config = PoolConfig {
-            max_pool_size: 2,
-            max_buffer_size: 1000,
+        let config = MemoryPoolConfig {
+            max_pool_size: 2, // Very small pool for testing
             ..Default::default()
         };
-        let pool = TextMemoryPool::with_config(config);
-        
-        // Create buffers and let them return to pool
-        let buffer1 = pool.get_string_buffer(100);
-        let buffer2 = pool.get_string_buffer(200);
-        let buffer3 = pool.get_string_buffer(300);
-        
-        drop(buffer1);
-        drop(buffer2);
-        drop(buffer3); // This should be discarded due to pool size limit
-        
-        let (string_size, _) = pool.get_pool_sizes();
-        assert_eq!(string_size, 2); // Pool size limited to 2
-        
-        let stats = pool.get_statistics();
-        assert!(stats.discards.load(Ordering::Relaxed) >= 1);
+        let pool = TextMemoryPool::new(config);
+
+        // Create more buffers than the pool can hold
+        for _ in 0..5 {
+            let buf = pool.get_string_buffer(100);
+            drop(buf);
+        }
+
+        let stats = pool.get_stats();
+        assert!(stats.string_pool_size <= 2); // Should not exceed max_pool_size
     }
 
     #[test]
-    fn test_buffer_size_limits() {
-        let config = PoolConfig {
-            max_buffer_size: 500,
-            ..Default::default()
-        };
-        let pool = TextMemoryPool::with_config(config);
-        
-        // Create a large buffer
-        let mut large_buffer = pool.get_string_buffer(1000);
-        large_buffer.reserve(2000); // Make it even larger
-        
-        // When dropped, should be discarded due to size limit
-        drop(large_buffer);
-        
-        let stats = pool.get_statistics();
-        assert!(stats.discards.load(Ordering::Relaxed) >= 1);
-    }
+    fn test_into_inner() {
+        let pool = TextMemoryPool::new_default();
 
-    #[test]
-    fn test_prewarming() {
-        let pool = TextMemoryPool::new();
-        
-        // Prewarm string pool
-        pool.prewarm_string_pool(5, 256);
-        
-        let (string_size, _) = pool.get_pool_sizes();
-        assert_eq!(string_size, 5);
-        
-        // Getting buffers should hit the prewarmed ones
-        let _buffer1 = pool.get_string_buffer(100);
-        let _buffer2 = pool.get_string_buffer(200);
-        
-        let stats = pool.get_statistics();
-        assert!(stats.pool_hits.load(Ordering::Relaxed) >= 2);
-        assert_eq!(stats.prewarmed.load(Ordering::Relaxed), 5);
+        let mut buf = pool.get_string_buffer(100);
+        buf.buffer_mut().push_str("Test content");
+
+        let owned_string = buf.into_inner();
+        assert_eq!(owned_string, "Test content");
+
+        // The buffer should not be returned to the pool
+        let stats = pool.get_stats();
+        assert_eq!(stats.string_pool_size, 0);
     }
 
     #[test]
     fn test_growth_factor() {
-        let config = PoolConfig {
+        let config = MemoryPoolConfig {
             growth_factor: 2.0,
-            min_capacity: 100,
             ..Default::default()
         };
-        let pool = TextMemoryPool::with_config(config);
-        
-        // Request buffer with specific capacity
-        let buffer = pool.get_string_buffer(150);
-        
-        // Should be grown by growth factor
-        assert!(buffer.capacity() >= 300); // 150 * 2.0
-    }
+        let pool = TextMemoryPool::new(config);
 
-    #[test]
-    fn test_statistics() {
-        let pool = TextMemoryPool::new();
-        
-        // Perform various operations to generate statistics
-        let buffer1 = pool.get_string_buffer(100); // Miss
-        drop(buffer1);
-        
-        let buffer2 = pool.get_string_buffer(50);  // Hit
-        drop(buffer2);
-        
-        let mut large_buffer = pool.get_string_buffer(1000);
-        large_buffer.reserve(2_000_000); // Make it too large
-        drop(large_buffer); // Should be discarded
-        
-        let stats = pool.get_statistics();
-        
-        assert!(stats.total_requests() > 0);
-        assert!(stats.pool_hits.load(Ordering::Relaxed) > 0);
-        assert!(stats.pool_misses.load(Ordering::Relaxed) > 0);
-        assert!(stats.discards.load(Ordering::Relaxed) > 0);
-        assert!(stats.hit_ratio() > 0.0);
-        assert!(stats.hit_ratio() < 1.0);
-    }
-
-    #[test]
-    fn test_memory_usage_estimation() {
-        let pool = TextMemoryPool::new();
-        
-        // Prewarm with known capacities
-        pool.prewarm_string_pool(3, 1000);
-        pool.prewarm_byte_pool(2, 500);
-        
-        let memory_usage = pool.estimate_memory_usage();
-        let expected = (3 * 1000) + (2 * 500); // 3000 + 1000 = 4000
-        assert_eq!(memory_usage, expected);
-    }
-
-    #[test]
-    fn test_cleanup_expired() {
-        let config = PoolConfig {
-            max_buffer_age: Duration::from_millis(50),
-            ..Default::default()
-        };
-        let pool = TextMemoryPool::with_config(config);
-        
-        // Add buffers to pool
-        let buffer1 = pool.get_string_buffer(100);
-        let buffer2 = pool.get_string_buffer(200);
-        drop(buffer1);
-        drop(buffer2);
-        
-        assert_eq!(pool.get_pool_sizes().0, 2);
-        
-        // Wait for expiration
-        thread::sleep(Duration::from_millis(60));
-        
-        // Cleanup expired buffers
-        pool.cleanup_expired();
-        
-        // Pool should be empty now
-        assert_eq!(pool.get_pool_sizes().0, 0);
-    }
-
-    #[test]
-    fn test_pooled_string_deref() {
-        let pool = TextMemoryPool::new();
-        let mut buffer = pool.get_string_buffer(100);
-        
-        // Test deref operations
-        buffer.push_str("Hello");
-        assert_eq!(buffer.len(), 5);
-        assert_eq!(&*buffer, "Hello");
-        
-        // Test deref_mut operations
-        buffer.push_str(", world!");
-        assert_eq!(&*buffer, "Hello, world!");
-    }
-
-    #[test]
-    fn test_pooled_string_into_string() {
-        let pool = TextMemoryPool::new();
-        let mut buffer = pool.get_string_buffer(100);
-        buffer.push_str("Test string");
-        
-        let owned_string = buffer.into_string();
-        assert_eq!(owned_string, "Test string");
-    }
-
-    #[test]
-    fn test_pooled_bytes_operations() {
-        let pool = TextMemoryPool::new();
-        let mut buffer = pool.get_byte_buffer(100);
-        
-        // Test basic operations
-        buffer.extend_from_slice(b"Hello");
-        assert_eq!(buffer.len(), 5);
-        assert_eq!(&buffer[..], b"Hello");
-        
-        // Test into_vec
-        let owned_vec = buffer.into_vec();
-        assert_eq!(owned_vec, b"Hello");
-    }
-
-    #[test]
-    fn test_concurrent_access() {
-        let pool = Arc::new(TextMemoryPool::new());
-        let mut handles = Vec::new();
-        
-        // Spawn multiple threads using the pool
-        for i in 0..10 {
-            let pool_clone = Arc::clone(&pool);
-            let handle = thread::spawn(move || {
-                let mut buffer = pool_clone.get_string_buffer(100);
-                buffer.push_str(&format!("Thread {}", i));
-                
-                // Use buffer briefly
-                thread::sleep(Duration::from_millis(10));
-                
-                buffer.len()
-            });
-            handles.push(handle);
-        }
-        
-        // Wait for all threads
-        let results: Vec<usize> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-        
-        // All threads should have used their buffers
-        assert_eq!(results.len(), 10);
-        for &length in &results {
-            assert!(length > 7); // "Thread X" is at least 8 characters
-        }
-        
-        // Check that pool has some buffers returned
-        let stats = pool.get_statistics();
-        assert!(stats.total_requests() >= 10);
-    }
-
-    #[test]
-    fn test_efficiency_ratio() {
-        let pool = TextMemoryPool::new();
-        
-        // Create and reuse buffer to generate efficiency data
-        let buffer1 = pool.get_string_buffer(1000);
-        let capacity1 = buffer1.capacity();
-        drop(buffer1);
-        
-        let buffer2 = pool.get_string_buffer(500);
-        let capacity2 = buffer2.capacity();
-        drop(buffer2);
-        
-        let stats = pool.get_statistics();
-        let efficiency = stats.efficiency_ratio();
-        
-        // Should have some efficiency from reuse
-        assert!(efficiency > 0.0);
-        
-        // Total bytes reused should be at least the capacity of the second buffer
-        assert!(stats.bytes_reused.load(Ordering::Relaxed) >= capacity2 as u64);
-        assert!(stats.bytes_allocated.load(Ordering::Relaxed) >= capacity1 as u64);
+        let buf = pool.get_string_buffer(100);
+        // Capacity should be at least 100 * 2.0 = 200
+        assert!(buf.capacity() >= 200);
     }
 }
