@@ -244,7 +244,7 @@ async fn test_storage_validation_methods() {
     // Test header validation on fresh storage
     storage.validate_headers().unwrap();
     storage.validate_file_sizes().unwrap();
-    storage.verify_checksums().unwrap(); // Currently a no-op
+    storage.verify_checksums().unwrap(); // Verify data integrity
 
     // Add some data
     let doc_id = DocumentId::new();

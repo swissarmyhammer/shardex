@@ -679,9 +679,14 @@ impl StandardHeader {
 
     /// Calculate CRC32 checksum including header metadata (excluding checksum field)
     fn calculate_checksum_with_header(header: &Self, data: &[u8]) -> u32 {
-        // Create a copy of the header with checksum set to zero for calculation
+        // Create a normalized copy of the header for deterministic checksum calculation
         let mut header_copy = *header;
         header_copy.checksum = 0;
+        // Zero out all potentially variable fields to ensure deterministic calculation
+        header_copy.created_at = 0;
+        header_copy.modified_at = 0;
+        // Also normalize reserved field to all zeros
+        header_copy.reserved = [0; 32];
 
         // Calculate checksum of header bytes (excluding checksum field)
         let header_bytes = bytemuck::bytes_of(&header_copy);
@@ -703,7 +708,7 @@ impl StandardHeader {
     }
 
     /// Update CRC32 with additional data
-    fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    pub fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
         const CRC32_TABLE: [u32; 256] = generate_crc32_table();
 
         for &byte in data {

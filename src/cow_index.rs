@@ -31,15 +31,15 @@
 //! - **Peak Usage**: During write commits when both old and new versions exist
 //!
 //! ## Optimization Strategies
-//! 
+//!
 //! ### Limit Concurrent Writers
 //! ```rust,no_run
 //! // Use semaphore to limit concurrent COW operations
 //! use tokio::sync::Semaphore;
 //! use std::sync::Arc;
-//! 
+//!
 //! let write_semaphore = Arc::new(Semaphore::new(4)); // Max 4 concurrent writers
-//! 
+//!
 //! async fn optimized_write(cow_index: &CowShardexIndex, semaphore: &Semaphore) -> Result<(), ShardexError> {
 //!     let _permit = semaphore.acquire().await.unwrap();
 //!     let mut writer = cow_index.clone_for_write()?;
@@ -65,7 +65,7 @@
 //! let metrics = cow_index.metrics().await;
 //! if metrics.estimated_memory_usage_bytes > threshold {
 //!     // Implement backpressure or cleanup
-//!     warn!("High COW memory usage: {} MB", 
+//!     warn!("High COW memory usage: {} MB",
 //!           metrics.estimated_memory_usage_bytes / 1024 / 1024);
 //! }
 //! ```
@@ -73,7 +73,7 @@
 //! ### Configure Memory Estimates
 //! ```rust,no_run
 //! use shardex::cow_index::CowMemoryConfig;
-//! 
+//!
 //! let memory_config = CowMemoryConfig {
 //!     metadata_bytes_per_shard: 512,  // Larger if you have complex metadata
 //!     average_vectors_per_shard: 2000, // Adjust based on your shard size
@@ -83,10 +83,10 @@
 //! ```
 //!
 //! ## Warning for Large Deployments
-//! 
-//! **⚠️ Memory Usage Warning**: In deployments with >10GB indices and >10 concurrent 
-//! writers, COW operations may consume significant memory (potentially 2-3x the base 
-//! index size). Monitor memory metrics closely and implement appropriate backpressure 
+//!
+//! **⚠️ Memory Usage Warning**: In deployments with >10GB indices and >10 concurrent
+//! writers, COW operations may consume significant memory (potentially 2-3x the base
+//! index size). Monitor memory metrics closely and implement appropriate backpressure
 //! mechanisms to prevent OOM conditions.
 //!
 //! # Usage Examples
@@ -593,9 +593,9 @@ impl CowShardexIndex {
 
         // Use configurable estimates rather than hardcoded values
         let metadata_size = shard_count * self.memory_config.metadata_bytes_per_shard;
-        let vector_memory = shard_count 
-            * index.vector_size() 
-            * std::mem::size_of::<f32>() 
+        let vector_memory = shard_count
+            * index.vector_size()
+            * std::mem::size_of::<f32>()
             * self.memory_config.average_vectors_per_shard;
 
         base_size + metadata_size + vector_memory
@@ -753,7 +753,7 @@ impl LazyIndexWriter {
         // 1. Update the shard metadata for modified shards
         // 2. Add new shards to the metadata collection
         // 3. Ensure the shard cache is properly updated
-        // 
+        //
         // For now, since we can't easily modify the existing ShardexIndex structure
         // without breaking changes, we'll document this as the path forward
         // and use the existing commit mechanism
@@ -800,7 +800,7 @@ impl LazyIndexWriter {
         let modified_shard_memory = self.modified_shards.len() * self.memory_config.modified_shard_overhead_bytes;
         let new_shard_memory = self.new_shards.len() * self.memory_config.new_shard_metadata_bytes;
         let base_overhead = std::mem::size_of::<LazyIndexWriter>();
-        
+
         base_overhead + modified_shard_memory + new_shard_memory
     }
 

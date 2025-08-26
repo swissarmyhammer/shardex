@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 mod common;
-use common::{TestEnvironment, create_test_concurrent_shardex};
+use common::{create_test_concurrent_shardex, TestEnvironment};
 
 /// Create a test ConcurrentShardex instance with custom configuration
 fn create_test_concurrent_shardex_with_config(
@@ -47,13 +47,12 @@ async fn test_high_contention_reader_performance() {
             let reader_start = Instant::now();
 
             for _ in 0..READS_PER_READER {
-                let result = concurrent_clone
-                    .read_operation(|index| {
-                        let shard_count = index.shard_count();
-                        // Simulate some work
-                        std::thread::sleep(std::time::Duration::from_micros(10));
-                        Ok(shard_count)
-                    });
+                let result = concurrent_clone.read_operation(|index| {
+                    let shard_count = index.shard_count();
+                    // Simulate some work
+                    std::thread::sleep(std::time::Duration::from_micros(10));
+                    Ok(shard_count)
+                });
 
                 if result.is_ok() {
                     successful_reads += 1;
@@ -143,13 +142,12 @@ async fn test_mixed_read_write_operations_no_deadlock() {
 
         tasks.spawn(async move {
             for op_id in 0..OPERATIONS_PER_TASK {
-                let result = concurrent_clone
-                    .read_operation(|index| {
-                        // Simulate variable read work (much shorter duration for timeout testing)
-                        let work_duration = (reader_id * op_id % 3) + 1; // Max 4ms instead of 11ms
-                        std::thread::sleep(std::time::Duration::from_millis(work_duration as u64));
-                        Ok(index.shard_count())
-                    });
+                let result = concurrent_clone.read_operation(|index| {
+                    // Simulate variable read work (much shorter duration for timeout testing)
+                    let work_duration = (reader_id * op_id % 3) + 1; // Max 4ms instead of 11ms
+                    std::thread::sleep(std::time::Duration::from_millis(work_duration as u64));
+                    Ok(index.shard_count())
+                });
 
                 if result.is_ok() {
                     success_counter.fetch_add(1, Ordering::SeqCst);
@@ -188,17 +186,17 @@ async fn test_mixed_read_write_operations_no_deadlock() {
         // Wait for all tasks to complete or timeout
         let mut completed_tasks = 0;
         let total_tasks = NUM_READERS + NUM_WRITERS;
-        
+
         while let Some(result) = tasks.join_next().await {
             result.expect("Task should not panic");
             completed_tasks += 1;
-            
+
             // Log progress to help debug timeout issues
             if completed_tasks % 10 == 0 {
                 println!("Completed {}/{} tasks", completed_tasks, total_tasks);
             }
         }
-        
+
         println!("All {} tasks completed successfully", completed_tasks);
     })
     .await;
@@ -339,11 +337,10 @@ async fn test_concurrency_metrics_real_time_tracking() {
 
     // Test metrics tracking during a synchronous read operation
     // This follows the pattern from the working test in concurrent.rs
-    let result = concurrent
-        .read_operation(|index| {
-            // Read operation should work successfully
-            Ok(index.shard_count())
-        });
+    let result = concurrent.read_operation(|index| {
+        // Read operation should work successfully
+        Ok(index.shard_count())
+    });
 
     // Verify the operation completed successfully
     assert!(result.is_ok(), "Read operation should succeed");
@@ -376,19 +373,18 @@ async fn test_reader_writer_isolation() {
     let reader_snapshot_clone = Arc::clone(&reader_snapshot);
 
     let reader_task = tokio::spawn(async move {
-        concurrent_clone
-            .read_operation(|index| {
-                let shard_count = index.shard_count();
+        concurrent_clone.read_operation(|index| {
+            let shard_count = index.shard_count();
 
-                // Store the snapshot for later verification
-                if let Ok(mut snapshot) = reader_snapshot_clone.lock() {
-                    *snapshot = Some(shard_count);
-                }
+            // Store the snapshot for later verification
+            if let Ok(mut snapshot) = reader_snapshot_clone.lock() {
+                *snapshot = Some(shard_count);
+            }
 
-                // Hold the reader for a while to test isolation
-                std::thread::sleep(Duration::from_millis(100));
-                Ok(shard_count)
-            })
+            // Hold the reader for a while to test isolation
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(shard_count)
+        })
     });
 
     // Give reader time to acquire its snapshot
@@ -465,8 +461,7 @@ async fn test_epoch_based_coordination() {
         previous_epoch = current_metrics.current_epoch;
 
         // Read operations should not advance the epoch
-        let read_result = concurrent
-            .read_operation(|index| Ok(index.shard_count()));
+        let read_result = concurrent.read_operation(|index| Ok(index.shard_count()));
         assert!(read_result.is_ok(), "Read operation {} should succeed", i);
 
         let after_read_metrics = concurrent.concurrency_metrics().await;
@@ -491,8 +486,8 @@ async fn test_graceful_error_handling() {
     let concurrent = create_test_concurrent_shardex(&_test_env);
 
     // Test read operation error handling
-    let read_result: Result<(), _> = concurrent
-        .read_operation(|_index| Err(shardex::ShardexError::Config("Simulated read error".to_string())));
+    let read_result: Result<(), _> =
+        concurrent.read_operation(|_index| Err(shardex::ShardexError::Config("Simulated read error".to_string())));
 
     assert!(read_result.is_err());
     assert!(read_result
@@ -512,8 +507,7 @@ async fn test_graceful_error_handling() {
         .contains("Simulated write error"));
 
     // Verify the system is still functional after errors
-    let recovery_read = concurrent
-        .read_operation(|index| Ok(index.shard_count()));
+    let recovery_read = concurrent.read_operation(|index| Ok(index.shard_count()));
 
     assert!(recovery_read.is_ok(), "System should recover from errors");
 
@@ -545,13 +539,12 @@ async fn test_stress_concurrent_operations() {
         tasks.spawn(async move {
             let mut operations = 0;
             while start_time.elapsed() < STRESS_DURATION {
-                let result = concurrent_clone
-                    .read_operation(|index| {
-                        // Variable workload
-                        let work_us = (reader_id % 10) + 1;
-                        std::thread::sleep(std::time::Duration::from_micros(work_us as u64));
-                        Ok(index.shard_count())
-                    });
+                let result = concurrent_clone.read_operation(|index| {
+                    // Variable workload
+                    let work_us = (reader_id % 10) + 1;
+                    std::thread::sleep(std::time::Duration::from_micros(work_us as u64));
+                    Ok(index.shard_count())
+                });
 
                 if result.is_ok() {
                     operations += 1;

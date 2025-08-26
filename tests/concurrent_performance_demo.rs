@@ -3,15 +3,14 @@
 //! This test demonstrates that the concurrent coordination system provides
 //! the expected performance characteristics and deadlock-free operation.
 
-use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexIndex};
+// Placeholder file - performance demo not currently implemented
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
 
 mod common;
-use common::{TestEnvironment, create_test_concurrent_shardex};
-}
+use common::{create_test_concurrent_shardex, TestEnvironment};
 
 #[tokio::test]
 async fn test_concurrent_throughput_demonstration() {
@@ -35,12 +34,11 @@ async fn test_concurrent_throughput_demonstration() {
         tasks.spawn(async move {
             let mut reader_successes = 0;
             for _op in 0..OPERATIONS_PER_READER {
-                let result = concurrent_clone
-                    .read_operation(|index| {
-                        // Simulate light read work
-                        let shard_count = index.shard_count();
-                        Ok(shard_count)
-                    });
+                let result = concurrent_clone.read_operation(|index| {
+                    // Simulate light read work
+                    let shard_count = index.shard_count();
+                    Ok(shard_count)
+                });
 
                 if result.is_ok() {
                     reader_successes += 1;
@@ -146,11 +144,10 @@ async fn test_basic_coordination_functionality() {
     let concurrent = create_test_concurrent_shardex(&_test_env);
 
     // Test basic read functionality
-    let read_result = concurrent
-        .read_operation(|index| {
-            let shard_count = index.shard_count();
-            Ok(shard_count)
-        });
+    let read_result = concurrent.read_operation(|index| {
+        let shard_count = index.shard_count();
+        Ok(shard_count)
+    });
 
     assert!(read_result.is_ok(), "Basic read operation should succeed");
     assert_eq!(read_result.unwrap(), 0, "Empty index should have 0 shards");
@@ -224,12 +221,11 @@ async fn test_concurrent_readers_non_blocking() {
         tasks.spawn(async move {
             let reader_start = Instant::now();
 
-            let result = concurrent_clone
-                .read_operation(|index| {
-                    // Simulate some read work
-                    std::thread::sleep(Duration::from_millis(10));
-                    Ok(index.shard_count())
-                });
+            let result = concurrent_clone.read_operation(|index| {
+                // Simulate some read work
+                std::thread::sleep(Duration::from_millis(10));
+                Ok(index.shard_count())
+            });
 
             let reader_duration = reader_start.elapsed();
             (reader_id, result, reader_duration)
