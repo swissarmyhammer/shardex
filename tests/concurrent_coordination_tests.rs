@@ -20,8 +20,8 @@ struct TestEnvironment {
 
 impl TestEnvironment {
     fn new(test_name: &str) -> Self {
-        let temp_dir = TempDir::new()
-            .unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
+        let temp_dir =
+            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
 
         Self {
             temp_dir,
@@ -225,10 +225,7 @@ async fn test_mixed_read_write_operations_no_deadlock() {
     })
     .await;
 
-    assert!(
-        test_result.is_ok(),
-        "Test timed out - possible deadlock detected"
-    );
+    assert!(test_result.is_ok(), "Test timed out - possible deadlock detected");
 
     let total_successful = successful_operations.load(Ordering::SeqCst);
     let expected_operations = (NUM_READERS + NUM_WRITERS) * OPERATIONS_PER_TASK;
@@ -291,9 +288,7 @@ async fn test_write_operation_timeout_behavior() {
         let error_msg = result.unwrap_err().to_string();
         // Accept timeout or other coordination errors
         assert!(
-            error_msg.contains("timed out")
-                || error_msg.contains("contention")
-                || error_msg.contains("coordination"),
+            error_msg.contains("timed out") || error_msg.contains("contention") || error_msg.contains("coordination"),
             "Unexpected error: {}",
             error_msg
         );
@@ -450,10 +445,7 @@ async fn test_reader_writer_isolation() {
         let snapshot = reader_snapshot.lock().unwrap();
         *snapshot
     };
-    assert!(
-        snapshot_value.is_some(),
-        "Reader should have captured a snapshot"
-    );
+    assert!(snapshot_value.is_some(), "Reader should have captured a snapshot");
 
     // Verify that a new reader sees the current state
     let current_state = concurrent
@@ -526,11 +518,7 @@ async fn test_graceful_error_handling() {
 
     // Test read operation error handling
     let read_result: Result<(), _> = concurrent
-        .read_operation(|_index| {
-            Err(shardex::ShardexError::Config(
-                "Simulated read error".to_string(),
-            ))
-        })
+        .read_operation(|_index| Err(shardex::ShardexError::Config("Simulated read error".to_string())))
         .await;
 
     assert!(read_result.is_err());
@@ -541,11 +529,7 @@ async fn test_graceful_error_handling() {
 
     // Test write operation error handling
     let write_result: Result<(), _> = concurrent
-        .write_operation(|_writer| {
-            Err(shardex::ShardexError::Config(
-                "Simulated write error".to_string(),
-            ))
-        })
+        .write_operation(|_writer| Err(shardex::ShardexError::Config("Simulated write error".to_string())))
         .await;
 
     assert!(write_result.is_err());

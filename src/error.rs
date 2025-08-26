@@ -157,11 +157,7 @@ impl ShardexError {
     }
 
     /// Create an invalid input error
-    pub fn invalid_input(
-        field: impl Into<String>,
-        reason: impl Into<String>,
-        suggestion: impl Into<String>,
-    ) -> Self {
+    pub fn invalid_input(field: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
         Self::InvalidInput {
             field: field.into(),
             reason: reason.into(),
@@ -186,11 +182,7 @@ impl ShardexError {
     }
 
     /// Create a transient failure error with retry context
-    pub fn transient_failure(
-        operation: impl Into<String>,
-        reason: impl Into<String>,
-        retry_count: usize,
-    ) -> Self {
+    pub fn transient_failure(operation: impl Into<String>, reason: impl Into<String>, retry_count: usize) -> Self {
         let recovery_suggestion = if retry_count == 0 {
             "This operation can be retried. Consider implementing exponential backoff."
         } else {
@@ -232,25 +224,13 @@ impl ShardexError {
     }
 
     /// Create a corruption error with recovery action
-    pub fn corruption_with_recovery(
-        reason: impl Into<String>,
-        recovery_action: impl Into<String>,
-    ) -> Self {
+    pub fn corruption_with_recovery(reason: impl Into<String>, recovery_action: impl Into<String>) -> Self {
         Self::Corruption(format!("{}: {}", reason.into(), recovery_action.into()))
     }
 
     /// Create a detailed config error
-    pub fn config_error(
-        field: impl Into<String>,
-        reason: impl Into<String>,
-        suggestion: impl Into<String>,
-    ) -> Self {
-        Self::Config(format!(
-            "{} - {}: {}",
-            field.into(),
-            reason.into(),
-            suggestion.into()
-        ))
+    pub fn config_error(field: impl Into<String>, reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
+        Self::Config(format!("{} - {}: {}", field.into(), reason.into(), suggestion.into()))
     }
 
     /// Create an invalid text range error
@@ -304,21 +284,12 @@ impl ShardexError {
     }
 
     /// Add file context to an error, preserving the original error information
-    pub fn with_file_context(
-        self,
-        file_path: impl AsRef<std::path::Path>,
-        operation: &str,
-    ) -> Self {
+    pub fn with_file_context(self, file_path: impl AsRef<std::path::Path>, operation: &str) -> Self {
         let file_path_str = file_path.as_ref().display().to_string();
         let context = format!("{} (file: {})", operation, file_path_str);
-        
+
         match self {
-            Self::Io(ref err) => {
-                Self::Io(std::io::Error::new(
-                    err.kind(),
-                    format!("{}: {}", context, err),
-                ))
-            }
+            Self::Io(ref err) => Self::Io(std::io::Error::new(err.kind(), format!("{}: {}", context, err))),
             Self::Config(ref msg) => Self::Config(format!("{}: {}", context, msg)),
             Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: {}", context, msg)),
             Self::Wal(ref msg) => Self::Wal(format!("{}: {}", context, msg)),
@@ -333,14 +304,9 @@ impl ShardexError {
     /// Add operation context to an error, preserving the original error information
     pub fn with_operation_context(self, operation: &str, additional_context: &str) -> Self {
         let context = format!("{}: {}", operation, additional_context);
-        
+
         match self {
-            Self::Io(ref err) => {
-                Self::Io(std::io::Error::new(
-                    err.kind(),
-                    format!("{}: {}", context, err),
-                ))
-            }
+            Self::Io(ref err) => Self::Io(std::io::Error::new(err.kind(), format!("{}: {}", context, err))),
             Self::Config(ref msg) => Self::Config(format!("{}: {}", context, msg)),
             Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: {}", context, msg)),
             Self::Wal(ref msg) => Self::Wal(format!("{}: {}", context, msg)),
@@ -348,7 +314,11 @@ impl ShardexError {
             Self::Search(ref msg) => Self::Search(format!("{}: {}", context, msg)),
             Self::Corruption(ref msg) => Self::Corruption(format!("{}: {}", context, msg)),
             Self::TextCorruption(ref msg) => Self::TextCorruption(format!("{}: {}", context, msg)),
-            Self::InvalidInput { field, reason, suggestion } => Self::InvalidInput {
+            Self::InvalidInput {
+                field,
+                reason,
+                suggestion,
+            } => Self::InvalidInput {
                 field: field.clone(),
                 reason: format!("{}: {}", context, reason),
                 suggestion: suggestion.clone(),
@@ -361,20 +331,31 @@ impl ShardexError {
                 reason: format!("{}: {}", context, reason),
                 suggestion: suggestion.clone(),
             },
-            Self::TransientFailure { operation: op, reason, recovery_suggestion, retry_count } => {
-                Self::TransientFailure {
-                    operation: format!("{}: {}", context, op),
-                    reason: reason.clone(),
-                    recovery_suggestion: recovery_suggestion.clone(),
-                    retry_count,
-                }
+            Self::TransientFailure {
+                operation: op,
+                reason,
+                recovery_suggestion,
+                retry_count,
+            } => Self::TransientFailure {
+                operation: format!("{}: {}", context, op),
+                reason: reason.clone(),
+                recovery_suggestion: recovery_suggestion.clone(),
+                retry_count,
             },
-            Self::ResourceExhausted { resource, reason, suggestion } => Self::ResourceExhausted {
+            Self::ResourceExhausted {
+                resource,
+                reason,
+                suggestion,
+            } => Self::ResourceExhausted {
                 resource: resource.clone(),
                 reason: format!("{}: {}", context, reason),
                 suggestion: suggestion.clone(),
             },
-            Self::ConcurrencyError { operation: op, reason, suggestion } => Self::ConcurrencyError {
+            Self::ConcurrencyError {
+                operation: op,
+                reason,
+                suggestion,
+            } => Self::ConcurrencyError {
                 operation: format!("{}: {}", context, op),
                 reason: reason.clone(),
                 suggestion: suggestion.clone(),
@@ -384,12 +365,9 @@ impl ShardexError {
     }
 
     /// Chain this error with a source error, providing error causality
-    pub fn chain_with_source(
-        self,
-        source: Box<dyn std::error::Error + Send + Sync>,
-    ) -> Self {
+    pub fn chain_with_source(self, source: Box<dyn std::error::Error + Send + Sync>) -> Self {
         let source_msg = source.to_string();
-        
+
         match self {
             Self::Config(ref msg) => Self::Config(format!("{}: caused by {}", msg, source_msg)),
             Self::MemoryMapping(ref msg) => Self::MemoryMapping(format!("{}: caused by {}", msg, source_msg)),
@@ -418,15 +396,16 @@ impl ShardexError {
         reason: impl Into<String>,
     ) -> Self {
         let file_path_str = file_path.as_ref().display().to_string();
-        Self::MemoryMapping(format!("{} failed for file {}: {}", operation, file_path_str, reason.into()))
+        Self::MemoryMapping(format!(
+            "{} failed for file {}: {}",
+            operation,
+            file_path_str,
+            reason.into()
+        ))
     }
 
     /// Create a WAL operation error with context
-    pub fn wal_operation_failed(
-        operation: &str,
-        context: &str,
-        reason: impl Into<String>,
-    ) -> Self {
+    pub fn wal_operation_failed(operation: &str, context: &str, reason: impl Into<String>) -> Self {
         Self::Wal(format!("{} ({}): {}", operation, context, reason.into()))
     }
 
@@ -440,11 +419,7 @@ impl ShardexError {
     }
 
     /// Create a search operation error with context
-    pub fn search_operation_failed(
-        operation: &str,
-        context: &str,
-        reason: impl Into<String>,
-    ) -> Self {
+    pub fn search_operation_failed(operation: &str, context: &str, reason: impl Into<String>) -> Self {
         Self::Search(format!("{} ({}): {}", operation, context, reason.into()))
     }
 }
@@ -480,10 +455,7 @@ mod tests {
             actual: 512,
         };
         let display_str = format!("{}", error);
-        assert_eq!(
-            display_str,
-            "Invalid vector dimension: expected 384, got 512"
-        );
+        assert_eq!(display_str, "Invalid vector dimension: expected 384, got 512");
     }
 
     #[test]
@@ -500,10 +472,7 @@ mod tests {
     fn test_corruption_error_display() {
         let error = ShardexError::Corruption("Magic bytes mismatch".to_string());
         let display_str = format!("{}", error);
-        assert_eq!(
-            display_str,
-            "Index corruption detected: Magic bytes mismatch"
-        );
+        assert_eq!(display_str, "Index corruption detected: Magic bytes mismatch");
     }
 
     #[test]
@@ -555,11 +524,7 @@ mod tests {
 
     #[test]
     fn test_invalid_input_error() {
-        let error = ShardexError::invalid_input(
-            "query_vector",
-            "cannot be empty",
-            "Provide a non-empty vector",
-        );
+        let error = ShardexError::invalid_input("query_vector", "cannot be empty", "Provide a non-empty vector");
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid input: query_vector"));
         assert!(display_str.contains("cannot be empty"));
@@ -568,10 +533,7 @@ mod tests {
 
     #[test]
     fn test_invalid_document_id_error() {
-        let error = ShardexError::invalid_document_id(
-            "document ID is zero",
-            "Use a valid non-zero document ID",
-        );
+        let error = ShardexError::invalid_document_id("document ID is zero", "Use a valid non-zero document ID");
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid document ID: document ID is zero"));
         assert!(display_str.contains("Use a valid non-zero document ID"));
@@ -579,10 +541,8 @@ mod tests {
 
     #[test]
     fn test_invalid_posting_data_error() {
-        let error = ShardexError::invalid_posting_data(
-            "vector contains NaN values",
-            "Remove NaN values from your data",
-        );
+        let error =
+            ShardexError::invalid_posting_data("vector contains NaN values", "Remove NaN values from your data");
         let display_str = format!("{}", error);
         assert!(display_str.contains("Invalid posting data: vector contains NaN values"));
         assert!(display_str.contains("Remove NaN values"));
@@ -599,11 +559,7 @@ mod tests {
 
     #[test]
     fn test_resource_exhausted_error() {
-        let error = ShardexError::resource_exhausted(
-            "memory",
-            "heap allocation failed",
-            "Increase available memory",
-        );
+        let error = ShardexError::resource_exhausted("memory", "heap allocation failed", "Increase available memory");
         let display_str = format!("{}", error);
         assert!(display_str.contains("Resource exhausted: memory"));
         assert!(display_str.contains("heap allocation failed"));
@@ -612,11 +568,8 @@ mod tests {
 
     #[test]
     fn test_concurrency_error() {
-        let error = ShardexError::concurrency_error(
-            "shard_write",
-            "write lock contention",
-            "Reduce concurrent operations",
-        );
+        let error =
+            ShardexError::concurrency_error("shard_write", "write lock contention", "Reduce concurrent operations");
         let display_str = format!("{}", error);
         assert!(display_str.contains("Concurrency error: shard_write"));
         assert!(display_str.contains("write lock contention"));
@@ -651,8 +604,7 @@ mod tests {
     #[test]
     fn test_dimension_context_suggestions() {
         let search_error = ShardexError::invalid_dimension_with_context(384, 512, "search_query");
-        let posting_error =
-            ShardexError::invalid_dimension_with_context(384, 512, "posting_vector");
+        let posting_error = ShardexError::invalid_dimension_with_context(384, 512, "posting_vector");
         let config_error = ShardexError::invalid_dimension_with_context(384, 512, "configuration");
         let default_error = ShardexError::invalid_dimension_with_context(384, 512, "unknown");
 
@@ -716,10 +668,7 @@ mod tests {
     fn test_text_corruption_error_display() {
         let error = ShardexError::TextCorruption("Invalid UTF-8 sequence".to_string());
         let display_str = format!("{}", error);
-        assert_eq!(
-            display_str,
-            "Text storage corruption: Invalid UTF-8 sequence"
-        );
+        assert_eq!(display_str, "Text storage corruption: Invalid UTF-8 sequence");
     }
 
     #[test]
@@ -794,13 +743,10 @@ mod tests {
     #[test]
     fn test_with_file_context() {
         use std::path::Path;
-        
-        let io_error = ShardexError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "File not found",
-        ));
+
+        let io_error = ShardexError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "File not found"));
         let contextual_error = io_error.with_file_context(Path::new("/tmp/test.dat"), "reading shard data");
-        
+
         let error_str = format!("{}", contextual_error);
         assert!(error_str.contains("reading shard data"));
         assert!(error_str.contains("/tmp/test.dat"));
@@ -810,10 +756,10 @@ mod tests {
     #[test]
     fn test_with_file_context_config_error() {
         use std::path::Path;
-        
+
         let config_error = ShardexError::Config("Invalid dimension".to_string());
         let contextual_error = config_error.with_file_context(Path::new("/etc/shardex.conf"), "parsing configuration");
-        
+
         let error_str = format!("{}", contextual_error);
         assert!(error_str.contains("parsing configuration"));
         assert!(error_str.contains("/etc/shardex.conf"));
@@ -824,7 +770,7 @@ mod tests {
     fn test_with_operation_context() {
         let config_error = ShardexError::Config("Missing field".to_string());
         let contextual_error = config_error.with_operation_context("index initialization", "validating shard count");
-        
+
         let error_str = format!("{}", contextual_error);
         assert!(error_str.contains("index initialization"));
         assert!(error_str.contains("validating shard count"));
@@ -839,7 +785,7 @@ mod tests {
             suggestion: "Provide a positive integer".to_string(),
         };
         let contextual_error = input_error.with_operation_context("posting validation", "checking vector dimensions");
-        
+
         let error_str = format!("{}", contextual_error);
         assert!(error_str.contains("posting validation"));
         assert!(error_str.contains("checking vector dimensions"));
@@ -847,7 +793,7 @@ mod tests {
         assert!(error_str.contains("Provide a positive integer"));
     }
 
-    #[test] 
+    #[test]
     fn test_with_operation_context_transient_failure() {
         let transient_error = ShardexError::TransientFailure {
             operation: "disk write".to_string(),
@@ -856,7 +802,7 @@ mod tests {
             retry_count: 1,
         };
         let contextual_error = transient_error.with_operation_context("shard persistence", "syncing to disk");
-        
+
         let error_str = format!("{}", contextual_error);
         assert!(error_str.contains("shard persistence"));
         assert!(error_str.contains("syncing to disk"));
@@ -869,7 +815,7 @@ mod tests {
         let config_error = ShardexError::Config("Parse error".to_string());
         let source_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid JSON");
         let chained_error = config_error.chain_with_source(Box::new(source_error));
-        
+
         let error_str = format!("{}", chained_error);
         assert!(error_str.contains("Parse error"));
         assert!(error_str.contains("caused by"));
@@ -879,10 +825,10 @@ mod tests {
     #[test]
     fn test_file_operation_failed() {
         use std::path::Path;
-        
+
         let io_error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Access denied");
         let error = ShardexError::file_operation_failed(Path::new("/data/shard.bin"), "opening shard file", io_error);
-        
+
         let error_str = format!("{}", error);
         assert!(error_str.contains("opening shard file"));
         assert!(error_str.contains("/data/shard.bin"));
@@ -892,13 +838,13 @@ mod tests {
     #[test]
     fn test_memory_mapping_failed() {
         use std::path::Path;
-        
+
         let error = ShardexError::memory_mapping_failed(
             Path::new("/data/vector.mmap"),
             "memory mapping vectors",
             "insufficient virtual memory",
         );
-        
+
         let error_str = format!("{}", error);
         assert!(error_str.contains("memory mapping vectors failed"));
         assert!(error_str.contains("/data/vector.mmap"));
@@ -907,12 +853,8 @@ mod tests {
 
     #[test]
     fn test_wal_operation_failed() {
-        let error = ShardexError::wal_operation_failed(
-            "log rotation",
-            "segment 5",
-            "disk full",
-        );
-        
+        let error = ShardexError::wal_operation_failed("log rotation", "segment 5", "disk full");
+
         let error_str = format!("{}", error);
         assert!(error_str.contains("log rotation"));
         assert!(error_str.contains("segment 5"));
@@ -922,7 +864,7 @@ mod tests {
     #[test]
     fn test_shard_operation_failed() {
         let error = ShardexError::shard_operation_failed(42, "split operation", "insufficient data");
-        
+
         let error_str = format!("{}", error);
         assert!(error_str.contains("Shard 42"));
         assert!(error_str.contains("split operation"));
@@ -931,12 +873,8 @@ mod tests {
 
     #[test]
     fn test_search_operation_failed() {
-        let error = ShardexError::search_operation_failed(
-            "vector similarity search",
-            "shard 7",
-            "corrupted index",
-        );
-        
+        let error = ShardexError::search_operation_failed("vector similarity search", "shard 7", "corrupted index");
+
         let error_str = format!("{}", error);
         assert!(error_str.contains("vector similarity search"));
         assert!(error_str.contains("shard 7"));
@@ -946,12 +884,12 @@ mod tests {
     #[test]
     fn test_context_chaining() {
         use std::path::Path;
-        
+
         // Test that multiple context applications work correctly
         let base_error = ShardexError::Config("Invalid setting".to_string());
         let error_with_file = base_error.with_file_context(Path::new("/etc/config.toml"), "loading config");
         let error_with_operation = error_with_file.with_operation_context("startup", "initializing system");
-        
+
         let error_str = format!("{}", error_with_operation);
         assert!(error_str.contains("startup"));
         assert!(error_str.contains("initializing system"));
@@ -968,16 +906,16 @@ mod tests {
             recovery_suggestion: "test".to_string(),
             retry_count: 1,
         };
-        
+
         let contextual_error = transient_error.with_operation_context("test_op", "test_context");
-        
+
         // Ensure error classification is preserved after adding context
         assert!(contextual_error.is_transient());
         assert!(contextual_error.is_recoverable());
         assert_eq!(contextual_error.retry_count(), Some(1));
     }
 
-    #[test] 
+    #[test]
     fn test_structured_error_context_preservation() {
         // Test that structured errors preserve their structure when context is added
         let invalid_input = ShardexError::InvalidInput {
@@ -985,17 +923,21 @@ mod tests {
             reason: "test_reason".to_string(),
             suggestion: "test_suggestion".to_string(),
         };
-        
+
         let contextual_error = invalid_input.with_operation_context("validation", "checking input");
-        
+
         match contextual_error {
-            ShardexError::InvalidInput { field, reason, suggestion } => {
+            ShardexError::InvalidInput {
+                field,
+                reason,
+                suggestion,
+            } => {
                 assert_eq!(field, "test_field");
                 assert!(reason.contains("validation"));
                 assert!(reason.contains("checking input"));
                 assert!(reason.contains("test_reason"));
                 assert_eq!(suggestion, "test_suggestion");
-            },
+            }
             _ => panic!("Expected InvalidInput variant to be preserved"),
         }
     }
@@ -1003,46 +945,38 @@ mod tests {
     #[test]
     fn test_error_context_integration_validation() {
         use std::path::Path;
-        
+
         // Comprehensive test of all error context enhancement features
         let base_error = ShardexError::Config("Invalid vector dimension setting".to_string());
-        
+
         // Test file context
-        let file_error = base_error.with_file_context(
-            Path::new("/etc/shardex/index.toml"),
-            "loading index configuration"
-        );
-        
-        // Test operation context  
-        let operation_error = file_error.with_operation_context(
-            "system initialization",
-            "preparing search engine"
-        );
-        
+        let file_error =
+            base_error.with_file_context(Path::new("/etc/shardex/index.toml"), "loading index configuration");
+
+        // Test operation context
+        let operation_error = file_error.with_operation_context("system initialization", "preparing search engine");
+
         let error_msg = format!("{}", operation_error);
-        
+
         // Verify all context information is present
         assert!(error_msg.contains("system initialization"));
         assert!(error_msg.contains("preparing search engine"));
         assert!(error_msg.contains("loading index configuration"));
         assert!(error_msg.contains("/etc/shardex/index.toml"));
         assert!(error_msg.contains("Invalid vector dimension setting"));
-        
+
         // Test helper methods
-        let shard_error = ShardexError::shard_operation_failed(
-            42,
-            "split operation",
-            "insufficient vectors for clustering"
-        );
+        let shard_error =
+            ShardexError::shard_operation_failed(42, "split operation", "insufficient vectors for clustering");
         let shard_msg = format!("{}", shard_error);
         assert!(shard_msg.contains("Shard 42"));
         assert!(shard_msg.contains("split operation"));
         assert!(shard_msg.contains("insufficient vectors for clustering"));
-        
+
         // Test transient error classification preservation
         let transient = ShardexError::transient_failure("network write", "connection timeout", 3);
         let contextual_transient = transient.with_operation_context("data persistence", "syncing to storage");
-        
+
         assert!(contextual_transient.is_transient());
         assert!(contextual_transient.is_recoverable());
         assert_eq!(contextual_transient.retry_count(), Some(3));

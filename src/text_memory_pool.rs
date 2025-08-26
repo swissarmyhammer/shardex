@@ -240,13 +240,7 @@ impl TextMemoryPool {
     }
 
     /// Pre-warm pool with buffers of specified capacities
-    pub fn prewarm(
-        &self,
-        string_count: usize,
-        string_capacity: usize,
-        byte_count: usize,
-        byte_capacity: usize,
-    ) {
+    pub fn prewarm(&self, string_count: usize, string_capacity: usize, byte_count: usize, byte_capacity: usize) {
         // Pre-warm string pool
         {
             let mut pool = self.string_pool.lock();
@@ -271,8 +265,13 @@ impl TextMemoryPool {
             }
         }
 
-        log::debug!("Pre-warmed pool with {} string buffers ({} bytes each) and {} byte buffers ({} bytes each)",
-                   string_count, string_capacity, byte_count, byte_capacity);
+        log::debug!(
+            "Pre-warmed pool with {} string buffers ({} bytes each) and {} byte buffers ({} bytes each)",
+            string_count,
+            string_capacity,
+            byte_count,
+            byte_capacity
+        );
     }
 
     /// Perform cleanup of expired and oversized buffers

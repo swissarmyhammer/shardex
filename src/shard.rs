@@ -156,11 +156,7 @@ impl ShardMetadata {
     }
 
     /// Update metadata from storage components
-    pub fn update_from_storages(
-        &mut self,
-        vector_storage: &VectorStorage,
-        posting_storage: &PostingStorage,
-    ) {
+    pub fn update_from_storages(&mut self, vector_storage: &VectorStorage, posting_storage: &PostingStorage) {
         self.current_count = vector_storage
             .current_count()
             .max(posting_storage.current_count());
@@ -169,9 +165,8 @@ impl ShardMetadata {
             .min(posting_storage.active_count());
 
         // Estimate disk usage (this is a rough estimate)
-        let vector_file_size = std::mem::size_of::<f32>()
-            * vector_storage.capacity()
-            * vector_storage.vector_dimension();
+        let vector_file_size =
+            std::mem::size_of::<f32>() * vector_storage.capacity() * vector_storage.vector_dimension();
         let posting_file_size = posting_storage.capacity() * (16 + 4 + 4 + 1); // rough estimate
         self.disk_usage = vector_file_size + posting_file_size;
     }
@@ -202,22 +197,13 @@ impl Shard {
     /// * `capacity` - Maximum number of postings this shard can hold
     /// * `vector_size` - Number of dimensions per vector
     /// * `directory` - Directory where shard files will be created
-    pub fn create(
-        id: ShardId,
-        capacity: usize,
-        vector_size: usize,
-        directory: PathBuf,
-    ) -> Result<Self, ShardexError> {
+    pub fn create(id: ShardId, capacity: usize, vector_size: usize, directory: PathBuf) -> Result<Self, ShardexError> {
         // Validate parameters
         if capacity == 0 {
-            return Err(ShardexError::Config(
-                "Shard capacity cannot be zero".to_string(),
-            ));
+            return Err(ShardexError::Config("Shard capacity cannot be zero".to_string()));
         }
         if vector_size == 0 {
-            return Err(ShardexError::Config(
-                "Vector size cannot be zero".to_string(),
-            ));
+            return Err(ShardexError::Config("Vector size cannot be zero".to_string()));
         }
 
         // Ensure directory exists
@@ -235,12 +221,11 @@ impl Shard {
         let _vector_storage = VectorStorage::create(&temp_vector_path, vector_size, capacity)
             .map_err(|e| ShardexError::Shard(format!("Failed to create vector storage: {}", e)))?;
 
-        let _posting_storage =
-            PostingStorage::create(&temp_posting_path, capacity).map_err(|e| {
-                // Clean up vector storage if posting creation fails
-                let _ = std::fs::remove_file(&temp_vector_path);
-                ShardexError::Shard(format!("Failed to create posting storage: {}", e))
-            })?;
+        let _posting_storage = PostingStorage::create(&temp_posting_path, capacity).map_err(|e| {
+            // Clean up vector storage if posting creation fails
+            let _ = std::fs::remove_file(&temp_vector_path);
+            ShardexError::Shard(format!("Failed to create posting storage: {}", e))
+        })?;
 
         // Atomically rename temporary files to final names
         std::fs::rename(&temp_vector_path, &vector_path).map_err(|e| {
@@ -590,22 +575,14 @@ impl Shard {
             .map_err(|e| ShardexError::Shard(format!("Failed to get posting: {}", e)))?;
 
         // Create posting with owned vector data
-        let posting = Posting::new(
-            document_id,
-            start,
-            length,
-            vector.to_vec(),
-            self.vector_size,
-        )?;
+        let posting = Posting::new(document_id, start, length, vector.to_vec(), self.vector_size)?;
 
         Ok(posting)
     }
 
     /// Iterate over all postings in reverse order (most recent first)
     /// This supports append-only semantics where newer postings supersede older ones
-    pub fn iter_postings_backward(
-        &self,
-    ) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
+    pub fn iter_postings_backward(&self) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
         (0..self.current_count())
             .rev()
             .map(move |index| match self.get_posting(index) {
@@ -617,9 +594,7 @@ impl Shard {
     /// Iterate over unique postings in append-only style
     /// Returns only the most recent posting for each (document_id, start, length) combination
     /// by reading backwards and skipping duplicates
-    pub fn iter_unique_postings_backward(
-        &self,
-    ) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
+    pub fn iter_unique_postings_backward(&self) -> impl Iterator<Item = Result<(usize, Posting), ShardexError>> + '_ {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
@@ -683,9 +658,10 @@ impl Shard {
         }
 
         // Get the vector before removing it for centroid update
-        let vector = self.vector_storage.get_vector(index).map_err(|e| {
-            ShardexError::Shard(format!("Failed to get vector for centroid update: {}", e))
-        })?;
+        let vector = self
+            .vector_storage
+            .get_vector(index)
+            .map_err(|e| ShardexError::Shard(format!("Failed to get vector for centroid update: {}", e)))?;
         let vector_copy = vector.to_vec(); // Copy to owned vector
 
         // Remove from both storages
@@ -999,13 +975,15 @@ impl Shard {
 
         // Validate each posting individually for consistency
         for i in 0..vector_count {
-            let vector_deleted = self.vector_storage.is_deleted(i).map_err(|e| {
-                ShardexError::Shard(format!("Failed to check vector deletion at {}: {}", i, e))
-            })?;
+            let vector_deleted = self
+                .vector_storage
+                .is_deleted(i)
+                .map_err(|e| ShardexError::Shard(format!("Failed to check vector deletion at {}: {}", i, e)))?;
 
-            let posting_deleted = self.posting_storage.is_deleted(i).map_err(|e| {
-                ShardexError::Shard(format!("Failed to check posting deletion at {}: {}", i, e))
-            })?;
+            let posting_deleted = self
+                .posting_storage
+                .is_deleted(i)
+                .map_err(|e| ShardexError::Shard(format!("Failed to check posting deletion at {}: {}", i, e)))?;
 
             if vector_deleted != posting_deleted {
                 return Err(ShardexError::Corruption(format!(
@@ -1016,13 +994,15 @@ impl Shard {
 
             // For active postings, validate they can be read correctly
             if !vector_deleted {
-                let _vector = self.vector_storage.get_vector(i).map_err(|e| {
-                    ShardexError::Corruption(format!("Cannot read vector at index {}: {}", i, e))
-                })?;
+                let _vector = self
+                    .vector_storage
+                    .get_vector(i)
+                    .map_err(|e| ShardexError::Corruption(format!("Cannot read vector at index {}: {}", i, e)))?;
 
-                let _posting = self.posting_storage.get_posting(i).map_err(|e| {
-                    ShardexError::Corruption(format!("Cannot read posting at index {}: {}", i, e))
-                })?;
+                let _posting = self
+                    .posting_storage
+                    .get_posting(i)
+                    .map_err(|e| ShardexError::Corruption(format!("Cannot read posting at index {}: {}", i, e)))?;
             }
         }
 
@@ -1235,9 +1215,7 @@ impl Shard {
     /// - Shard creation fails
     pub async fn split(&self) -> Result<(Shard, Shard), ShardexError> {
         if self.is_read_only() {
-            return Err(ShardexError::Config(
-                "Cannot split read-only shard".to_string(),
-            ));
+            return Err(ShardexError::Config("Cannot split read-only shard".to_string()));
         }
 
         if self.active_count() < 2 {
@@ -1271,19 +1249,9 @@ impl Shard {
         let shard_a_id = ShardId::new();
         let shard_b_id = ShardId::new();
 
-        let mut shard_a = Shard::create(
-            shard_a_id,
-            new_capacity,
-            self.vector_size,
-            self.directory.clone(),
-        )?;
+        let mut shard_a = Shard::create(shard_a_id, new_capacity, self.vector_size, self.directory.clone())?;
 
-        let mut shard_b = Shard::create(
-            shard_b_id,
-            new_capacity,
-            self.vector_size,
-            self.directory.clone(),
-        )?;
+        let mut shard_b = Shard::create(shard_b_id, new_capacity, self.vector_size, self.directory.clone())?;
 
         // Transfer postings to appropriate shards based on clustering
         for &index in &cluster_a_indices {
@@ -1304,167 +1272,11 @@ impl Shard {
     }
 
     /// Cluster vectors into two groups using k-means algorithm (k=2)
-    ///
-    /// This internal method performs k-means clustering to determine the best way
-    /// to split the shard's vectors into two balanced groups.
-    ///
-    /// # Returns
-    /// A tuple of two vectors containing the indices of postings for each cluster:
-    /// (cluster_a_indices, cluster_b_indices)
-    #[allow(dead_code)]
-    fn cluster_vectors(&self) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
-        let mut active_indices = Vec::new();
-        for i in 0..self.current_count() {
-            match self.is_deleted(i) {
-                Ok(deleted) => {
-                    if !deleted {
-                        active_indices.push(i);
-                    }
-                },
-                Err(e) => {
-                    return Err(e.with_operation_context(
-                        "vector clustering", 
-                        &format!("failed to check deletion status for index {}", i)
-                    ));
-                }
-            }
-        }
-
-        if active_indices.len() < 2 {
-            return Err(ShardexError::Config(
-                "Need at least 2 active vectors for clustering".to_string(),
-            ));
-        }
-
-        // For very small sets, just split in half
-        if active_indices.len() <= 4 {
-            let mid = active_indices.len() / 2;
-            let cluster_a = active_indices[..mid].to_vec();
-            let cluster_b = active_indices[mid..].to_vec();
-            return Ok((cluster_a, cluster_b));
-        }
-
-        // Initialize centroids using the two most distant vectors (furthest pair)
-        let (centroid_a_idx, centroid_b_idx) = self.find_furthest_pair(&active_indices)?;
-
-        // Check if all vectors are identical (pathological case for k-means)
-        let first_vector = self
-            .vector_storage
-            .get_vector(active_indices[0])
-            .map_err(|e| ShardexError::Shard(format!("Failed to get first vector: {}", e)))?;
-        let mut all_identical = true;
-
-        for &idx in &active_indices[1..] {
-            let vector = self.vector_storage.get_vector(idx).map_err(|e| {
-                ShardexError::Shard(format!("Failed to get vector for identity check: {}", e))
-            })?;
-            if Self::euclidean_distance(first_vector, vector) > 1e-6 {
-                all_identical = false;
-                break;
-            }
-        }
-
-        // If all vectors are identical, split evenly rather than using k-means
-        if all_identical {
-            let mid = active_indices.len() / 2;
-            let cluster_a = active_indices[..mid].to_vec();
-            let cluster_b = active_indices[mid..].to_vec();
-            return Ok((cluster_a, cluster_b));
-        }
-
-        let centroid_a_vector = self
-            .vector_storage
-            .get_vector(centroid_a_idx)
-            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid A vector: {}", e)))?;
-        let centroid_b_vector = self
-            .vector_storage
-            .get_vector(centroid_b_idx)
-            .map_err(|e| ShardexError::Shard(format!("Failed to get centroid B vector: {}", e)))?;
-
-        let mut centroid_a = centroid_a_vector.to_vec();
-        let mut centroid_b = centroid_b_vector.to_vec();
-
-        let mut cluster_a_indices = Vec::new();
-        let mut cluster_b_indices = Vec::new();
-        let max_iterations = 10;
-
-        // K-means iterations
-        for iteration in 0..max_iterations {
-            cluster_a_indices.clear();
-            cluster_b_indices.clear();
-
-            // Assign each vector to the nearest centroid
-            for &index in &active_indices {
-                let vector = self.vector_storage.get_vector(index).map_err(|e| {
-                    ShardexError::Shard(format!("Failed to get vector for clustering: {}", e))
-                })?;
-
-                let dist_a = Self::euclidean_distance(vector, &centroid_a);
-                let dist_b = Self::euclidean_distance(vector, &centroid_b);
-
-                if dist_a <= dist_b {
-                    cluster_a_indices.push(index);
-                } else {
-                    cluster_b_indices.push(index);
-                }
-            }
-
-            // Ensure both clusters have at least one vector
-            if cluster_a_indices.is_empty() {
-                if let Some(index) = cluster_b_indices.pop() {
-                    cluster_a_indices.push(index);
-                } else {
-                    return Err(ShardexError::shard_operation_failed(
-                        self.id.raw(),
-                        "clustering",
-                        "both clusters are empty after vector assignment",
-                    ));
-                }
-            } else if cluster_b_indices.is_empty() {
-                if let Some(index) = cluster_a_indices.pop() {
-                    cluster_b_indices.push(index);
-                } else {
-                    return Err(ShardexError::shard_operation_failed(
-                        self.id.raw(),
-                        "clustering", 
-                        "cluster A is empty but cannot redistribute vectors",
-                    ));
-                }
-            }
-
-            // Update centroids
-            let new_centroid_a = self.calculate_cluster_centroid(&cluster_a_indices)?;
-            let new_centroid_b = self.calculate_cluster_centroid(&cluster_b_indices)?;
-
-            // Check for convergence
-            let centroid_a_change = Self::euclidean_distance(&centroid_a, &new_centroid_a);
-            let centroid_b_change = Self::euclidean_distance(&centroid_b, &new_centroid_b);
-
-            centroid_a = new_centroid_a;
-            centroid_b = new_centroid_b;
-
-            // Converged if centroids don't move much
-            if centroid_a_change < 1e-6 && centroid_b_change < 1e-6 {
-                break;
-            }
-
-            // For debugging: prevent infinite loops
-            if iteration == max_iterations - 1 {
-                tracing::warn!("K-means clustering reached max iterations without convergence");
-            }
-        }
-
-        Ok((cluster_a_indices, cluster_b_indices))
-    }
-
     /// Cluster vectors using provided indices (for append-only semantics)
     ///
     /// This method performs k-means clustering on a provided set of indices
     /// representing unique postings from append-only iteration.
-    fn cluster_unique_vectors(
-        &self,
-        indices: &[usize],
-    ) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
+    fn cluster_unique_vectors(&self, indices: &[usize]) -> Result<(Vec<usize>, Vec<usize>), ShardexError> {
         if indices.len() < 2 {
             return Err(ShardexError::Config(
                 "Need at least 2 vectors for clustering".to_string(),
@@ -1490,9 +1302,10 @@ impl Shard {
         let mut all_identical = true;
 
         for &idx in &indices[1..] {
-            let vector = self.vector_storage.get_vector(idx).map_err(|e| {
-                ShardexError::Shard(format!("Failed to get vector for identity check: {}", e))
-            })?;
+            let vector = self
+                .vector_storage
+                .get_vector(idx)
+                .map_err(|e| ShardexError::Shard(format!("Failed to get vector for identity check: {}", e)))?;
             if Self::euclidean_distance(first_vector, vector) > 1e-6 {
                 all_identical = false;
                 break;
@@ -1530,9 +1343,10 @@ impl Shard {
 
             // Assign each vector to the nearest centroid
             for &idx in indices {
-                let vector = self.vector_storage.get_vector(idx).map_err(|e| {
-                    ShardexError::Shard(format!("Failed to get vector during clustering: {}", e))
-                })?;
+                let vector = self
+                    .vector_storage
+                    .get_vector(idx)
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector during clustering: {}", e)))?;
 
                 let dist_a = Self::euclidean_distance(&centroid_a, vector);
                 let dist_b = Self::euclidean_distance(&centroid_b, vector);
@@ -1575,12 +1389,14 @@ impl Shard {
 
         for i in 0..indices.len() {
             for j in i + 1..indices.len() {
-                let vector_i = self.vector_storage.get_vector(indices[i]).map_err(|e| {
-                    ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e))
-                })?;
-                let vector_j = self.vector_storage.get_vector(indices[j]).map_err(|e| {
-                    ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e))
-                })?;
+                let vector_i = self
+                    .vector_storage
+                    .get_vector(indices[i])
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
+                let vector_j = self
+                    .vector_storage
+                    .get_vector(indices[j])
+                    .map_err(|e| ShardexError::Shard(format!("Failed to get vector for furthest pair: {}", e)))?;
 
                 let distance = Self::euclidean_distance(vector_i, vector_j);
                 if distance > max_distance {
@@ -1593,36 +1409,7 @@ impl Shard {
         Ok(furthest_pair)
     }
 
-    /// Calculate the centroid (mean) of a cluster of vectors
-    #[allow(dead_code)]
-    fn calculate_cluster_centroid(&self, indices: &[usize]) -> Result<Vec<f32>, ShardexError> {
-        if indices.is_empty() {
-            return Ok(vec![0.0; self.vector_size]);
-        }
 
-        let mut centroid = vec![0.0; self.vector_size];
-
-        for &index in indices {
-            let vector = self.vector_storage.get_vector(index).map_err(|e| {
-                ShardexError::Shard(format!(
-                    "Failed to get vector for centroid calculation: {}",
-                    e
-                ))
-            })?;
-
-            for (i, &value) in vector.iter().enumerate() {
-                centroid[i] += value;
-            }
-        }
-
-        // Calculate mean
-        let count = indices.len() as f32;
-        for value in &mut centroid {
-            *value /= count;
-        }
-
-        Ok(centroid)
-    }
 
     /// Calculate Euclidean distance between two vectors
     fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
@@ -2754,10 +2541,7 @@ mod tests {
         ] {
             let result = shard.search_with_metric(&wrong_query, 5, metric);
             assert!(result.is_err());
-            assert!(matches!(
-                result.unwrap_err(),
-                ShardexError::InvalidDimension { .. }
-            ));
+            assert!(matches!(result.unwrap_err(), ShardexError::InvalidDimension { .. }));
         }
     }
 
@@ -3067,8 +2851,7 @@ mod tests {
         // Add some "updated" postings with same document_id, start, length (append-only updates)
         for i in [1, 3, 5] {
             let updated_vector = vec![(i + 100) as f32, (i + 100) as f32];
-            let updated_posting =
-                Posting::new(doc_ids[i], (i * 100) as u32, 50, updated_vector, 2).unwrap();
+            let updated_posting = Posting::new(doc_ids[i], (i * 100) as u32, 50, updated_vector, 2).unwrap();
             shard.add_posting(updated_posting).unwrap();
         }
 
@@ -3091,12 +2874,7 @@ mod tests {
         let mut shard = Shard::create(shard_id, 10, 3, temp_dir.path().to_path_buf()).unwrap();
 
         // Add exactly 4 postings (small dataset that triggers simple splitting)
-        let vectors = [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0],
-            [10.0, 11.0, 12.0],
-        ];
+        let vectors = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0], [10.0, 11.0, 12.0]];
 
         for vector in vectors {
             let doc_id = DocumentId::new();

@@ -3,9 +3,7 @@
 //! This module provides async wrappers around document text storage with
 //! read-ahead buffering, batch operations, and non-blocking I/O patterns.
 
-use crate::concurrent_document_text_storage::{
-    ConcurrentDocumentTextStorage, ConcurrentStorageConfig,
-};
+use crate::concurrent_document_text_storage::{ConcurrentDocumentTextStorage, ConcurrentStorageConfig};
 use crate::document_text_storage::DocumentTextStorage;
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
@@ -52,7 +50,7 @@ impl Default for AsyncStorageConfig {
 /// Read-ahead buffer entry
 #[derive(Debug, Clone)]
 struct ReadAheadEntry {
-    #[allow(dead_code)] // Used for cache key validation and debugging
+    #[allow(dead_code)] // Used as map key, not read directly
     document_id: DocumentId,
     text: String,
     created_at: SystemTime,
@@ -254,12 +252,8 @@ pub struct AsyncDocumentTextStorage {
 
 impl AsyncDocumentTextStorage {
     /// Create new async document text storage
-    pub async fn new(
-        storage: DocumentTextStorage,
-        config: AsyncStorageConfig,
-    ) -> Result<Self, ShardexError> {
-        let concurrent_storage =
-            ConcurrentDocumentTextStorage::new(storage, config.concurrent_config.clone());
+    pub async fn new(storage: DocumentTextStorage, config: AsyncStorageConfig) -> Result<Self, ShardexError> {
+        let concurrent_storage = ConcurrentDocumentTextStorage::new(storage, config.concurrent_config.clone());
         concurrent_storage.start_background_processor().await?;
 
         let read_ahead_buffer = Arc::new(RwLock::new(ReadAheadBuffer::new(
@@ -320,15 +314,15 @@ impl AsyncDocumentTextStorage {
 
     /// Get document text asynchronously with read-ahead support
     pub async fn get_text_async(&self, document_id: DocumentId) -> Result<String, ShardexError> {
-        let _permit =
-            self.async_semaphore
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "async_semaphore".to_string(),
-                    reason: "Failed to acquire async semaphore permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+        let _permit = self
+            .async_semaphore
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "async_semaphore".to_string(),
+                reason: "Failed to acquire async semaphore permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let start_time = Instant::now();
 
@@ -382,20 +376,16 @@ impl AsyncDocumentTextStorage {
     }
 
     /// Store text asynchronously
-    pub async fn store_text_async(
-        &self,
-        document_id: DocumentId,
-        text: String,
-    ) -> Result<(), ShardexError> {
-        let _permit =
-            self.async_semaphore
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "async_semaphore".to_string(),
-                    reason: "Failed to acquire async semaphore permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+    pub async fn store_text_async(&self, document_id: DocumentId, text: String) -> Result<(), ShardexError> {
+        let _permit = self
+            .async_semaphore
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "async_semaphore".to_string(),
+                reason: "Failed to acquire async semaphore permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let start_time = Instant::now();
 
@@ -490,15 +480,15 @@ impl AsyncDocumentTextStorage {
         start: u32,
         length: u32,
     ) -> Result<String, ShardexError> {
-        let _permit =
-            self.async_semaphore
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "async_semaphore".to_string(),
-                    reason: "Failed to acquire async semaphore permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+        let _permit = self
+            .async_semaphore
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "async_semaphore".to_string(),
+                reason: "Failed to acquire async semaphore permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let start_time = Instant::now();
 
@@ -541,10 +531,7 @@ impl AsyncDocumentTextStorage {
     }
 
     /// Warm read-ahead buffer with specified documents
-    pub async fn warm_read_ahead_buffer(
-        &self,
-        document_ids: Vec<DocumentId>,
-    ) -> Result<(), ShardexError> {
+    pub async fn warm_read_ahead_buffer(&self, document_ids: Vec<DocumentId>) -> Result<(), ShardexError> {
         for document_id in document_ids {
             match self.storage.get_text_concurrent(document_id).await {
                 Ok(text) => {
@@ -552,11 +539,7 @@ impl AsyncDocumentTextStorage {
                     buffer.put(document_id, text);
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Failed to warm read-ahead buffer for document {}: {:?}",
-                        document_id,
-                        e
-                    );
+                    log::warn!("Failed to warm read-ahead buffer for document {}: {:?}", document_id, e);
                 }
             }
         }
@@ -659,8 +642,7 @@ impl AsyncDocumentTextStorage {
             metrics.avg_async_latency_ms = latency_ms;
         } else {
             metrics.avg_async_latency_ms =
-                ((metrics.avg_async_latency_ms * (total_ops - 1) as f64) + latency_ms)
-                    / total_ops as f64;
+                ((metrics.avg_async_latency_ms * (total_ops - 1) as f64) + latency_ms) / total_ops as f64;
         }
     }
 }

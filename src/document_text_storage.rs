@@ -107,19 +107,12 @@ impl DocumentTextStorage {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn create<P: AsRef<Path>>(
-        directory: P,
-        max_document_size: usize,
-    ) -> Result<Self, ShardexError> {
+    pub fn create<P: AsRef<Path>>(directory: P, max_document_size: usize) -> Result<Self, ShardexError> {
         let directory = directory.as_ref();
 
         // Create directory if it doesn't exist
         std::fs::create_dir_all(directory).map_err(|e| {
-            ShardexError::MemoryMapping(format!(
-                "Failed to create directory {}: {}",
-                directory.display(),
-                e
-            ))
+            ShardexError::MemoryMapping(format!("Failed to create directory {}: {}", directory.display(), e))
         })?;
 
         // Define file paths
@@ -239,17 +232,12 @@ impl DocumentTextStorage {
     pub fn store_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
         // Validate text size
         if text.len() > self.max_document_size {
-            return Err(ShardexError::document_too_large(
-                text.len(),
-                self.max_document_size,
-            ));
+            return Err(ShardexError::document_too_large(text.len(), self.max_document_size));
         }
 
         // Validate UTF-8 (str type guarantees this, but be explicit)
         if !text.is_char_boundary(text.len()) {
-            return Err(ShardexError::text_corruption(
-                "Text contains invalid UTF-8 sequences",
-            ));
+            return Err(ShardexError::text_corruption("Text contains invalid UTF-8 sequences"));
         }
 
         // Append text data to data file and get the offset where it was stored
@@ -318,10 +306,7 @@ impl DocumentTextStorage {
     /// * `Ok(Some(DocumentTextEntry))` - Found the latest entry
     /// * `Ok(None)` - No entry found for this document
     /// * `Err(ShardexError)` - Search failed due to corruption or I/O error
-    fn find_latest_document_entry(
-        &self,
-        document_id: DocumentId,
-    ) -> Result<Option<DocumentTextEntry>, ShardexError> {
+    fn find_latest_document_entry(&self, document_id: DocumentId) -> Result<Option<DocumentTextEntry>, ShardexError> {
         let entry_count = self.index_header.entry_count;
         if entry_count == 0 {
             return Ok(None);
@@ -334,10 +319,7 @@ impl DocumentTextStorage {
 
             // Validate the entry to detect corruption
             entry.validate().map_err(|e| {
-                ShardexError::text_corruption(format!(
-                    "Corrupted index entry at position {}: {}",
-                    i, e
-                ))
+                ShardexError::text_corruption(format!("Corrupted index entry at position {}: {}", i, e))
             })?;
 
             if entry.is_for_document(document_id) {
@@ -373,12 +355,7 @@ impl DocumentTextStorage {
 
         // Read length prefix (u32) - handle potential alignment issues
         let length_bytes = &self.text_data_file.as_slice()[offset as usize..(offset + 4) as usize];
-        let stored_length = u32::from_le_bytes([
-            length_bytes[0],
-            length_bytes[1],
-            length_bytes[2],
-            length_bytes[3],
-        ]);
+        let stored_length = u32::from_le_bytes([length_bytes[0], length_bytes[1], length_bytes[2], length_bytes[3]]);
         if stored_length as u64 != length {
             return Err(ShardexError::text_corruption(format!(
                 "Length mismatch: expected {}, found {} at offset {}",
@@ -387,16 +364,11 @@ impl DocumentTextStorage {
         }
 
         // Read text data
-        let text_slice =
-            &self.text_data_file.as_slice()[(offset + 4) as usize..(offset + 4 + length) as usize];
+        let text_slice = &self.text_data_file.as_slice()[(offset + 4) as usize..(offset + 4 + length) as usize];
 
         // Validate and convert to String
         String::from_utf8(text_slice.to_vec()).map_err(|e| {
-            ShardexError::text_corruption(format!(
-                "Invalid UTF-8 sequence at offset {}: {}",
-                offset + 4,
-                e
-            ))
+            ShardexError::text_corruption(format!("Invalid UTF-8 sequence at offset {}: {}", offset + 4, e))
         })
     }
 
@@ -434,19 +406,16 @@ impl DocumentTextStorage {
 
         // Write alignment padding if needed
         if alignment_padding > 0 {
-            mut_slice[start_offset as usize..(start_offset + alignment_padding as u64) as usize]
-                .fill(0);
+            mut_slice[start_offset as usize..(start_offset + alignment_padding as u64) as usize].fill(0);
         }
 
         // Write length prefix at aligned offset
         let length_bytes = text_length.to_le_bytes();
-        mut_slice[aligned_offset as usize..(aligned_offset + 4) as usize]
-            .copy_from_slice(&length_bytes);
+        mut_slice[aligned_offset as usize..(aligned_offset + 4) as usize].copy_from_slice(&length_bytes);
 
         // Write text data
         let text_start = aligned_offset + 4;
-        mut_slice[text_start as usize..(text_start as usize + text_bytes.len())]
-            .copy_from_slice(text_bytes);
+        mut_slice[text_start as usize..(text_start as usize + text_bytes.len())].copy_from_slice(text_bytes);
 
         // Update header
         self.data_header.next_text_offset += total_size as u64;
@@ -569,11 +538,7 @@ impl DocumentTextStorage {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn store_text_safe(
-        &mut self,
-        document_id: DocumentId,
-        text: &str,
-    ) -> Result<(), ShardexError> {
+    pub fn store_text_safe(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
         // Validate text size
         self.validate_text_size(text)?;
 
@@ -698,11 +663,7 @@ impl DocumentTextStorage {
 
         // UTF-8 boundary validation
         if !full_text.is_char_boundary(start_idx) || !full_text.is_char_boundary(end_idx) {
-            return Err(ShardexError::invalid_range(
-                start,
-                length,
-                full_text.len() as u64,
-            ));
+            return Err(ShardexError::invalid_range(start, length, full_text.len() as u64));
         }
 
         Ok(full_text[start_idx..end_idx].to_string())
@@ -716,10 +677,7 @@ impl DocumentTextStorage {
     /// Provides detailed error information for size limit violations.
     fn validate_text_size(&self, text: &str) -> Result<(), ShardexError> {
         if text.len() > self.max_document_size {
-            return Err(ShardexError::document_too_large(
-                text.len(),
-                self.max_document_size,
-            ));
+            return Err(ShardexError::document_too_large(text.len(), self.max_document_size));
         }
         Ok(())
     }
@@ -794,39 +752,22 @@ impl DocumentTextStorage {
     /// - Start position is within document bounds
     /// - Start + length does not exceed document bounds
     /// - Range parameters are reasonable (no overflow, etc.)
-    fn validate_extraction_range(
-        &self,
-        document_text: &str,
-        start: u32,
-        length: u32,
-    ) -> Result<(), ShardexError> {
+    fn validate_extraction_range(&self, document_text: &str, start: u32, length: u32) -> Result<(), ShardexError> {
         let start_usize = start as usize;
         let length_usize = length as usize;
         let document_length = document_text.len();
 
         // Reject zero-length extractions
         if length_usize == 0 {
-            return Err(ShardexError::invalid_range(
-                start,
-                length,
-                document_length as u64,
-            ));
+            return Err(ShardexError::invalid_range(start, length, document_length as u64));
         }
 
         if start_usize > document_length {
-            return Err(ShardexError::invalid_range(
-                start,
-                length,
-                document_length as u64,
-            ));
+            return Err(ShardexError::invalid_range(start, length, document_length as u64));
         }
 
         if start_usize + length_usize > document_length {
-            return Err(ShardexError::invalid_range(
-                start,
-                length,
-                document_length as u64,
-            ));
+            return Err(ShardexError::invalid_range(start, length, document_length as u64));
         }
 
         Ok(())
@@ -857,14 +798,14 @@ impl DocumentTextStorage {
     /// This method is used by the health monitoring system to detect file corruption.
     pub fn validate_headers(&self) -> Result<(), ShardexError> {
         // Validate index header
-        self.index_header.validate().map_err(|e| {
-            ShardexError::text_corruption(format!("Index header validation failed: {}", e))
-        })?;
+        self.index_header
+            .validate()
+            .map_err(|e| ShardexError::text_corruption(format!("Index header validation failed: {}", e)))?;
 
         // Validate data header
-        self.data_header.validate().map_err(|e| {
-            ShardexError::text_corruption(format!("Data header validation failed: {}", e))
-        })?;
+        self.data_header
+            .validate()
+            .map_err(|e| ShardexError::text_corruption(format!("Data header validation failed: {}", e)))?;
 
         Ok(())
     }
@@ -926,9 +867,9 @@ impl DocumentTextStorage {
         let entry: DocumentTextEntry = self.text_index_file.read_at(offset as usize)?;
 
         // Validate the entry to detect corruption
-        entry.validate().map_err(|e| {
-            ShardexError::text_corruption(format!("Corrupted entry at index {}: {}", index, e))
-        })?;
+        entry
+            .validate()
+            .map_err(|e| ShardexError::text_corruption(format!("Corrupted entry at index {}: {}", index, e)))?;
 
         Ok(entry)
     }
@@ -937,10 +878,7 @@ impl DocumentTextStorage {
     ///
     /// Checks that the entry's text offset and length point to a valid
     /// region within the data file bounds.
-    pub fn validate_entry_data_region(
-        &self,
-        entry: &DocumentTextEntry,
-    ) -> Result<(), ShardexError> {
+    pub fn validate_entry_data_region(&self, entry: &DocumentTextEntry) -> Result<(), ShardexError> {
         let data_file_size = self.text_data_file.len() as u64;
 
         // Check that offset is within bounds
@@ -967,11 +905,7 @@ impl DocumentTextStorage {
     ///
     /// Public wrapper around the private read_text_at_offset method to allow
     /// the recovery system to validate specific text regions.
-    pub fn read_text_at_offset_public(
-        &self,
-        offset: u64,
-        length: u64,
-    ) -> Result<String, ShardexError> {
+    pub fn read_text_at_offset_public(&self, offset: u64, length: u64) -> Result<String, ShardexError> {
         self.read_text_at_offset(offset, length)
     }
 
@@ -1007,13 +941,13 @@ impl DocumentTextStorage {
         let data_header: TextDataHeader = self.text_data_file.read_at(0)?;
 
         // Validate the reloaded headers
-        index_header.validate().map_err(|e| {
-            ShardexError::text_corruption(format!("Invalid index header after reload: {}", e))
-        })?;
+        index_header
+            .validate()
+            .map_err(|e| ShardexError::text_corruption(format!("Invalid index header after reload: {}", e)))?;
 
-        data_header.validate().map_err(|e| {
-            ShardexError::text_corruption(format!("Invalid data header after reload: {}", e))
-        })?;
+        data_header
+            .validate()
+            .map_err(|e| ShardexError::text_corruption(format!("Invalid data header after reload: {}", e)))?;
 
         // Update cached headers
         self.index_header = index_header;
@@ -1172,12 +1106,7 @@ impl DocumentTextStorage {
     ///
     /// Reports successful operation metrics to the monitoring system for
     /// performance tracking and capacity planning.
-    pub fn report_operation_metrics(
-        &self,
-        operation: &str,
-        duration: std::time::Duration,
-        bytes_processed: usize,
-    ) {
+    pub fn report_operation_metrics(&self, operation: &str, duration: std::time::Duration, bytes_processed: usize) {
         tracing::info!(
             operation = operation,
             duration_ms = duration.as_millis(),
@@ -1253,10 +1182,7 @@ mod tests {
 
         // Verify storage state
         assert_eq!(storage.entry_count(), 2);
-        assert_eq!(
-            storage.total_text_size(),
-            (text1.len() + text2.len()) as u64
-        );
+        assert_eq!(storage.total_text_size(), (text1.len() + text2.len()) as u64);
 
         // Retrieve both documents
         assert_eq!(storage.get_text(doc1).unwrap(), text1);
@@ -1408,11 +1334,7 @@ mod tests {
         let doc_id = DocumentId::new();
 
         // Store multiple versions of the same document
-        let versions = vec![
-            "Version 1",
-            "Version 2 - updated",
-            "Version 3 - final version",
-        ];
+        let versions = vec!["Version 1", "Version 2 - updated", "Version 3 - final version"];
 
         for version in &versions {
             storage.store_text(doc_id, version).unwrap();
@@ -1484,7 +1406,10 @@ mod tests {
 
         for i in 0..document_count {
             let doc_id = DocumentId::new();
-            let text = format!("Document #{} with substantial content to fill space and test memory mapping behavior under stress conditions. This text is designed to be large enough to trigger multiple file growth operations and test the robustness of the memory mapping system.", i);
+            let text = format!(
+                "Document #{} with substantial content to fill space and test memory mapping behavior under stress conditions. This text is designed to be large enough to trigger multiple file growth operations and test the robustness of the memory mapping system.",
+                i
+            );
             storage.store_text(doc_id, &text).unwrap();
             doc_ids.push((doc_id, text));
         }
@@ -1543,10 +1468,7 @@ mod tests {
         storage
             .store_text(under_limit_doc_id, &under_limit_text)
             .unwrap();
-        assert_eq!(
-            storage.get_text(under_limit_doc_id).unwrap(),
-            under_limit_text
-        );
+        assert_eq!(storage.get_text(under_limit_doc_id).unwrap(), under_limit_text);
 
         // Test zero length (should fail based on existing empty_text_rejection test)
         let empty_doc_id = DocumentId::new();
@@ -1729,10 +1651,7 @@ mod tests {
             ShardexError::InvalidRange { .. } => {
                 // Expected error for invalid UTF-8 boundary
             }
-            e => panic!(
-                "Expected InvalidRange error for UTF-8 boundary, got {:?}",
-                e
-            ),
+            e => panic!("Expected InvalidRange error for UTF-8 boundary, got {:?}", e),
         }
     }
 

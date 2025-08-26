@@ -96,8 +96,7 @@ impl DocumentTransactionCoordinator {
                     self.active_transactions.len(),
                     self.max_active_transactions
                 ),
-                suggestion: "Wait for existing transactions to complete or increase the limit"
-                    .to_string(),
+                suggestion: "Wait for existing transactions to complete or increase the limit".to_string(),
             });
         }
 
@@ -201,10 +200,7 @@ impl DocumentTransactionCoordinator {
     }
 
     /// Abort transaction and rollback
-    pub async fn abort_transaction(
-        &mut self,
-        transaction_id: TransactionId,
-    ) -> Result<(), ShardexError> {
+    pub async fn abort_transaction(&mut self, transaction_id: TransactionId) -> Result<(), ShardexError> {
         if let Some(mut transaction) = self.active_transactions.remove(&transaction_id) {
             transaction.state = TransactionState::Aborted;
 
@@ -320,12 +316,7 @@ impl DocumentTransactionCoordinator {
                 vector,
             } => {
                 index.add_posting(*document_id, *start, *length, vector.clone())?;
-                tracing::debug!(
-                    "Added posting for document: {} at {}:{}",
-                    document_id,
-                    start,
-                    length
-                );
+                tracing::debug!("Added posting for document: {} at {}:{}", document_id, start, length);
             }
             WalOperation::RemoveDocument { document_id } => {
                 index.remove_document(*document_id)?;
@@ -470,10 +461,7 @@ impl DocumentTransactionCoordinator {
         for (i, &value) in vector.iter().enumerate() {
             if !value.is_finite() {
                 return Err(ShardexError::InvalidPostingData {
-                    reason: format!(
-                        "Invalid vector value at index {}: {} (must be finite)",
-                        i, value
-                    ),
+                    reason: format!("Invalid vector value at index {}: {} (must be finite)", i, value),
                     suggestion: "Remove NaN or infinite values from vector".to_string(),
                 });
             }
@@ -494,11 +482,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    async fn setup_coordinator() -> (
-        DocumentTransactionCoordinator,
-        ShardexIndex,
-        TestEnvironment,
-    ) {
+    async fn setup_coordinator() -> (DocumentTransactionCoordinator, ShardexIndex, TestEnvironment) {
         let test_env = TestEnvironment::new("doc_tx_coord_test");
         let layout = DirectoryLayout::new(test_env.path());
 
@@ -615,9 +599,7 @@ mod tests {
                 document_id: doc_id2,
                 text: "Another document".to_string(),
             },
-            WalOperation::DeleteDocumentText {
-                document_id: doc_id,
-            },
+            WalOperation::DeleteDocumentText { document_id: doc_id },
         ];
 
         for operation in operations {
@@ -870,10 +852,7 @@ mod tests {
             Ok(()) => {
                 // Large document accepted
             }
-            Err(ShardexError::DocumentTooLarge {
-                size,
-                max_size: limit,
-            }) => {
+            Err(ShardexError::DocumentTooLarge { size, max_size: limit }) => {
                 // Document rejected due to size limit
                 assert_eq!(size, max_size);
                 assert!(limit < max_size);
@@ -896,12 +875,10 @@ mod tests {
         let wal_segment = Arc::new(WalSegment::create(1, wal_segment_path, 8192).unwrap());
 
         // Create coordinator with short timeout
-        let coordinator = Arc::new(tokio::sync::Mutex::new(
-            DocumentTransactionCoordinator::new(
-                wal_segment,
-                Duration::from_millis(50), // 50ms timeout
-            ),
-        ));
+        let coordinator = Arc::new(tokio::sync::Mutex::new(DocumentTransactionCoordinator::new(
+            wal_segment,
+            Duration::from_millis(50), // 50ms timeout
+        )));
 
         // Create multiple transactions concurrently
         let barrier = Arc::new(Barrier::new(3));

@@ -429,11 +429,7 @@ mod tests {
 
         // Readers should have been able to read concurrently
         let read_count = concurrent_reads.load(Ordering::SeqCst);
-        assert!(
-            read_count > 0,
-            "Expected concurrent reads, got {}",
-            read_count
-        );
+        assert!(read_count > 0, "Expected concurrent reads, got {}", read_count);
     }
 
     #[test]

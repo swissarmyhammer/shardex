@@ -94,7 +94,8 @@ fn test_complete_document_storage_workflow() {
     let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
 
     let doc_id = DocumentId::new();
-    let text = "The quick brown fox jumps over the lazy dog. This is a sample document for testing text extraction workflows.";
+    let text =
+        "The quick brown fox jumps over the lazy dog. This is a sample document for testing text extraction workflows.";
 
     // Store document text
     storage.store_text_safe(doc_id, text).unwrap();
@@ -132,8 +133,7 @@ fn test_document_replacement_workflow() {
 
     let doc_id = DocumentId::new();
     let original_text = "Original document content for replacement testing.";
-    let updated_text =
-        "Updated document content with different text for replacement workflow validation.";
+    let updated_text = "Updated document content with different text for replacement workflow validation.";
 
     // Store original document
     storage.store_text_safe(doc_id, original_text).unwrap();
@@ -178,8 +178,7 @@ fn test_document_replacement_workflow() {
     // Old postings should fail with the new text (invalid ranges)
     for posting in &original_postings {
         if posting.start as usize + posting.length as usize > updated_text.len() {
-            let result =
-                storage.extract_text_substring(posting.document_id, posting.start, posting.length);
+            let result = storage.extract_text_substring(posting.document_id, posting.start, posting.length);
             assert!(result.is_err(), "Expected error for out-of-bounds posting");
         }
     }
@@ -195,10 +194,22 @@ fn test_multiple_documents_workflow() {
 
     let documents = vec![
         ("The quick brown fox jumps over the lazy dog.", 2),
-        ("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.", 4),
-        ("Rust is a systems programming language that runs blazingly fast, prevents segfaults, and guarantees thread safety.", 3),
-        ("Vector databases are specialized databases designed to store and search high-dimensional vector data efficiently.", 3),
-        ("Machine learning models generate embeddings that capture semantic meaning in numerical vector form.", 2),
+        (
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+            4,
+        ),
+        (
+            "Rust is a systems programming language that runs blazingly fast, prevents segfaults, and guarantees thread safety.",
+            3,
+        ),
+        (
+            "Vector databases are specialized databases designed to store and search high-dimensional vector data efficiently.",
+            3,
+        ),
+        (
+            "Machine learning models generate embeddings that capture semantic meaning in numerical vector form.",
+            2,
+        ),
     ];
 
     let mut doc_data = Vec::new();
@@ -252,10 +263,7 @@ fn test_unicode_document_integration() {
         ("Chinese", "你好世界！这是一个中文测试文档。"),
         ("Japanese", "こんにちは世界！これは日本語のテスト文書です。"),
         ("Arabic", "مرحبا بالعالم! هذا مستند اختبار باللغة العربية."),
-        (
-            "Emoji",
-            "Hello 🌍 World! 🚀 This is a test with emojis 🎉✨",
-        ),
+        ("Emoji", "Hello 🌍 World! 🚀 This is a test with emojis 🎉✨"),
         ("Mixed", "English 中文 日本語 العربية 🌍 混合内容文档"),
     ];
 
@@ -280,18 +288,13 @@ fn test_unicode_document_integration() {
 
         for posting in postings {
             // Verify posting extracts valid text (respecting UTF-8 boundaries)
-            let result =
-                storage.extract_text_substring(posting.document_id, posting.start, posting.length);
+            let result = storage.extract_text_substring(posting.document_id, posting.start, posting.length);
 
             match result {
                 Ok(extracted) => {
                     // Extracted text should be valid UTF-8 and non-empty
                     assert!(!extracted.is_empty(), "Empty extraction for {}", name);
-                    assert!(
-                        extracted.chars().count() > 0,
-                        "No valid characters for {}",
-                        name
-                    );
+                    assert!(extracted.chars().count() > 0, "No valid characters for {}", name);
                 }
                 Err(ShardexError::InvalidRange { .. }) => {
                     // This is acceptable for UTF-8 boundary issues
@@ -307,8 +310,7 @@ fn test_unicode_document_integration() {
 fn test_crash_recovery_simulation() {
     let temp_dir = TempDir::new().unwrap();
     let doc_id = DocumentId::new();
-    let text =
-        "Document for crash recovery testing. This text should survive across storage instances.";
+    let text = "Document for crash recovery testing. This text should survive across storage instances.";
 
     // First session - create and populate storage
     {
@@ -373,10 +375,7 @@ fn test_crash_recovery_simulation() {
         // Verify both old and new documents work
         assert_eq!(storage.entry_count(), 2);
         assert_eq!(storage.get_text_safe(doc_id).unwrap(), text);
-        assert_eq!(
-            storage.get_text_safe(additional_doc).unwrap(),
-            additional_text
-        );
+        assert_eq!(storage.get_text_safe(additional_doc).unwrap(), additional_text);
 
         storage.sync().unwrap();
     }
@@ -464,12 +463,7 @@ fn test_document_versioning_with_postings() {
 
         // Verify this version is retrievable
         let retrieved = storage.get_text_safe(doc_id).unwrap();
-        assert_eq!(
-            retrieved,
-            *text,
-            "Version {} not stored correctly",
-            version_num + 1
-        );
+        assert_eq!(retrieved, *text, "Version {} not stored correctly", version_num + 1);
 
         // Create postings for this version
         let postings = create_test_postings(doc_id, text, 64, 2).unwrap();
@@ -511,8 +505,7 @@ fn test_document_versioning_with_postings() {
     // Older version postings may fail if they exceed the latest document bounds
     let first_version_postings = &version_postings[0];
     for posting in first_version_postings {
-        let result =
-            storage.extract_text_substring(posting.document_id, posting.start, posting.length);
+        let result = storage.extract_text_substring(posting.document_id, posting.start, posting.length);
 
         if posting.start as usize + posting.length as usize > latest_text.len() {
             // Should fail for out-of-bounds
@@ -582,11 +575,7 @@ fn test_realistic_usage_workflow() {
             assert!(!extracted.is_empty());
         }
 
-        println!(
-            "Processed document {} with {} postings",
-            i + 1,
-            postings.len()
-        );
+        println!("Processed document {} with {} postings", i + 1, postings.len());
     }
 
     // Simulate search-like access pattern

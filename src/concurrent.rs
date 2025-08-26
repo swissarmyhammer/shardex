@@ -370,11 +370,7 @@ impl ConcurrentShardex {
     }
 
     /// Internal method to perform the coordinated write operation
-    async fn perform_coordinated_write<F, R>(
-        &self,
-        operation_id: Uuid,
-        operation: F,
-    ) -> Result<R, ShardexError>
+    async fn perform_coordinated_write<F, R>(&self, operation_id: Uuid, operation: F) -> Result<R, ShardexError>
     where
         F: FnOnce(&mut IndexWriter) -> Result<R, ShardexError> + Send,
         R: Send,
@@ -394,7 +390,7 @@ impl ConcurrentShardex {
                 return Err(ShardexError::Config(format!(
                     "Failed to acquire write coordination within {:?}",
                     self.config.coordination_lock_timeout
-                )))
+                )));
             }
         };
 
@@ -450,10 +446,7 @@ impl ConcurrentShardex {
                 drop(coordinator_acquired);
 
                 if self.config.enable_detailed_logging {
-                    debug!(
-                        "Write operation failed: id={}, error={}",
-                        operation_id, error
-                    );
+                    debug!("Write operation failed: id={}, error={}", operation_id, error);
                 }
 
                 Err(error)
@@ -462,10 +455,7 @@ impl ConcurrentShardex {
     }
 
     /// Acquire write coordination lock, managing pending operations and backpressure
-    async fn acquire_write_coordination(
-        &self,
-        operation_id: Uuid,
-    ) -> Result<WriteCoordinationGuard, ShardexError> {
+    async fn acquire_write_coordination(&self, operation_id: Uuid) -> Result<WriteCoordinationGuard, ShardexError> {
         let mut coordinator = self
             .write_coordinator
             .lock()
@@ -544,19 +534,18 @@ impl ConcurrentShardex {
         let active_readers = self.active_readers.load(Ordering::Acquire);
         let current_epoch = self.epoch.load(Ordering::Acquire);
 
-        let (active_writers, pending_writes) =
-            if let Ok(coordinator) = self.write_coordinator.lock() {
-                (
-                    if coordinator.active_writer.is_some() {
-                        1
-                    } else {
-                        0
-                    },
-                    coordinator.pending_writes.len(),
-                )
-            } else {
-                (0, 0)
-            };
+        let (active_writers, pending_writes) = if let Ok(coordinator) = self.write_coordinator.lock() {
+            (
+                if coordinator.active_writer.is_some() {
+                    1
+                } else {
+                    0
+                },
+                coordinator.pending_writes.len(),
+            )
+        } else {
+            (0, 0)
+        };
 
         ConcurrencyMetrics {
             active_readers,
@@ -659,8 +648,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
@@ -675,8 +663,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -716,8 +703,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
@@ -740,8 +726,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -793,8 +778,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = ConcurrentShardex::new(cow_index);
 
@@ -826,8 +810,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
         let concurrent = Arc::new(ConcurrentShardex::new(cow_index));
 
@@ -845,9 +828,7 @@ mod tests {
                 let mid_metrics = concurrent.concurrency_metrics();
                 println!(
                     "Metrics during read: active_readers={}, active_writers={}, epoch={}",
-                    mid_metrics.active_readers,
-                    mid_metrics.active_writers,
-                    mid_metrics.current_epoch
+                    mid_metrics.active_readers, mid_metrics.active_writers, mid_metrics.current_epoch
                 );
                 // This should show 1 active reader
                 assert_eq!(mid_metrics.active_readers, 1);
@@ -869,8 +850,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
 
         let timeout_config = ConcurrencyConfig {
@@ -922,8 +902,7 @@ mod tests {
             .directory_path(_test_env.path())
             .vector_size(128);
 
-        let index =
-            crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
+        let index = crate::shardex_index::ShardexIndex::create(config).expect("Failed to create index");
         let cow_index = CowShardexIndex::new(index);
 
         let custom_config = ConcurrencyConfig {
@@ -940,10 +919,7 @@ mod tests {
             concurrent.config.coordination_lock_timeout,
             custom_config.coordination_lock_timeout
         );
-        assert_eq!(
-            concurrent.config.max_pending_writes,
-            custom_config.max_pending_writes
-        );
+        assert_eq!(concurrent.config.max_pending_writes, custom_config.max_pending_writes);
         assert_eq!(
             concurrent.config.enable_detailed_logging,
             custom_config.enable_detailed_logging

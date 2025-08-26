@@ -129,9 +129,7 @@ unsafe impl Zeroable for PostingStorageHeader {}
 const POSTING_STORAGE_MAGIC: &[u8; 4] = b"PSTR";
 /// Current version of the posting storage format
 const POSTING_STORAGE_VERSION: u32 = 1;
-/// Default alignment for data structures (currently unused but reserved for future optimizations)
-#[allow(dead_code)]
-const DEFAULT_ALIGNMENT: usize = 8;
+
 
 impl PostingStorageHeader {
     /// Size of the header structure in bytes
@@ -352,12 +350,7 @@ impl PostingStorage {
     /// Add a posting to the storage
     ///
     /// Returns the index where the posting was stored.
-    pub fn add_posting(
-        &mut self,
-        document_id: DocumentId,
-        start: u32,
-        length: u32,
-    ) -> Result<usize, ShardexError> {
+    pub fn add_posting(&mut self, document_id: DocumentId, start: u32, length: u32) -> Result<usize, ShardexError> {
         if self.read_only {
             return Err(ShardexError::Config(
                 "Cannot add posting to read-only storage".to_string(),
@@ -366,9 +359,7 @@ impl PostingStorage {
 
         // Check capacity
         if self.is_full() {
-            return Err(ShardexError::Config(
-                "Posting storage is at capacity".to_string(),
-            ));
+            return Err(ShardexError::Config("Posting storage is at capacity".to_string()));
         }
 
         let index = self.current_count();
@@ -478,9 +469,7 @@ impl PostingStorage {
     }
 
     /// Iterate over all active (non-deleted) postings
-    pub fn iter_active(
-        &self,
-    ) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
+    pub fn iter_active(&self) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
         (0..self.current_count()).filter_map(move |index| {
             match self.is_deleted(index) {
                 Ok(true) => None, // Skip deleted postings
@@ -495,9 +484,7 @@ impl PostingStorage {
 
     /// Iterate over all postings in reverse order (most recent first)
     /// This supports append-only semantics where newer postings supersede older ones
-    pub fn iter_backward(
-        &self,
-    ) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
+    pub fn iter_backward(&self) -> impl Iterator<Item = Result<(usize, DocumentId, u32, u32), ShardexError>> + '_ {
         (0..self.current_count())
             .rev()
             .map(move |index| match self.get_posting(index) {
@@ -972,9 +959,7 @@ mod tests {
             assert_eq!(storage.current_count(), 3);
             assert_eq!(storage.active_count(), 3);
 
-            for (i, (expected_doc_id, expected_start, expected_length)) in
-                postings_to_add.iter().enumerate()
-            {
+            for (i, (expected_doc_id, expected_start, expected_length)) in postings_to_add.iter().enumerate() {
                 let (retrieved_doc_id, start, length) = storage.get_posting(i).unwrap();
                 assert_eq!(retrieved_doc_id, *expected_doc_id);
                 assert_eq!(start, *expected_start);

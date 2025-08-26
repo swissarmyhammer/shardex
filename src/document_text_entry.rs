@@ -215,11 +215,7 @@ impl TextIndexHeader {
     /// ```
     pub fn new() -> Self {
         Self {
-            file_header: FileHeader::new_without_checksum(
-                TEXT_INDEX_MAGIC,
-                TEXT_INDEX_VERSION,
-                Self::SIZE as u64,
-            ),
+            file_header: FileHeader::new_without_checksum(TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION, Self::SIZE as u64),
             entry_count: 0,
             next_entry_offset: Self::SIZE as u64,
             _padding: [0; 12],
@@ -232,12 +228,7 @@ impl TextIndexHeader {
     /// provided data slice, which should represent the entry data.
     pub fn new_with_data(data: &[u8]) -> Self {
         let mut header = Self::new();
-        header.file_header = FileHeader::new(
-            TEXT_INDEX_MAGIC,
-            TEXT_INDEX_VERSION,
-            Self::SIZE as u64,
-            data,
-        );
+        header.file_header = FileHeader::new(TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION, Self::SIZE as u64, data);
         header
     }
 
@@ -428,11 +419,7 @@ impl TextDataHeader {
     /// set to immediately after the header.
     pub fn new() -> Self {
         Self {
-            file_header: FileHeader::new_without_checksum(
-                TEXT_DATA_MAGIC,
-                TEXT_DATA_VERSION,
-                Self::SIZE as u64,
-            ),
+            file_header: FileHeader::new_without_checksum(TEXT_DATA_MAGIC, TEXT_DATA_VERSION, Self::SIZE as u64),
             total_text_size: 0,
             next_text_offset: Self::SIZE as u64,
             _padding: [0; 8],
@@ -442,8 +429,7 @@ impl TextDataHeader {
     /// Create a header with explicit data for checksum calculation
     pub fn new_with_data(data: &[u8]) -> Self {
         let mut header = Self::new();
-        header.file_header =
-            FileHeader::new(TEXT_DATA_MAGIC, TEXT_DATA_VERSION, Self::SIZE as u64, data);
+        header.file_header = FileHeader::new(TEXT_DATA_MAGIC, TEXT_DATA_VERSION, Self::SIZE as u64, data);
         header
     }
 
@@ -632,10 +618,7 @@ mod tests {
         // Add text to data
         data_header.add_text(512);
         assert_eq!(data_header.total_text_size, 512);
-        assert_eq!(
-            data_header.next_text_offset,
-            TextDataHeader::SIZE as u64 + 512 + 8
-        );
+        assert_eq!(data_header.next_text_offset, TextDataHeader::SIZE as u64 + 512 + 8);
         assert!(!data_header.is_empty());
     }
 
@@ -703,15 +686,9 @@ mod tests {
         assert_eq!(DocumentTextEntry::SIZE, entry_size);
 
         // Verify sizes are multiples of alignment (important for arrays)
-        assert_eq!(
-            TextIndexHeader::SIZE % mem::align_of::<TextIndexHeader>(),
-            0
-        );
+        assert_eq!(TextIndexHeader::SIZE % mem::align_of::<TextIndexHeader>(), 0);
         assert_eq!(TextDataHeader::SIZE % mem::align_of::<TextDataHeader>(), 0);
-        assert_eq!(
-            DocumentTextEntry::SIZE % mem::align_of::<DocumentTextEntry>(),
-            0
-        );
+        assert_eq!(DocumentTextEntry::SIZE % mem::align_of::<DocumentTextEntry>(), 0);
     }
 
     #[test]
@@ -791,18 +768,12 @@ mod tests {
         assert_eq!(default_index.next_entry_offset, new_index.next_entry_offset);
         assert_eq!(default_index._padding, new_index._padding);
         assert_eq!(default_index.file_header.magic, new_index.file_header.magic);
-        assert_eq!(
-            default_index.file_header.version,
-            new_index.file_header.version
-        );
+        assert_eq!(default_index.file_header.version, new_index.file_header.version);
 
         assert_eq!(default_data.total_text_size, new_data.total_text_size);
         assert_eq!(default_data.next_text_offset, new_data.next_text_offset);
         assert_eq!(default_data._padding, new_data._padding);
         assert_eq!(default_data.file_header.magic, new_data.file_header.magic);
-        assert_eq!(
-            default_data.file_header.version,
-            new_data.file_header.version
-        );
+        assert_eq!(default_data.file_header.version, new_data.file_header.version);
     }
 }

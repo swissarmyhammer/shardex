@@ -2,9 +2,8 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use shardex::{
-    AsyncDocumentTextStorage, AsyncStorageConfig, ConcurrentDocumentTextStorage,
-    ConcurrentStorageConfig, DocumentId, DocumentTextStorage, MemoryPoolConfig,
-    TextMemoryPool,
+    AsyncDocumentTextStorage, AsyncStorageConfig, ConcurrentDocumentTextStorage, ConcurrentStorageConfig, DocumentId,
+    DocumentTextStorage, MemoryPoolConfig, TextMemoryPool,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,8 +37,7 @@ mod bench_utils {
     }
 
     pub fn generate_test_text(size: usize) -> String {
-        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(size / 56 + 1)[..size]
-            .to_string()
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(size / 56 + 1)[..size].to_string()
     }
 
     pub fn generate_document_ids(count: usize) -> Vec<DocumentId> {
@@ -134,8 +132,7 @@ fn benchmark_concurrent_operations(c: &mut Criterion) {
                 b.iter_with_setup(
                     || {
                         rt.block_on(async {
-                            let (_temp_dir, concurrent_storage) =
-                                bench_utils::create_concurrent_storage();
+                            let (_temp_dir, concurrent_storage) = bench_utils::create_concurrent_storage();
                             concurrent_storage
                                 .start_background_processor()
                                 .await
@@ -174,7 +171,10 @@ fn benchmark_concurrent_operations(c: &mut Criterion) {
                                 let text = bench_utils::generate_test_text(doc_size);
                                 let storage_ref = Arc::clone(&concurrent_storage);
                                 tasks.push(tokio::spawn(async move {
-                                    storage_ref.store_text_immediate(doc_id, &text).await.unwrap();
+                                    storage_ref
+                                        .store_text_immediate(doc_id, &text)
+                                        .await
+                                        .unwrap();
                                     black_box(());
                                 }));
                             }
@@ -223,10 +223,7 @@ fn benchmark_async_operations(c: &mut Criterion) {
                             // Store documents
                             for doc_id in &doc_ids {
                                 let text = bench_utils::generate_test_text(doc_size);
-                                async_storage
-                                    .store_text_async(*doc_id, text)
-                                    .await
-                                    .unwrap();
+                                async_storage.store_text_async(*doc_id, text).await.unwrap();
                                 black_box(());
                             }
 

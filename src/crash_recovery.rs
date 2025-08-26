@@ -247,8 +247,7 @@ impl CrashRecovery {
 
                 info!(
                     segments_processed = self.recovery_stats.recovery_stats.segments_processed,
-                    transactions_replayed =
-                        self.recovery_stats.recovery_stats.transactions_replayed,
+                    transactions_replayed = self.recovery_stats.recovery_stats.transactions_replayed,
                     operations_applied = self.recovery_stats.recovery_stats.operations_applied,
                     "WAL replay completed successfully"
                 );
@@ -282,10 +281,7 @@ impl CrashRecovery {
     }
 
     /// Validate index consistency after recovery
-    pub async fn validate_consistency(
-        &mut self,
-        index: &mut ShardexIndex,
-    ) -> Result<(), ShardexError> {
+    pub async fn validate_consistency(&mut self, index: &mut ShardexIndex) -> Result<(), ShardexError> {
         info!("Starting consistency validation");
 
         // Validate shard structure integrity
@@ -295,8 +291,7 @@ impl CrashRecovery {
                 Ok(shard) => {
                     // Validate shard integrity
                     if let Err(e) = shard.validate_integrity() {
-                        let error_msg =
-                            format!("Shard {} failed integrity validation: {}", shard_id, e);
+                        let error_msg = format!("Shard {} failed integrity validation: {}", shard_id, e);
                         error!("{}", error_msg);
                         self.recovery_stats.recovery_stats.add_error(error_msg);
                         self.recovery_stats.consistency_valid = false;
@@ -307,8 +302,7 @@ impl CrashRecovery {
                     }
                 }
                 Err(e) => {
-                    let error_msg =
-                        format!("Failed to access shard {} for validation: {}", shard_id, e);
+                    let error_msg = format!("Failed to access shard {} for validation: {}", shard_id, e);
                     error!("{}", error_msg);
                     self.recovery_stats.recovery_stats.add_error(error_msg);
                     self.recovery_stats.consistency_valid = false;
@@ -321,10 +315,7 @@ impl CrashRecovery {
         match index.validate_metadata() {
             Ok(()) => {
                 self.recovery_stats.consistency_valid = true;
-                info!(
-                    shards_validated = shard_ids.len(),
-                    "Consistency validation passed"
-                );
+                info!(shards_validated = shard_ids.len(), "Consistency validation passed");
                 Ok(())
             }
             Err(e) => {

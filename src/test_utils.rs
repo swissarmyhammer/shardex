@@ -2,7 +2,7 @@
 //!
 //! This module provides common utilities and helpers for testing Shardex components,
 //! including RAII-based temporary directory management, test environment setup,
-//! standardized test builders, and error handling utilities to eliminate duplication 
+//! standardized test builders, and error handling utilities to eliminate duplication
 //! across the test suite.
 
 use crate::config::ShardexConfig;
@@ -14,18 +14,18 @@ use tempfile::TempDir;
 /// Error handling utilities for tests
 pub mod error {
     use crate::error::ShardexError;
-    
+
     /// Assert that a Result contains an error of a specific ShardexError variant
-    /// 
+    ///
     /// This macro provides a cleaner alternative to expect() in tests by validating
     /// that errors are of the expected type and providing clear assertion messages.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// use shardex::test_utils::error::assert_error_type;
     /// use shardex::error::ShardexError;
-    /// 
+    ///
     /// let result: Result<(), ShardexError> = Err(ShardexError::Config("test".to_string()));
     /// assert_error_type!(result, Config);
     /// ```
@@ -72,16 +72,16 @@ pub mod error {
     }
 
     /// Assert that an error message contains specific text
-    /// 
+    ///
     /// This macro validates that error messages contain expected information,
     /// useful for testing error context and recovery suggestions.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// use shardex::test_utils::error::assert_error_contains;
     /// use shardex::error::ShardexError;
-    /// 
+    ///
     /// let result: Result<(), ShardexError> = Err(ShardexError::Config("missing field: vector_dim".to_string()));
     /// assert_error_contains!(result, "missing field");
     /// assert_error_contains!(result, "vector_dim");
@@ -113,23 +113,20 @@ pub mod error {
     }
 
     /// Get an error from a Result, panicking with a helpful message if Result is Ok
-    /// 
+    ///
     /// This function provides a cleaner alternative to unwrap_err() by providing
     /// context about what error was expected.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// use shardex::test_utils::error::expect_error;
     /// use shardex::error::ShardexError;
-    /// 
+    ///
     /// let result: Result<(), ShardexError> = Err(ShardexError::Config("test".to_string()));
     /// let error = expect_error(result, "configuration validation should fail");
     /// ```
-    pub fn expect_error<T, E>(
-        result: Result<T, E>,
-        context: &str,
-    ) -> E
+    pub fn expect_error<T, E>(result: Result<T, E>, context: &str) -> E
     where
         T: std::fmt::Debug,
     {
@@ -140,23 +137,20 @@ pub mod error {
     }
 
     /// Assert that a Result is Ok and return the value, with helpful error context
-    /// 
+    ///
     /// This function provides a cleaner alternative to unwrap() by providing
     /// context about what operation should have succeeded.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// use shardex::test_utils::error::expect_success;
-    /// 
+    ///
     /// let result: Result<i32, String> = Ok(42);
     /// let value = expect_success(result, "arithmetic operation should succeed");
     /// assert_eq!(value, 42);
     /// ```
-    pub fn expect_success<T, E>(
-        result: Result<T, E>,
-        context: &str,
-    ) -> T
+    pub fn expect_success<T, E>(result: Result<T, E>, context: &str) -> T
     where
         E: std::fmt::Display,
     {
@@ -167,7 +161,7 @@ pub mod error {
     }
 
     /// Create a test error with context for validation
-    /// 
+    ///
     /// Helper function for creating errors in tests that need to validate
     /// error handling and context preservation.
     pub fn create_test_io_error(message: &str) -> std::io::Error {
@@ -175,7 +169,7 @@ pub mod error {
     }
 
     /// Create a test ShardexError for validation
-    /// 
+    ///
     /// Helper function for creating ShardexErrors in tests.
     pub fn create_test_shardex_error(variant: &str, message: &str) -> ShardexError {
         match variant {
@@ -191,40 +185,32 @@ pub mod error {
     }
 
     /// Assert that error has proper context information
-    /// 
+    ///
     /// This function validates that errors contain expected context information
     /// like file paths, operation names, and recovery suggestions.
-    pub fn assert_error_context(
-        error: &ShardexError,
-        expected_contexts: &[&str],
-    ) {
+    pub fn assert_error_context(error: &ShardexError, expected_contexts: &[&str]) {
         let error_str = error.to_string();
         for context in expected_contexts {
             if !error_str.contains(context) {
                 panic!(
                     "Expected error to contain context '{}', but error was: '{}'",
-                    context,
-                    error_str
+                    context, error_str
                 );
             }
         }
     }
 
     /// Assert that error chain is properly preserved
-    /// 
+    ///
     /// This function validates that error causality is preserved through
     /// error transformations and context additions.
-    pub fn assert_error_causality(
-        error: &ShardexError,
-        expected_causes: &[&str],
-    ) {
+    pub fn assert_error_causality(error: &ShardexError, expected_causes: &[&str]) {
         let error_str = error.to_string();
         for cause in expected_causes {
             if !error_str.contains(cause) {
                 panic!(
                     "Expected error to contain cause '{}', but error was: '{}'",
-                    cause,
-                    error_str
+                    cause, error_str
                 );
             }
         }
@@ -262,8 +248,8 @@ impl TestEnvironment {
     /// # Panics
     /// Panics if unable to create temporary directory
     pub fn new(test_name: &str) -> Self {
-        let temp_dir = TempDir::new()
-            .unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
+        let temp_dir =
+            TempDir::new().unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
 
         Self {
             temp_dir,
@@ -301,12 +287,17 @@ impl TestEnvironment {
 }
 
 /// Helper function to create a standard TempDir for tests
-/// 
+///
 /// Eliminates duplication of TempDir::new().unwrap() across tests
 /// and provides standardized error message.
 pub fn create_temp_dir_for_test(test_name: &str) -> TempDir {
     TempDir::new().unwrap_or_else(|e| {
-        panic!("{} for test {}: {}", test_error_messages::FAILED_TO_CREATE_TEMP_DIR, test_name, e)
+        panic!(
+            "{} for test {}: {}",
+            test_error_messages::FAILED_TO_CREATE_TEMP_DIR,
+            test_name,
+            e
+        )
     })
 }
 
@@ -338,7 +329,7 @@ pub mod test_error_messages {
 }
 
 /// Builder pattern for standardized test setup
-/// 
+///
 /// Eliminates duplication of TestEnvironment creation, ShardexConfig setup,
 /// and index initialization across the test suite. Provides a fluent API
 /// for configuring test parameters while maintaining sensible defaults.
@@ -400,15 +391,14 @@ impl TestSetupBuilder {
     }
 
     /// Build test environment and configuration without creating index
-    /// 
+    ///
     /// Returns TestEnvironment and ShardexConfig ready for use.
     /// Use this when you need to customize index creation or don't need an index.
     pub fn build(self) -> (TestEnvironment, ShardexConfig) {
         let test_env = TestEnvironment::new(&self.test_name);
-        
-        let directory_path = self.directory_path
-            .unwrap_or_else(|| test_env.path_buf());
-            
+
+        let directory_path = self.directory_path.unwrap_or_else(|| test_env.path_buf());
+
         let config = ShardexConfig::new()
             .directory_path(directory_path)
             .vector_size(self.vector_size)
@@ -418,18 +408,17 @@ impl TestSetupBuilder {
     }
 
     /// Build test environment, configuration, and index
-    /// 
+    ///
     /// Returns TestEnvironment, ShardexConfig, and created ShardexIndex.
     /// This is the most common pattern for tests that need a working index.
     pub fn build_with_index(self) -> Result<(TestEnvironment, ShardexConfig, ShardexIndex), ShardexError> {
         let (test_env, config) = self.build();
-        let index = ShardexIndex::create(config.clone())
-            .map_err(|e| ShardexError::InvalidInput {
-                field: "index_creation".to_string(),
-                reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
-                suggestion: "Check directory permissions and disk space".to_string(),
-            })?;
-        
+        let index = ShardexIndex::create(config.clone()).map_err(|e| ShardexError::InvalidInput {
+            field: "index_creation".to_string(),
+            reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
+            suggestion: "Check directory permissions and disk space".to_string(),
+        })?;
+
         Ok((test_env, config, index))
     }
 
@@ -523,8 +512,7 @@ mod tests {
 
     #[test]
     fn test_setup_builder_with_index() {
-        let result = TestSetupBuilder::new("test_setup_builder_with_index")
-            .build_with_index();
+        let result = TestSetupBuilder::new("test_setup_builder_with_index").build_with_index();
 
         assert!(result.is_ok());
         let (test_env, config, index) = result.unwrap();
@@ -543,7 +531,7 @@ mod tests {
         assert_eq!(config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
     }
 
-    #[test] 
+    #[test]
     fn test_setup_builder_large_convenience() {
         let (test_env, config) = TestSetupBuilder::large("test_large").build();
 
@@ -555,7 +543,7 @@ mod tests {
     #[test]
     fn test_create_temp_dir_for_test() {
         let temp_dir = create_temp_dir_for_test("test_temp_dir_creation");
-        
+
         assert!(temp_dir.path().exists());
         assert!(temp_dir.path().is_dir());
     }

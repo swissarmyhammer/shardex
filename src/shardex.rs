@@ -104,10 +104,7 @@ pub trait Shardex {
     /// # Ok(())
     /// # }
     /// ```
-    async fn get_document_text(
-        &self,
-        document_id: crate::identifiers::DocumentId,
-    ) -> Result<String, Self::Error>;
+    async fn get_document_text(&self, document_id: crate::identifiers::DocumentId) -> Result<String, Self::Error>;
 
     /// Extract text substring using posting coordinates
     ///
@@ -357,8 +354,17 @@ impl ShardexImpl {
         let max_operations_per_batch = std::cmp::min(max_ops_by_size, 1000).max(10); // At least 10, at most 1000
         let max_batch_size_bytes = target_batch_size; // Use calculated target size based on WAL segment
 
-        info!("Calculated batch config: vector_size={}, wal_segment_size={}, safety_margin={:.1}%, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}", 
-              vector_size, wal_segment_size, safety_margin * 100.0, estimated_operation_size, target_batch_size, max_ops_by_size, max_operations_per_batch, max_batch_size_bytes);
+        info!(
+            "Calculated batch config: vector_size={}, wal_segment_size={}, safety_margin={:.1}%, estimated_op_size={}, target_batch_size={}, max_ops_by_size={}, final_max_ops={}, final_max_bytes={}",
+            vector_size,
+            wal_segment_size,
+            safety_margin * 100.0,
+            estimated_operation_size,
+            target_batch_size,
+            max_ops_by_size,
+            max_operations_per_batch,
+            max_batch_size_bytes
+        );
 
         BatchConfig {
             batch_write_interval_ms: self.config.batch_write_interval_ms,
@@ -504,9 +510,9 @@ impl ShardexImpl {
         let candidate_shards = self.index.find_nearest_shards(query_vector, slop)?;
 
         // Use parallel search with the specified metric
-        let search_result =
-            self.index
-                .parallel_search_with_metric(query_vector, &candidate_shards, k, metric);
+        let search_result = self
+            .index
+            .parallel_search_with_metric(query_vector, &candidate_shards, k, metric);
 
         // Record performance metrics
         let elapsed = start_time.elapsed();
@@ -768,11 +774,7 @@ impl ShardexImpl {
     }
 
     /// Validate consistency of posting coordinates
-    fn validate_posting_coordinates_consistency(
-        &self,
-        postings: &[Posting],
-        _text: &str,
-    ) -> Result<(), ShardexError> {
+    fn validate_posting_coordinates_consistency(&self, postings: &[Posting], _text: &str) -> Result<(), ShardexError> {
         // Check for overlapping postings (optional validation - just log warnings)
         for (i, posting1) in postings.iter().enumerate() {
             for (_j, posting2) in postings.iter().enumerate().skip(i + 1) {
@@ -859,10 +861,7 @@ impl ShardexImpl {
             )));
         }
 
-        debug!(
-            "Consistency validation passed for {} shards",
-            shard_ids.len()
-        );
+        debug!("Consistency validation passed for {} shards", shard_ids.len());
         Ok(())
     }
 
@@ -873,8 +872,11 @@ impl ShardexImpl {
         if postings.len() > 100_000 {
             return Err(ShardexError::resource_exhausted(
                 "batch_size",
-                format!("batch contains {} postings, which exceeds reasonable limits", postings.len()),
-                "Split large batches into smaller chunks (recommended: 1000-10000 postings per batch)"
+                format!(
+                    "batch contains {} postings, which exceeds reasonable limits",
+                    postings.len()
+                ),
+                "Split large batches into smaller chunks (recommended: 1000-10000 postings per batch)",
             ));
         }
 
@@ -896,13 +898,16 @@ impl ShardexImpl {
                 if value.is_nan() {
                     return Err(ShardexError::invalid_posting_data(
                         format!("posting at index {} contains NaN at vector position {}", i, j),
-                        "Remove NaN values from your vector data. Check your embedding generation process."
+                        "Remove NaN values from your vector data. Check your embedding generation process.",
                     ));
                 }
                 if value.is_infinite() {
                     return Err(ShardexError::invalid_posting_data(
-                        format!("posting at index {} contains infinite value at vector position {}", i, j),
-                        "Remove infinite values from your vector data. Check for overflow in your calculations."
+                        format!(
+                            "posting at index {} contains infinite value at vector position {}",
+                            i, j
+                        ),
+                        "Remove infinite values from your vector data. Check for overflow in your calculations.",
                     ));
                 }
             }
@@ -919,14 +924,20 @@ impl ShardexImpl {
             if let Some(end_pos) = posting.start.checked_add(posting.length) {
                 if end_pos > u32::MAX / 2 {
                     return Err(ShardexError::invalid_posting_data(
-                        format!("posting at index {} has text position that may cause overflow (start: {}, length: {})", i, posting.start, posting.length),
-                        "Use smaller position values or split large documents"
+                        format!(
+                            "posting at index {} has text position that may cause overflow (start: {}, length: {})",
+                            i, posting.start, posting.length
+                        ),
+                        "Use smaller position values or split large documents",
                     ));
                 }
             } else {
                 return Err(ShardexError::invalid_posting_data(
-                    format!("posting at index {} has start+length that overflows u32 (start: {}, length: {})", i, posting.start, posting.length),
-                    "Reduce start position or length to avoid arithmetic overflow"
+                    format!(
+                        "posting at index {} has start+length that overflows u32 (start: {}, length: {})",
+                        i, posting.start, posting.length
+                    ),
+                    "Reduce start position or length to avoid arithmetic overflow",
                 ));
             }
         }
@@ -941,8 +952,11 @@ impl ShardexImpl {
         if document_ids.len() > 50_000 {
             return Err(ShardexError::resource_exhausted(
                 "batch_size",
-                format!("batch contains {} document IDs, which exceeds reasonable limits", document_ids.len()),
-                "Split large removal batches into smaller chunks (recommended: 1000-5000 IDs per batch)"
+                format!(
+                    "batch contains {} document IDs, which exceeds reasonable limits",
+                    document_ids.len()
+                ),
+                "Split large removal batches into smaller chunks (recommended: 1000-5000 IDs per batch)",
             ));
         }
 
@@ -973,10 +987,7 @@ impl ShardexImpl {
             return Err(ShardexError::invalid_input(
                 "query_vector",
                 "cannot be empty",
-                format!(
-                    "Provide a query vector with {} dimensions",
-                    self.config.vector_size
-                ),
+                format!("Provide a query vector with {} dimensions", self.config.vector_size),
             ));
         }
 
@@ -994,14 +1005,14 @@ impl ShardexImpl {
                 return Err(ShardexError::invalid_input(
                     "query_vector",
                     format!("contains NaN value at position {}", i),
-                    "Remove NaN values from your query vector. Check your embedding generation process."
+                    "Remove NaN values from your query vector. Check your embedding generation process.",
                 ));
             }
             if value.is_infinite() {
                 return Err(ShardexError::invalid_input(
                     "query_vector",
                     format!("contains infinite value at position {}", i),
-                    "Remove infinite values from your query vector. Check for overflow in your calculations."
+                    "Remove infinite values from your query vector. Check for overflow in your calculations.",
                 ));
             }
         }
@@ -1029,10 +1040,7 @@ impl ShardexImpl {
             if slop < config.min_factor {
                 return Err(ShardexError::invalid_input(
                     "slop_factor",
-                    format!(
-                        "value {} is below minimum allowed value {}",
-                        slop, config.min_factor
-                    ),
+                    format!("value {} is below minimum allowed value {}", slop, config.min_factor),
                     format!(
                         "Use a slop factor between {} and {}",
                         config.min_factor, config.max_factor
@@ -1042,10 +1050,7 @@ impl ShardexImpl {
             if slop > config.max_factor {
                 return Err(ShardexError::invalid_input(
                     "slop_factor",
-                    format!(
-                        "value {} exceeds maximum allowed value {}",
-                        slop, config.max_factor
-                    ),
+                    format!("value {} exceeds maximum allowed value {}", slop, config.max_factor),
                     format!(
                         "Use a slop factor between {} and {}",
                         config.min_factor, config.max_factor
@@ -1058,10 +1063,7 @@ impl ShardexImpl {
     }
 
     /// Retry a transient operation with exponential backoff
-    pub async fn retry_transient_operation<F, T, Fut>(
-        &self,
-        mut operation: F,
-    ) -> Result<T, ShardexError>
+    pub async fn retry_transient_operation<F, T, Fut>(&self, mut operation: F) -> Result<T, ShardexError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, ShardexError>>,
@@ -1094,10 +1096,7 @@ impl ShardexImpl {
                 }
                 Err(e) => {
                     if retry_count > 0 {
-                        warn!(
-                            "Operation failed permanently after {} retries: {}",
-                            retry_count, e
-                        );
+                        warn!("Operation failed permanently after {} retries: {}", retry_count, e);
                     }
                     return Err(e);
                 }
@@ -1148,10 +1147,7 @@ impl ShardexImpl {
             };
 
             if let Err(e) = validation_result {
-                warn!(
-                    "Shard {} integrity check failed: {}, attempting repair",
-                    shard_id, e
-                );
+                warn!("Shard {} integrity check failed: {}, attempting repair", shard_id, e);
 
                 // Implement shard repair strategies
                 match self.repair_shard(shard_id, &e).await {
@@ -1197,15 +1193,8 @@ impl ShardexImpl {
     }
 
     /// Repair a corrupted shard using various recovery strategies
-    pub async fn repair_shard(
-        &mut self,
-        shard_id: ShardId,
-        error: &ShardexError,
-    ) -> Result<(), ShardexError> {
-        info!(
-            "Starting repair of shard {} due to error: {}",
-            shard_id, error
-        );
+    pub async fn repair_shard(&mut self, shard_id: ShardId, error: &ShardexError) -> Result<(), ShardexError> {
+        info!("Starting repair of shard {} due to error: {}", shard_id, error);
 
         // Strategy 1: Attempt to rebuild from WAL if available
         if error.to_string().contains("corruption") || error.to_string().contains("checksum") {
@@ -1226,10 +1215,7 @@ impl ShardexImpl {
             info!("Attempting partial data recovery for shard {}", shard_id);
             match self.salvage_shard_data(shard_id).await {
                 Ok(recovered_docs) => {
-                    info!(
-                        "Salvaged {} documents from shard {}",
-                        recovered_docs, shard_id
-                    );
+                    info!("Salvaged {} documents from shard {}", recovered_docs, shard_id);
                     return Ok(());
                 }
                 Err(e) => {
@@ -1239,10 +1225,7 @@ impl ShardexImpl {
         }
 
         // Strategy 3: Reset shard if other strategies fail
-        warn!(
-            "All repair strategies failed for shard {}, attempting reset",
-            shard_id
-        );
+        warn!("All repair strategies failed for shard {}, attempting reset", shard_id);
         match self.reset_shard(shard_id).await {
             Ok(()) => {
                 warn!(
@@ -1286,10 +1269,7 @@ impl ShardexImpl {
         let salvaged_count = 0; // Would be actual count of recovered documents
 
         if salvaged_count > 0 {
-            info!(
-                "Salvaged {} documents from shard {}",
-                salvaged_count, shard_id
-            );
+            info!("Salvaged {} documents from shard {}", salvaged_count, shard_id);
             self.flush().await?; // Ensure salvaged data is persisted
         }
 
@@ -1342,8 +1322,7 @@ impl ShardexImpl {
                         let mut temp_files_cleaned = 0;
                         for entry in entries.flatten() {
                             if let Ok(metadata) = entry.metadata() {
-                                if metadata.is_file() && std::fs::remove_file(entry.path()).is_ok()
-                                {
+                                if metadata.is_file() && std::fs::remove_file(entry.path()).is_ok() {
                                     temp_files_cleaned += 1;
                                 }
                             }
@@ -1373,7 +1352,7 @@ impl ShardexImpl {
                     return Err(ShardexError::resource_exhausted(
                         "disk_space",
                         "Insufficient disk space for operations after cleanup attempt",
-                        "Free up disk space manually or move the index to a location with more available space"
+                        "Free up disk space manually or move the index to a location with more available space",
                     ));
                 }
 
@@ -1403,10 +1382,7 @@ impl ShardexImpl {
                     Ok((soft, hard)) => {
                         info!("System file handle limits: soft={}, hard={}", soft, hard);
                         if soft < 1024 {
-                            warn!(
-                                "File handle soft limit ({}) is quite low, consider increasing",
-                                soft
-                            );
+                            warn!("File handle soft limit ({}) is quite low, consider increasing", soft);
                         }
                     }
                     Err(e) => warn!("Could not query file handle limits: {}", e),
@@ -1435,10 +1411,7 @@ impl ShardexImpl {
     }
 
     /// Apply a single operation to the appropriate shards
-    async fn apply_operation_to_shards(
-        &mut self,
-        operation: &WalOperation,
-    ) -> Result<(), ShardexError> {
+    async fn apply_operation_to_shards(&mut self, operation: &WalOperation) -> Result<(), ShardexError> {
         match operation {
             WalOperation::AddPosting {
                 document_id,
@@ -1448,14 +1421,10 @@ impl ShardexImpl {
             } => {
                 // Validate the operation
                 if vector.is_empty() {
-                    return Err(ShardexError::Wal(
-                        "Cannot add posting with empty vector".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("Cannot add posting with empty vector".to_string()));
                 }
                 if *length == 0 {
-                    return Err(ShardexError::Wal(
-                        "Cannot add posting with zero length".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("Cannot add posting with zero length".to_string()));
                 }
 
                 // Create a posting from the operation
@@ -1549,10 +1518,7 @@ impl ShardexImpl {
     }
 
     /// Update detailed statistics with current resource usage metrics
-    async fn update_resource_metrics(
-        &self,
-        detailed_stats: &mut DetailedIndexStats,
-    ) -> Result<(), ShardexError> {
+    async fn update_resource_metrics(&self, detailed_stats: &mut DetailedIndexStats) -> Result<(), ShardexError> {
         // Count memory-mapped regions (estimate based on shards)
         detailed_stats.memory_mapped_regions = detailed_stats.total_shards * 2; // vectors + postings per shard
 
@@ -1586,9 +1552,9 @@ impl Shardex for ShardexImpl {
 
     async fn create(config: ShardexConfig) -> Result<Self, Self::Error> {
         // 1. Validate configuration before any file operations
-        config.validate().map_err(|e| {
-            ShardexError::Config(format!("Invalid configuration for create: {}", e))
-        })?;
+        config
+            .validate()
+            .map_err(|e| ShardexError::Config(format!("Invalid configuration for create: {}", e)))?;
 
         // 2. Check if directory already exists and is not empty
         if config.directory_path.exists() {
@@ -1605,11 +1571,7 @@ impl Shardex for ShardexImpl {
             let dir_entries = std::fs::read_dir(&config.directory_path).map_err(|e| {
                 ShardexError::Io(std::io::Error::new(
                     e.kind(),
-                    format!(
-                        "Cannot access directory {}: {}",
-                        config.directory_path.display(),
-                        e
-                    ),
+                    format!("Cannot access directory {}: {}", config.directory_path.display(), e),
                 ))
             })?;
 
@@ -1623,9 +1585,9 @@ impl Shardex for ShardexImpl {
 
         // 3. Create directory structure atomically
         let layout = DirectoryLayout::new(&config.directory_path);
-        layout.create_directories().map_err(|e| {
-            ShardexError::Config(format!("Failed to create index directories: {}", e))
-        })?;
+        layout
+            .create_directories()
+            .map_err(|e| ShardexError::Config(format!("Failed to create index directories: {}", e)))?;
 
         // 4. Initialize metadata with proper version and flags
         let mut metadata = IndexMetadata::new(config.clone())
@@ -1712,14 +1674,13 @@ impl Shardex for ShardexImpl {
         let config_manager = ConfigurationManager::new(directory_path);
         let existing_config = if config_manager.config_exists() {
             // Load from persisted configuration
-            let persisted_config = futures::executor::block_on(async {
-                config_manager.load_config().await
-            }).map_err(|e| {
-                ShardexError::Config(format!(
-                    "Failed to load persisted configuration: {}. You may need to restore from backup.",
-                    e
-                ))
-            })?;
+            let persisted_config =
+                futures::executor::block_on(async { config_manager.load_config().await }).map_err(|e| {
+                    ShardexError::Config(format!(
+                        "Failed to load persisted configuration: {}. You may need to restore from backup.",
+                        e
+                    ))
+                })?;
 
             persisted_config.config
         } else {
@@ -1742,9 +1703,9 @@ impl Shardex for ShardexImpl {
 
         // 6. Mark as active during opening
         metadata.mark_active();
-        metadata.save(layout.metadata_path()).map_err(|e| {
-            ShardexError::Config(format!("Failed to update metadata during open: {}", e))
-        })?;
+        metadata
+            .save(layout.metadata_path())
+            .map_err(|e| ShardexError::Config(format!("Failed to update metadata during open: {}", e)))?;
 
         // 7. Open the index using existing sync method
         let mut instance = Self::open_sync(directory_path).map_err(|e| {
@@ -1767,10 +1728,7 @@ impl Shardex for ShardexImpl {
             ))
         })?;
 
-        info!(
-            "Successfully opened Shardex index at {}",
-            directory_path.display()
-        );
+        info!("Successfully opened Shardex index at {}", directory_path.display());
 
         Ok(instance)
     }
@@ -1810,9 +1768,7 @@ impl Shardex for ShardexImpl {
                 processor.add_operation(operation.clone()).await?;
             }
         } else {
-            return Err(ShardexError::Wal(
-                "Batch processor not initialized".to_string(),
-            ));
+            return Err(ShardexError::Wal("Batch processor not initialized".to_string()));
         }
 
         // Keep track of operations for shard application after WAL commit
@@ -1854,9 +1810,7 @@ impl Shardex for ShardexImpl {
                 processor.add_operation(operation.clone()).await?;
             }
         } else {
-            return Err(ShardexError::Wal(
-                "Batch processor not initialized".to_string(),
-            ));
+            return Err(ShardexError::Wal("Batch processor not initialized".to_string()));
         }
 
         // Keep track of operations for shard application after WAL commit
@@ -1896,11 +1850,7 @@ impl Shardex for ShardexImpl {
         let stats = self.flush_internal().await?;
 
         if stats.is_slow_flush() {
-            warn!(
-                "Slow flush detected: {}ms total ({})",
-                stats.total_duration_ms(),
-                stats
-            );
+            warn!("Slow flush detected: {}ms total ({})", stats.total_duration_ms(), stats);
         } else if stats.is_fast_flush() {
             debug!("Fast flush completed: {}", stats);
         } else {
@@ -2043,10 +1993,7 @@ impl Shardex for ShardexImpl {
         Ok(detailed_stats)
     }
 
-    async fn get_document_text(
-        &self,
-        document_id: crate::identifiers::DocumentId,
-    ) -> Result<String, ShardexError> {
+    async fn get_document_text(&self, document_id: crate::identifiers::DocumentId) -> Result<String, ShardexError> {
         // Validate document ID - check if it's a zero/nil value
         let zero_document: crate::identifiers::DocumentId = bytemuck::Zeroable::zeroed();
         if document_id == zero_document {
@@ -2324,11 +2271,7 @@ mod tests {
 
         // Shutdown cleanly
         let shutdown_result = shardex.shutdown().await;
-        assert!(
-            shutdown_result.is_ok(),
-            "Failed to shutdown: {:?}",
-            shutdown_result
-        );
+        assert!(shutdown_result.is_ok(), "Failed to shutdown: {:?}", shutdown_result);
     }
 
     #[tokio::test]
@@ -2365,11 +2308,7 @@ mod tests {
         let result = shardex.add_postings(postings).await;
         assert!(result.is_err());
 
-        if let Err(crate::error::ShardexError::InvalidPostingData {
-            reason,
-            suggestion: _,
-        }) = result
-        {
+        if let Err(crate::error::ShardexError::InvalidPostingData { reason, suggestion: _ }) = result {
             assert!(reason.contains("expected 3, got 2"));
             assert!(reason.contains("posting at index 0"));
         } else {
@@ -2420,10 +2359,7 @@ mod tests {
         assert!(result.is_err());
         // Empty vector should be caught by dimension mismatch since expected=3, actual=0
         match result {
-            Err(crate::error::ShardexError::InvalidPostingData {
-                reason,
-                suggestion: _,
-            }) => {
+            Err(crate::error::ShardexError::InvalidPostingData { reason, suggestion: _ }) => {
                 assert!(reason.contains("expected 3, got 0"));
                 assert!(reason.contains("posting at index 0"));
             }
@@ -2649,19 +2585,11 @@ mod tests {
         // Now remove one document
         let doc_ids_to_remove = vec![doc_id1.raw()];
         let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
-        assert!(
-            remove_result.is_ok(),
-            "Failed to remove documents: {:?}",
-            remove_result
-        );
+        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
 
         // Flush to ensure removal is committed
         let flush_result = shardex.flush().await;
-        assert!(
-            flush_result.is_ok(),
-            "Failed to flush removals: {:?}",
-            flush_result
-        );
+        assert!(flush_result.is_ok(), "Failed to flush removals: {:?}", flush_result);
 
         // Verify stats show the change
         let _stats = shardex.stats().await.unwrap();
@@ -2712,21 +2640,13 @@ mod tests {
 
         // Add all postings
         let add_result = shardex.add_postings(postings).await;
-        assert!(
-            add_result.is_ok(),
-            "Failed to add postings: {:?}",
-            add_result
-        );
+        assert!(add_result.is_ok(), "Failed to add postings: {:?}", add_result);
         shardex.flush().await.unwrap();
 
         // Remove multiple documents
         let doc_ids_to_remove: Vec<u128> = doc_ids.iter().take(5).map(|id| id.raw()).collect();
         let remove_result = shardex.remove_documents(doc_ids_to_remove).await;
-        assert!(
-            remove_result.is_ok(),
-            "Failed to remove documents: {:?}",
-            remove_result
-        );
+        assert!(remove_result.is_ok(), "Failed to remove documents: {:?}", remove_result);
 
         // Wait a bit for batch processing
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -3833,10 +3753,7 @@ mod tests {
         };
 
         let mut shardex = ShardexImpl::create(config).await.unwrap();
-        assert!(
-            shardex.index.has_text_storage(),
-            "Text storage should be enabled"
-        );
+        assert!(shardex.index.has_text_storage(), "Text storage should be enabled");
 
         // Test storing and retrieving text directly
         let document_id = crate::identifiers::DocumentId::new();
@@ -3880,11 +3797,7 @@ mod tests {
         let result = shardex
             .replace_document_with_postings(document_id, text.clone(), postings)
             .await;
-        assert!(
-            result.is_ok(),
-            "Replace operation should succeed: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "Replace operation should succeed: {:?}", result);
 
         // Verify document text was stored
         let retrieved_text = shardex.get_document_text(document_id).await;
@@ -3992,8 +3905,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_document_with_postings_invalid_vector_dimension() {
-        let env =
-            TestEnvironment::new("test_replace_document_with_postings_invalid_vector_dimension");
+        let env = TestEnvironment::new("test_replace_document_with_postings_invalid_vector_dimension");
         let config = ShardexConfig {
             directory_path: env.path().to_path_buf(),
             max_document_text_size: 10 * 1024 * 1024,
@@ -4093,8 +4005,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replace_document_with_postings_nil_posting_document_id() {
-        let env =
-            TestEnvironment::new("test_replace_document_with_postings_nil_posting_document_id");
+        let env = TestEnvironment::new("test_replace_document_with_postings_nil_posting_document_id");
         let config = ShardexConfig {
             directory_path: env.path().to_path_buf(),
             max_document_text_size: 10 * 1024 * 1024,

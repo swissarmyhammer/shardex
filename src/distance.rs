@@ -68,15 +68,9 @@ impl DistanceMetric {
     /// Get a description of this metric
     pub fn description(&self) -> &'static str {
         match self {
-            DistanceMetric::Cosine => {
-                "Measures angle between vectors, ideal for high-dimensional text embeddings"
-            }
-            DistanceMetric::Euclidean => {
-                "Measures straight-line distance, ideal for geometric and spatial data"
-            }
-            DistanceMetric::DotProduct => {
-                "Measures projection magnitude, ideal for normalized vectors"
-            }
+            DistanceMetric::Cosine => "Measures angle between vectors, ideal for high-dimensional text embeddings",
+            DistanceMetric::Euclidean => "Measures straight-line distance, ideal for geometric and spatial data",
+            DistanceMetric::DotProduct => "Measures projection magnitude, ideal for normalized vectors",
         }
     }
 
@@ -266,10 +260,7 @@ mod tests {
             DistanceMetric::DotProduct,
         ] {
             let result = metric.similarity(&a, &b);
-            assert!(matches!(
-                result.unwrap_err(),
-                ShardexError::InvalidDimension { .. }
-            ));
+            assert!(matches!(result.unwrap_err(), ShardexError::InvalidDimension { .. }));
         }
     }
 

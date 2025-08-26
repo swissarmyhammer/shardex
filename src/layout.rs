@@ -329,8 +329,7 @@ impl DirectoryLayout {
         data_header: &TextDataHeader,
     ) -> Result<()> {
         // Ensure index entry count matches file size
-        let expected_index_size =
-            TextIndexHeader::SIZE + (index_header.entry_count as usize * DocumentTextEntry::SIZE);
+        let expected_index_size = TextIndexHeader::SIZE + (index_header.entry_count as usize * DocumentTextEntry::SIZE);
 
         let actual_index_size = std::fs::metadata(self.text_index_file())?.len() as usize;
 
@@ -360,11 +359,7 @@ impl DirectoryLayout {
         fs::create_dir_all(&self.root_path).map_err(|e| {
             ShardexError::Io(std::io::Error::new(
                 e.kind(),
-                format!(
-                    "Failed to create root directory {}: {}",
-                    self.root_path.display(),
-                    e
-                ),
+                format!("Failed to create root directory {}: {}", self.root_path.display(), e),
             ))
         })?;
 
@@ -466,11 +461,7 @@ impl IndexMetadata {
         })?;
 
         let metadata: Self = toml::from_str(&contents).map_err(|e| {
-            ShardexError::Corruption(format!(
-                "Failed to parse metadata file {}: {}",
-                path.display(),
-                e
-            ))
+            ShardexError::Corruption(format!("Failed to parse metadata file {}: {}", path.display(), e))
         })?;
 
         // Validate layout version compatibility
@@ -497,9 +488,8 @@ impl IndexMetadata {
             .map_err(|e| ShardexError::Config(format!("System time error: {}", e)))?
             .as_secs();
 
-        let contents = toml::to_string_pretty(self).map_err(|e| {
-            ShardexError::Corruption(format!("Failed to serialize metadata: {}", e))
-        })?;
+        let contents = toml::to_string_pretty(self)
+            .map_err(|e| ShardexError::Corruption(format!("Failed to serialize metadata: {}", e)))?;
 
         // Write atomically using a temporary file
         let temp_path = path.with_extension("tmp");
@@ -530,8 +520,7 @@ impl IndexMetadata {
     /// Check if the metadata is compatible with the given configuration
     pub fn is_compatible_with(&self, config: &ShardexConfig) -> bool {
         // Check critical configuration parameters that affect file format
-        self.config.vector_size == config.vector_size
-            && self.config.directory_path == config.directory_path
+        self.config.vector_size == config.vector_size && self.config.directory_path == config.directory_path
     }
 
     /// Update shard count
@@ -590,8 +579,7 @@ impl FileDiscovery {
         let shards = self.discover_shards()?;
         let centroid_segments = self.discover_centroid_segments()?;
         let wal_segments = self.discover_wal_segments()?;
-        let orphaned_files =
-            self.find_orphaned_files(&shards, &centroid_segments, &wal_segments)?;
+        let orphaned_files = self.find_orphaned_files(&shards, &centroid_segments, &wal_segments)?;
 
         Ok(DiscoveredFiles {
             shards,
@@ -603,8 +591,7 @@ impl FileDiscovery {
 
     /// Discover shard files
     pub fn discover_shards(&self) -> Result<Vec<ShardFiles>> {
-        let mut shard_map: std::collections::HashMap<ShardId, ShardFiles> =
-            std::collections::HashMap::new();
+        let mut shard_map: std::collections::HashMap<ShardId, ShardFiles> = std::collections::HashMap::new();
 
         if !self.layout.shards_dir().exists() {
             return Ok(Vec::new());
@@ -679,12 +666,7 @@ impl FileDiscovery {
         self.discover_segments(self.layout.wal_dir(), "wal_", WAL_EXT)
     }
 
-    fn discover_segments(
-        &self,
-        dir: &Path,
-        prefix: &str,
-        extension: &str,
-    ) -> Result<Vec<SegmentFile>> {
+    fn discover_segments(&self, dir: &Path, prefix: &str, extension: &str) -> Result<Vec<SegmentFile>> {
         let mut segments = Vec::new();
 
         if !dir.exists() {
@@ -855,11 +837,7 @@ impl CleanupManager {
         for path in orphaned_files {
             if path.exists() {
                 if let Err(e) = fs::remove_file(path) {
-                    errors.push(format!(
-                        "Failed to remove orphaned file {}: {}",
-                        path.display(),
-                        e
-                    ));
+                    errors.push(format!("Failed to remove orphaned file {}: {}", path.display(), e));
                 }
             }
         }
@@ -1299,9 +1277,6 @@ mod tests {
         // Load metadata
         let loaded_metadata = IndexMetadata::load(&metadata_path).unwrap();
         assert!(loaded_metadata.text_storage_enabled);
-        assert_eq!(
-            loaded_metadata.max_document_text_size,
-            Some(5 * 1024 * 1024)
-        );
+        assert_eq!(loaded_metadata.max_document_text_size, Some(5 * 1024 * 1024));
     }
 }

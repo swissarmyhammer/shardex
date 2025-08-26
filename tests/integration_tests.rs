@@ -121,14 +121,8 @@ fn test_parallel_storage_removal_alignment() -> Result<(), ShardexError> {
     }
 
     // Verify counts are consistent
-    assert_eq!(
-        vector_storage.current_count(),
-        posting_storage.current_count()
-    );
-    assert_eq!(
-        vector_storage.active_count(),
-        posting_storage.active_count()
-    );
+    assert_eq!(vector_storage.current_count(), posting_storage.current_count());
+    assert_eq!(vector_storage.active_count(), posting_storage.active_count());
 
     // Should be 20 total - 4 removed = 16 active
     assert_eq!(vector_storage.active_count(), 16);
@@ -179,14 +173,8 @@ fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
 
         // Verify basic counts match
         assert_eq!(vector_storage.capacity(), posting_storage.capacity());
-        assert_eq!(
-            vector_storage.current_count(),
-            posting_storage.current_count()
-        );
-        assert_eq!(
-            vector_storage.active_count(),
-            posting_storage.active_count()
-        );
+        assert_eq!(vector_storage.current_count(), posting_storage.current_count());
+        assert_eq!(vector_storage.active_count(), posting_storage.active_count());
 
         // Verify specific data integrity
         for (i, _) in doc_ids.iter().enumerate() {
@@ -337,14 +325,8 @@ fn test_parallel_storage_basic_performance() -> Result<(), ShardexError> {
     }
 
     // Verify both storages have the same counts
-    assert_eq!(
-        vector_storage.current_count(),
-        posting_storage.current_count()
-    );
-    assert_eq!(
-        vector_storage.active_count(),
-        posting_storage.active_count()
-    );
+    assert_eq!(vector_storage.current_count(), posting_storage.current_count());
+    assert_eq!(vector_storage.active_count(), posting_storage.active_count());
     assert_eq!(vector_storage.current_count(), capacity);
 
     Ok(())

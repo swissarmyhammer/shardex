@@ -25,10 +25,7 @@ pub enum WalOperation {
     /// Remove all postings for a document
     RemoveDocument { document_id: DocumentId },
     /// Store document text (part of atomic replace operation)
-    StoreDocumentText {
-        document_id: DocumentId,
-        text: String,
-    },
+    StoreDocumentText { document_id: DocumentId, text: String },
     /// Delete document text (cleanup operation)
     DeleteDocumentText { document_id: DocumentId },
 }
@@ -130,10 +127,7 @@ impl WalOperation {
     ) -> Result<(), ShardexError> {
         match self {
             WalOperation::AddPosting {
-                vector,
-                start,
-                length,
-                ..
+                vector, start, length, ..
             } => {
                 if *start > u32::MAX - *length {
                     return Err(ShardexError::Wal(
@@ -142,15 +136,11 @@ impl WalOperation {
                 }
 
                 if *length == 0 {
-                    return Err(ShardexError::Wal(
-                        "AddPosting length cannot be zero".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("AddPosting length cannot be zero".to_string()));
                 }
 
                 if vector.is_empty() {
-                    return Err(ShardexError::Wal(
-                        "AddPosting vector cannot be empty".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("AddPosting vector cannot be empty".to_string()));
                 }
 
                 if let Some(expected_dim) = expected_vector_dimension {
@@ -180,9 +170,7 @@ impl WalOperation {
                 // String type in Rust guarantees valid UTF-8, so we don't need to check
                 // But we should validate the text is not empty
                 if text.is_empty() {
-                    return Err(ShardexError::Wal(
-                        "StoreDocumentText text cannot be empty".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("StoreDocumentText text cannot be empty".to_string()));
                 }
 
                 // Use the configured maximum document text size
@@ -206,9 +194,7 @@ impl WalTransaction {
     /// Create a new transaction with the given operations
     pub fn new(operations: Vec<WalOperation>) -> Result<Self, ShardexError> {
         if operations.is_empty() {
-            return Err(ShardexError::Wal(
-                "Transaction cannot have zero operations".to_string(),
-            ));
+            return Err(ShardexError::Wal("Transaction cannot have zero operations".to_string()));
         }
 
         let id = TransactionId::new();
@@ -233,9 +219,7 @@ impl WalTransaction {
         operations: Vec<WalOperation>,
     ) -> Result<Self, ShardexError> {
         if operations.is_empty() {
-            return Err(ShardexError::Wal(
-                "Transaction cannot have zero operations".to_string(),
-            ));
+            return Err(ShardexError::Wal("Transaction cannot have zero operations".to_string()));
         }
 
         // Serialize operations to calculate checksum
@@ -257,8 +241,7 @@ impl WalTransaction {
 
     /// Get all document IDs affected by this transaction
     pub fn affected_document_ids(&self) -> Vec<DocumentId> {
-        let mut doc_ids: Vec<DocumentId> =
-            self.operations.iter().map(|op| op.document_id()).collect();
+        let mut doc_ids: Vec<DocumentId> = self.operations.iter().map(|op| op.document_id()).collect();
         doc_ids.sort();
         doc_ids.dedup();
         doc_ids
@@ -291,10 +274,7 @@ impl WalTransaction {
             operation
                 .validate(expected_vector_dimension, max_document_text_size)
                 .map_err(|e| {
-                    ShardexError::Wal(format!(
-                        "Operation {} in transaction {} is invalid: {}",
-                        i, self.id, e
-                    ))
+                    ShardexError::Wal(format!("Operation {} in transaction {} is invalid: {}", i, self.id, e))
                 })?;
         }
 
@@ -304,9 +284,7 @@ impl WalTransaction {
 
         if let Ok(duration_since_epoch) = self.timestamp.duration_since(UNIX_EPOCH) {
             if let Ok(now_duration) = now.duration_since(UNIX_EPOCH) {
-                if duration_since_epoch.as_secs()
-                    > now_duration.as_secs() + FUTURE_TOLERANCE_SECONDS
-                {
+                if duration_since_epoch.as_secs() > now_duration.as_secs() + FUTURE_TOLERANCE_SECONDS {
                     return Err(ShardexError::Wal(format!(
                         "Transaction timestamp is too far in the future: transaction time {:?}, current time {:?}",
                         self.timestamp, now
@@ -335,8 +313,7 @@ impl WalTransaction {
 
     /// Serialize operations to bytes for checksum calculation and storage
     fn serialize_operations(operations: &[WalOperation]) -> Result<Vec<u8>, ShardexError> {
-        bincode::serialize(operations)
-            .map_err(|e| ShardexError::Wal(format!("Failed to serialize operations: {}", e)))
+        bincode::serialize(operations).map_err(|e| ShardexError::Wal(format!("Failed to serialize operations: {}", e)))
     }
 
     /// Create a binary header for this transaction
@@ -364,8 +341,7 @@ impl WalTransaction {
         let header = self.to_header()?;
         let operations_data = Self::serialize_operations(&self.operations)?;
 
-        let mut result =
-            Vec::with_capacity(std::mem::size_of::<WalTransactionHeader>() + operations_data.len());
+        let mut result = Vec::with_capacity(std::mem::size_of::<WalTransactionHeader>() + operations_data.len());
 
         // Write header
         result.extend_from_slice(bytemuck::bytes_of(&header));
@@ -379,9 +355,7 @@ impl WalTransaction {
     /// Deserialize a transaction from binary format
     pub fn deserialize(data: &[u8]) -> Result<Self, ShardexError> {
         if data.len() < std::mem::size_of::<WalTransactionHeader>() {
-            return Err(ShardexError::Wal(
-                "Transaction data too short for header".to_string(),
-            ));
+            return Err(ShardexError::Wal("Transaction data too short for header".to_string()));
         }
 
         // Read header
@@ -389,8 +363,7 @@ impl WalTransaction {
         let header: WalTransactionHeader = bytemuck::pod_read_unaligned(header_bytes);
 
         // Validate header consistency
-        let expected_total_size =
-            std::mem::size_of::<WalTransactionHeader>() + header.operations_data_size as usize;
+        let expected_total_size = std::mem::size_of::<WalTransactionHeader>() + header.operations_data_size as usize;
         if data.len() != expected_total_size {
             return Err(ShardexError::Wal(format!(
                 "Transaction data size mismatch: expected {}, got {}",
@@ -537,10 +510,7 @@ impl WalBatchManager {
     /// Returns true if a flush is required due to batch size limits
     pub fn add_operation(&mut self, operation: WalOperation) -> Result<bool, ShardexError> {
         // Validate operation before adding
-        operation.validate(
-            self.expected_vector_dimension,
-            self.config.max_document_text_size,
-        )?;
+        operation.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
 
         let operation_size = operation.estimated_serialized_size();
 
@@ -557,10 +527,7 @@ impl WalBatchManager {
 
     /// Flush the current batch as a transaction
     /// Returns the transaction ID if a flush occurred, None if batch was empty
-    pub async fn flush_batch<F>(
-        &mut self,
-        write_fn: F,
-    ) -> Result<Option<TransactionId>, ShardexError>
+    pub async fn flush_batch<F>(&mut self, write_fn: F) -> Result<Option<TransactionId>, ShardexError>
     where
         F: Fn(&WalTransaction) -> Result<(), ShardexError>,
     {
@@ -574,10 +541,7 @@ impl WalBatchManager {
         let transaction_id = transaction.id;
 
         // Validate transaction
-        transaction.validate(
-            self.expected_vector_dimension,
-            self.config.max_document_text_size,
-        )?;
+        transaction.validate(self.expected_vector_dimension, self.config.max_document_text_size)?;
 
         // Write transaction using the provided function
         write_fn(&transaction)?;
@@ -709,10 +673,7 @@ pub struct WalBatchHandle {
 
 impl WalBatchHandle {
     /// Create a new batch handle and manager
-    pub fn new(
-        config: BatchConfig,
-        expected_vector_dimension: Option<usize>,
-    ) -> (Self, WalBatchManager) {
+    pub fn new(config: BatchConfig, expected_vector_dimension: Option<usize>) -> (Self, WalBatchManager) {
         let (command_sender, _command_receiver) = mpsc::channel(1000);
         let (_response_sender, response_receiver) = mpsc::channel(1000);
 
@@ -737,13 +698,8 @@ impl WalBatchHandle {
         match self.response_receiver.recv().await {
             Some(BatchResponse::OperationAdded) => Ok(()),
             Some(BatchResponse::Error(e)) => Err(e),
-            Some(response) => Err(ShardexError::Wal(format!(
-                "Unexpected response: {:?}",
-                response
-            ))),
-            None => Err(ShardexError::Wal(
-                "Batch manager response channel closed".to_string(),
-            )),
+            Some(response) => Err(ShardexError::Wal(format!("Unexpected response: {:?}", response))),
+            None => Err(ShardexError::Wal("Batch manager response channel closed".to_string())),
         }
     }
 
@@ -758,13 +714,8 @@ impl WalBatchHandle {
         match self.response_receiver.recv().await {
             Some(BatchResponse::BatchFlushed(transaction_id)) => Ok(transaction_id),
             Some(BatchResponse::Error(e)) => Err(e),
-            Some(response) => Err(ShardexError::Wal(format!(
-                "Unexpected response: {:?}",
-                response
-            ))),
-            None => Err(ShardexError::Wal(
-                "Batch manager response channel closed".to_string(),
-            )),
+            Some(response) => Err(ShardexError::Wal(format!("Unexpected response: {:?}", response))),
+            None => Err(ShardexError::Wal("Batch manager response channel closed".to_string())),
         }
     }
 
@@ -779,13 +730,8 @@ impl WalBatchHandle {
         match self.response_receiver.recv().await {
             Some(BatchResponse::Shutdown) => Ok(()),
             Some(BatchResponse::Error(e)) => Err(e),
-            Some(response) => Err(ShardexError::Wal(format!(
-                "Unexpected response: {:?}",
-                response
-            ))),
-            None => Err(ShardexError::Wal(
-                "Batch manager response channel closed".to_string(),
-            )),
+            Some(response) => Err(ShardexError::Wal(format!("Unexpected response: {:?}", response))),
+            None => Err(ShardexError::Wal("Batch manager response channel closed".to_string())),
         }
     }
 }
@@ -806,9 +752,7 @@ mod tests {
             vector,
         };
 
-        let remove_op = WalOperation::RemoveDocument {
-            document_id: doc_id,
-        };
+        let remove_op = WalOperation::RemoveDocument { document_id: doc_id };
 
         assert_eq!(add_op.document_id(), doc_id);
         assert_eq!(remove_op.document_id(), doc_id);
@@ -881,9 +825,7 @@ mod tests {
         assert!(overflow.validate(None, 10 * 1024 * 1024).is_err());
 
         // Valid RemoveDocument (always valid)
-        let remove_doc = WalOperation::RemoveDocument {
-            document_id: doc_id,
-        };
+        let remove_doc = WalOperation::RemoveDocument { document_id: doc_id };
         assert!(remove_doc.validate(None, 10 * 1024 * 1024).is_ok());
         assert!(remove_doc.validate(Some(128), 10 * 1024 * 1024).is_ok());
     }
@@ -898,9 +840,7 @@ mod tests {
                 length: 100,
                 vector: vec![1.0, 2.0, 3.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id },
         ];
 
         let transaction = WalTransaction::new(operations.clone()).unwrap();
@@ -939,9 +879,7 @@ mod tests {
                 length: 75,
                 vector: vec![4.0, 5.0, 6.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id1,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id1 },
         ];
 
         let transaction = WalTransaction::new(operations).unwrap();
@@ -987,9 +925,7 @@ mod tests {
                 length: 100,
                 vector: vec![1.0, 2.0, 3.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id },
         ];
 
         let transaction = WalTransaction::new(operations).unwrap();
@@ -1333,9 +1269,7 @@ mod tests {
                 length: 100,
                 vector: vec![1.0, 2.0, 3.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id },
         ];
 
         // Add operations to batch
@@ -1390,9 +1324,7 @@ mod tests {
                 length: 75,
                 vector: vec![4.0, 5.0, 6.0],
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id1,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id1 },
         ];
 
         for operation in operations {
@@ -1479,9 +1411,7 @@ mod tests {
             vector: vec![1.0, 2.0, 3.0, 4.0],
         };
 
-        let remove_op = WalOperation::RemoveDocument {
-            document_id: doc_id,
-        };
+        let remove_op = WalOperation::RemoveDocument { document_id: doc_id };
 
         // AddPosting: tag(1) + doc_id(16) + start(4) + length(4) + vec_len(4) + vec_data(16) = 45
         assert_eq!(add_op.estimated_serialized_size(), 45);
@@ -1513,12 +1443,9 @@ mod tests {
 
         // Future timestamp should be rejected (create with manual timestamp)
         let future_time = SystemTime::now() + std::time::Duration::from_secs(3600); // 1 hour in future
-        let future_ops = vec![WalOperation::RemoveDocument {
-            document_id: doc_id,
-        }];
+        let future_ops = vec![WalOperation::RemoveDocument { document_id: doc_id }];
         let future_transaction =
-            WalTransaction::with_id_and_timestamp(TransactionId::new(), future_time, future_ops)
-                .unwrap();
+            WalTransaction::with_id_and_timestamp(TransactionId::new(), future_time, future_ops).unwrap();
         assert!(future_transaction.validate(None, 10 * 1024 * 1024).is_err());
     }
 
@@ -1540,9 +1467,7 @@ mod tests {
         assert!(!store_op.is_remove_document());
 
         // Test DeleteDocumentText operation
-        let delete_op = WalOperation::DeleteDocumentText {
-            document_id: doc_id,
-        };
+        let delete_op = WalOperation::DeleteDocumentText { document_id: doc_id };
 
         assert_eq!(delete_op.document_id(), doc_id);
         assert!(delete_op.is_delete_document_text());
@@ -1581,9 +1506,7 @@ mod tests {
         assert!(large_op.validate(None, 10 * 1024 * 1024).is_ok());
 
         // Delete operation should always be valid
-        let delete_op = WalOperation::DeleteDocumentText {
-            document_id: doc_id,
-        };
+        let delete_op = WalOperation::DeleteDocumentText { document_id: doc_id };
         assert!(delete_op.validate(None, 10 * 1024 * 1024).is_ok());
         assert!(delete_op.validate(Some(128), 10 * 1024 * 1024).is_ok());
     }
@@ -1599,9 +1522,7 @@ mod tests {
                 document_id: doc_id,
                 text,
             },
-            WalOperation::RemoveDocument {
-                document_id: doc_id,
-            },
+            WalOperation::RemoveDocument { document_id: doc_id },
             WalOperation::AddPosting {
                 document_id: doc_id,
                 start: 0,

@@ -42,11 +42,7 @@ enum WriteOperation {
         text: String,
         completion_sender: oneshot::Sender<Result<(), ShardexError>>,
     },
-    #[allow(dead_code)] // Future functionality for text deletion
-    DeleteText {
-        document_id: DocumentId,
-        completion_sender: oneshot::Sender<Result<(), ShardexError>>,
-    },
+
 }
 
 /// Configuration for concurrent document text storage
@@ -196,14 +192,8 @@ impl ConcurrentDocumentTextStorage {
             loop {
                 interval.tick().await;
 
-                if let Err(e) = Self::process_write_batch_static(
-                    &storage,
-                    &write_queue,
-                    &metadata_cache,
-                    &metrics,
-                    &config,
-                )
-                .await
+                if let Err(e) =
+                    Self::process_write_batch_static(&storage, &write_queue, &metadata_cache, &metrics, &config).await
                 {
                     log::error!("Error processing write batch: {:?}", e);
                 }
@@ -232,19 +222,16 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Get document text with concurrent access optimization
-    pub async fn get_text_concurrent(
-        &self,
-        document_id: DocumentId,
-    ) -> Result<String, ShardexError> {
-        let _permit =
-            self.concurrency_limiter
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "concurrency_limiter".to_string(),
-                    reason: "Failed to acquire concurrency permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+    pub async fn get_text_concurrent(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "concurrency_limiter".to_string(),
+                reason: "Failed to acquire concurrency permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let start_time = Instant::now();
 
@@ -282,20 +269,16 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Store text with batched writes for better performance
-    pub async fn store_text_batched(
-        &self,
-        document_id: DocumentId,
-        text: String,
-    ) -> Result<(), ShardexError> {
-        let _permit =
-            self.concurrency_limiter
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "concurrency_limiter".to_string(),
-                    reason: "Failed to acquire concurrency permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+    pub async fn store_text_batched(&self, document_id: DocumentId, text: String) -> Result<(), ShardexError> {
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "concurrency_limiter".to_string(),
+                reason: "Failed to acquire concurrency permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let (tx, rx) = oneshot::channel();
 
@@ -328,20 +311,16 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Store text immediately without batching (for urgent operations)
-    pub async fn store_text_immediate(
-        &self,
-        document_id: DocumentId,
-        text: &str,
-    ) -> Result<(), ShardexError> {
-        let _permit =
-            self.concurrency_limiter
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "concurrency_limiter".to_string(),
-                    reason: "Failed to acquire concurrency permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+    pub async fn store_text_immediate(&self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "concurrency_limiter".to_string(),
+                reason: "Failed to acquire concurrency permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         let start_time = Instant::now();
 
@@ -369,15 +348,15 @@ impl ConcurrentDocumentTextStorage {
         start: u32,
         length: u32,
     ) -> Result<String, ShardexError> {
-        let _permit =
-            self.concurrency_limiter
-                .acquire()
-                .await
-                .map_err(|_| ShardexError::InvalidInput {
-                    field: "concurrency_limiter".to_string(),
-                    reason: "Failed to acquire concurrency permit".to_string(),
-                    suggestion: "Retry the operation".to_string(),
-                })?;
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| ShardexError::InvalidInput {
+                field: "concurrency_limiter".to_string(),
+                reason: "Failed to acquire concurrency permit".to_string(),
+                suggestion: "Retry the operation".to_string(),
+            })?;
 
         // Check metadata cache for early validation
         {
@@ -482,31 +461,14 @@ impl ConcurrentDocumentTextStorage {
 
                         // Clean up cache if it's too large
                         if cache.len() > config.metadata_cache_size {
-                            Self::cleanup_metadata_cache(
-                                &mut cache,
-                                config.metadata_cache_size / 2,
-                            );
+                            Self::cleanup_metadata_cache(&mut cache, config.metadata_cache_size / 2);
                         }
                     }
 
                     let _ = completion_sender.send(result);
                 }
 
-                WriteOperation::DeleteText {
-                    document_id,
-                    completion_sender,
-                } => {
-                    // Remove from cache
-                    {
-                        let mut cache = metadata_cache.lock();
-                        cache.remove(&document_id);
-                    }
 
-                    // For now, we'll return success as logical deletion
-                    // In a real implementation, this might mark entries for cleanup
-                    let result = Ok(());
-                    let _ = completion_sender.send(result);
-                }
             }
         }
 
@@ -523,8 +485,7 @@ impl ConcurrentDocumentTextStorage {
             if total_batches == 1 {
                 metrics_guard.avg_batch_size = batch_size as f64;
             } else {
-                metrics_guard.avg_batch_size = ((metrics_guard.avg_batch_size
-                    * (total_batches - 1) as f64)
+                metrics_guard.avg_batch_size = ((metrics_guard.avg_batch_size * (total_batches - 1) as f64)
                     + batch_size as f64)
                     / total_batches as f64;
             }
@@ -546,10 +507,7 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Clean up metadata cache by removing least recently used entries
-    fn cleanup_metadata_cache(
-        cache: &mut HashMap<DocumentId, DocumentMetadata>,
-        target_size: usize,
-    ) {
+    fn cleanup_metadata_cache(cache: &mut HashMap<DocumentId, DocumentMetadata>, target_size: usize) {
         if cache.len() <= target_size {
             return;
         }
@@ -604,8 +562,7 @@ impl ConcurrentDocumentTextStorage {
             metrics.avg_operation_latency_ms = latency_ms;
         } else {
             metrics.avg_operation_latency_ms =
-                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms)
-                    / total_ops as f64;
+                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms) / total_ops as f64;
         }
     }
 
@@ -626,8 +583,7 @@ impl ConcurrentDocumentTextStorage {
             metrics.avg_operation_latency_ms = latency_ms;
         } else {
             metrics.avg_operation_latency_ms =
-                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms)
-                    / total_ops as f64;
+                ((metrics.avg_operation_latency_ms * (total_ops - 1) as f64) + latency_ms) / total_ops as f64;
         }
     }
 

@@ -125,9 +125,10 @@ impl WalReplayer {
     pub async fn replay_all_segments(&mut self) -> Result<(), ShardexError> {
         // Create a DirectoryLayout from our WAL directory path
         // The WAL directory should be the parent's wal subdirectory
-        let parent_dir = self.wal_directory.parent().ok_or_else(|| {
-            ShardexError::Wal("WAL directory has no parent directory".to_string())
-        })?;
+        let parent_dir = self
+            .wal_directory
+            .parent()
+            .ok_or_else(|| ShardexError::Wal("WAL directory has no parent directory".to_string()))?;
 
         let layout = DirectoryLayout::new(parent_dir);
         let discovery = FileDiscovery::new(layout);
@@ -194,18 +195,8 @@ impl WalReplayer {
 
             // Read the record header manually to avoid alignment issues
             let header_bytes = &segment_data[current_pos..current_pos + WalRecordHeader::SIZE];
-            let data_length = u32::from_le_bytes([
-                header_bytes[0],
-                header_bytes[1],
-                header_bytes[2],
-                header_bytes[3],
-            ]);
-            let checksum = u32::from_le_bytes([
-                header_bytes[4],
-                header_bytes[5],
-                header_bytes[6],
-                header_bytes[7],
-            ]);
+            let data_length = u32::from_le_bytes([header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]]);
+            let checksum = u32::from_le_bytes([header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]]);
 
             let data_length_usize = data_length as usize;
             let record_data_start = current_pos + WalRecordHeader::SIZE;
@@ -247,10 +238,8 @@ impl WalReplayer {
                                 self.mark_transaction_processed(transaction.id);
                             }
                             Err(e) => {
-                                self.recovery_stats.add_error(format!(
-                                    "Failed to apply transaction {}: {}",
-                                    transaction.id, e
-                                ));
+                                self.recovery_stats
+                                    .add_error(format!("Failed to apply transaction {}: {}", transaction.id, e));
                             }
                         }
                     }
@@ -271,10 +260,7 @@ impl WalReplayer {
     }
 
     /// Apply a transaction's operations to the index
-    async fn apply_transaction(
-        &mut self,
-        transaction: &WalTransaction,
-    ) -> Result<usize, ShardexError> {
+    async fn apply_transaction(&mut self, transaction: &WalTransaction) -> Result<usize, ShardexError> {
         let mut operations_applied = 0;
 
         for operation in &transaction.operations {
@@ -309,8 +295,7 @@ impl WalReplayer {
 
                     // Update error counter for text operations
                     match operation {
-                        WalOperation::StoreDocumentText { .. }
-                        | WalOperation::DeleteDocumentText { .. } => {
+                        WalOperation::StoreDocumentText { .. } | WalOperation::DeleteDocumentText { .. } => {
                             self.recovery_stats.text_storage_errors += 1;
                         }
                         _ => {}
@@ -340,14 +325,10 @@ impl WalReplayer {
             } => {
                 // Validate the operation
                 if vector.is_empty() {
-                    return Err(ShardexError::Wal(
-                        "Cannot add posting with empty vector".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("Cannot add posting with empty vector".to_string()));
                 }
                 if *length == 0 {
-                    return Err(ShardexError::Wal(
-                        "Cannot add posting with zero length".to_string(),
-                    ));
+                    return Err(ShardexError::Wal("Cannot add posting with zero length".to_string()));
                 }
 
                 // Create a posting from the operation
@@ -423,23 +404,13 @@ impl WalReplayer {
             WalOperation::StoreDocumentText { document_id, text } => {
                 self.replay_store_document_text(*document_id, text)
             }
-            WalOperation::DeleteDocumentText { document_id } => {
-                self.replay_delete_document_text(*document_id)
-            }
+            WalOperation::DeleteDocumentText { document_id } => self.replay_delete_document_text(*document_id),
         }
     }
 
     /// Replay document text storage operation
-    fn replay_store_document_text(
-        &mut self,
-        document_id: DocumentId,
-        text: &str,
-    ) -> Result<(), ShardexError> {
-        tracing::debug!(
-            "Replaying store document text: {} ({} bytes)",
-            document_id,
-            text.len()
-        );
+    fn replay_store_document_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
+        tracing::debug!("Replaying store document text: {} ({} bytes)", document_id, text.len());
 
         // Increment counter for store operations
         self.recovery_stats.text_store_operations += 1;
@@ -447,27 +418,18 @@ impl WalReplayer {
         // Apply to index-level text storage using public API
         match self.shardex_index.store_document_text(document_id, text) {
             Ok(()) => {
-                tracing::debug!(
-                    "Successfully replayed text storage for document {}",
-                    document_id
-                );
+                tracing::debug!("Successfully replayed text storage for document {}", document_id);
                 // Update bytes replayed on success
                 self.recovery_stats.total_text_bytes_replayed += text.len() as u64;
                 Ok(())
             }
             Err(e) => {
-                tracing::error!(
-                    "Failed to replay text storage for document {}: {}",
-                    document_id,
-                    e
-                );
+                tracing::error!("Failed to replay text storage for document {}: {}", document_id, e);
                 self.recovery_stats.text_storage_errors += 1;
 
                 // Add error to errors_encountered for proper error tracking
-                self.recovery_stats.add_error(format!(
-                    "Text storage error for document {}: {}",
-                    document_id, e
-                ));
+                self.recovery_stats
+                    .add_error(format!("Text storage error for document {}: {}", document_id, e));
 
                 // Attempt recovery based on error type
                 self.handle_text_storage_error(&e, document_id, text)?;
@@ -487,10 +449,7 @@ impl WalReplayer {
         // Since DocumentTextStorage doesn't have a delete method yet, we'll log the operation
         // In a full implementation, this would call a deletion method
         if self.shardex_index.has_text_storage() {
-            tracing::debug!(
-                "Document text deletion for {} replayed (logical deletion)",
-                document_id
-            );
+            tracing::debug!("Document text deletion for {} replayed (logical deletion)", document_id);
             // In a full implementation, this might call a mark_for_deletion method
             Ok(())
         } else {
@@ -576,10 +535,7 @@ impl WalReplayer {
 
     /// Create a default shard for recovery when no shards exist
     /// This is a recovery scenario where we need to replay operations but the index is empty
-    fn create_default_shard_for_recovery(
-        &mut self,
-        sample_vector: &[f32],
-    ) -> Result<ShardId, ShardexError> {
+    fn create_default_shard_for_recovery(&mut self, sample_vector: &[f32]) -> Result<ShardId, ShardexError> {
         let shard_id = ShardId::new();
         let vector_size = sample_vector.len();
         let default_capacity = 1000; // Default capacity for recovery shard
@@ -591,9 +547,7 @@ impl WalReplayer {
             vector_size,
             self.wal_directory
                 .parent()
-                .ok_or_else(|| {
-                    ShardexError::Wal("WAL directory has no parent for shard creation".to_string())
-                })?
+                .ok_or_else(|| ShardexError::Wal("WAL directory has no parent for shard creation".to_string()))?
                 .to_path_buf(),
         )?;
 
@@ -891,9 +845,7 @@ mod tests {
         assert_eq!(retrieved_text.unwrap(), test_text);
 
         // Test delete document text operation
-        let delete_op = WalOperation::DeleteDocumentText {
-            document_id: doc_id,
-        };
+        let delete_op = WalOperation::DeleteDocumentText { document_id: doc_id };
 
         let result = replayer.apply_operation(&delete_op);
         assert!(result.is_ok(), "Delete operation should succeed");

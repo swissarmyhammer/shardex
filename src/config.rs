@@ -93,7 +93,7 @@ impl SlopFactorConfig {
             return Err(ShardexError::config_error(
                 "slop_factor_config.max_factor",
                 "must be greater than 0",
-                "Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)"
+                "Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)",
             ));
         }
 
@@ -126,7 +126,7 @@ impl SlopFactorConfig {
             return Err(ShardexError::config_error(
                 "slop_factor_config.performance_threshold_ms",
                 "must be greater than 0",
-                "Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)"
+                "Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)",
             ));
         }
 
@@ -361,15 +361,18 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "vector_size",
                 "must be greater than 0",
-                "Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)"
+                "Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)",
             ));
         }
 
         if self.vector_size > 10000 {
             return Err(ShardexError::config_error(
                 "vector_size",
-                format!("value {} is unusually large and may cause performance issues", self.vector_size),
-                "Most embedding models use 384-1536 dimensions. Verify this matches your model's output size."
+                format!(
+                    "value {} is unusually large and may cause performance issues",
+                    self.vector_size
+                ),
+                "Most embedding models use 384-1536 dimensions. Verify this matches your model's output size.",
             ));
         }
 
@@ -377,7 +380,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "shard_size",
                 "must be greater than 0",
-                "Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)"
+                "Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)",
             ));
         }
 
@@ -420,7 +423,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "wal_safety_margin",
                 format!("value {} must be between 0.0 and 1.0", self.wal_safety_margin),
-                "Set wal_safety_margin between 0.0 (no safety margin) and 1.0 (100% margin). Recommended: 0.5 (50%)"
+                "Set wal_safety_margin between 0.0 (no safety margin) and 1.0 (100% margin). Recommended: 0.5 (50%)",
             ));
         }
 
@@ -428,7 +431,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "batch_write_interval_ms",
                 "must be greater than 0",
-                "Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)"
+                "Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)",
             ));
         }
 
@@ -450,7 +453,7 @@ impl ShardexConfig {
             return Err(ShardexError::config_error(
                 "bloom_filter_size",
                 "must be greater than 0",
-                "Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)"
+                "Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)",
             ));
         }
 
@@ -480,18 +483,13 @@ impl ShardexConfig {
                     "Size {} bytes exceeds maximum {}",
                     self.max_document_text_size, MAX_DOCUMENT_SIZE
                 ),
-                format!(
-                    "Set max_document_text_size to at most {} bytes",
-                    MAX_DOCUMENT_SIZE
-                ),
+                format!("Set max_document_text_size to at most {} bytes", MAX_DOCUMENT_SIZE),
             ));
         }
 
         // Validate directory path is not empty
         if self.directory_path.as_os_str().is_empty() {
-            return Err(ShardexError::Config(
-                "Directory path cannot be empty".to_string(),
-            ));
+            return Err(ShardexError::Config("Directory path cannot be empty".to_string()));
         }
 
         Ok(())
@@ -573,7 +571,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "vector_size - must be greater than 0: Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)");
+            assert_eq!(
+                msg,
+                "vector_size - must be greater than 0: Set vector_size to match your embedding model dimensions (e.g., 384 for sentence transformers, 1536 for OpenAI embeddings)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -585,7 +586,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "shard_size - must be greater than 0: Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)");
+            assert_eq!(
+                msg,
+                "shard_size - must be greater than 0: Set shard_size to control how many vectors per shard (recommended: 10000-100000 depending on memory constraints)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -597,7 +601,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "shardex_segment_size - must be greater than 0: Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)");
+            assert_eq!(
+                msg,
+                "shardex_segment_size - must be greater than 0: Set shardex_segment_size to control file segment sizes (recommended: 64MB-1GB)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -609,7 +616,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "wal_segment_size - value 512 bytes is too small for efficient WAL operations: Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)");
+            assert_eq!(
+                msg,
+                "wal_segment_size - value 512 bytes is too small for efficient WAL operations: Set wal_segment_size to at least 1024 bytes (recommended: 1MB-64MB)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -621,7 +631,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "wal_segment_size - value 2147483648 bytes exceeds 1GB limit: Set wal_segment_size to 1GB or less to avoid memory and disk space issues");
+            assert_eq!(
+                msg,
+                "wal_segment_size - value 2147483648 bytes exceeds 1GB limit: Set wal_segment_size to 1GB or less to avoid memory and disk space issues"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -633,7 +646,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "batch_write_interval_ms - must be greater than 0: Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)");
+            assert_eq!(
+                msg,
+                "batch_write_interval_ms - must be greater than 0: Set batch_write_interval_ms to control how often batches are flushed (recommended: 100-1000ms)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -645,7 +661,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)");
+            assert_eq!(
+                msg,
+                "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -657,7 +676,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "bloom_filter_size - must be greater than 0: Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)");
+            assert_eq!(
+                msg,
+                "bloom_filter_size - must be greater than 0: Set bloom_filter_size in bits (recommended: 1000000 for ~100k vectors with 1% false positive rate)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -692,7 +714,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - Size 512 bytes is below minimum 1024: Set max_document_text_size to 0 to disable text storage or at least 1024 bytes to enable");
+            assert_eq!(
+                msg,
+                "max_document_text_size - Size 512 bytes is below minimum 1024: Set max_document_text_size to 0 to disable text storage or at least 1024 bytes to enable"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -718,7 +743,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "max_document_text_size - Size 2147483648 bytes exceeds maximum 1073741824: Set max_document_text_size to at most 1073741824 bytes");
+            assert_eq!(
+                msg,
+                "max_document_text_size - Size 2147483648 bytes exceeds maximum 1073741824: Set max_document_text_size to at most 1073741824 bytes"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -814,7 +842,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)");
+            assert_eq!(
+                msg,
+                "slop_factor_config.default_factor - must be greater than 0: Set default_factor to a positive integer (recommended: 3-10 for most use cases)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -826,7 +857,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.min_factor - must be greater than 0: Set min_factor to at least 1 (minimum valid slop factor)");
+            assert_eq!(
+                msg,
+                "slop_factor_config.min_factor - must be greater than 0: Set min_factor to at least 1 (minimum valid slop factor)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -838,7 +872,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.max_factor - must be greater than 0: Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)");
+            assert_eq!(
+                msg,
+                "slop_factor_config.max_factor - must be greater than 0: Set max_factor to a reasonable upper bound (recommended: 100 or less to avoid performance issues)"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -868,7 +905,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.default_factor - value 10 is outside the allowed range [1, 5]: Set default_factor to a value between 1 and 5");
+            assert_eq!(
+                msg,
+                "slop_factor_config.default_factor - value 10 is outside the allowed range [1, 5]: Set default_factor to a value between 1 and 5"
+            );
         } else {
             panic!("Expected Config error");
         }
@@ -880,7 +920,10 @@ mod tests {
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ShardexError::Config(msg)) = result {
-            assert_eq!(msg, "slop_factor_config.performance_threshold_ms - must be greater than 0: Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)");
+            assert_eq!(
+                msg,
+                "slop_factor_config.performance_threshold_ms - must be greater than 0: Set performance_threshold_ms to a positive value in milliseconds (recommended: 50-200ms)"
+            );
         } else {
             panic!("Expected Config error");
         }

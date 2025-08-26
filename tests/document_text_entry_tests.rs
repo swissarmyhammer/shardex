@@ -7,10 +7,9 @@
 //! - Memory layout compatibility and safety
 //! - Bytemuck Pod/Zeroable implementations
 
-
 use shardex::document_text_entry::{
-    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
-    TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
+    DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION, TEXT_INDEX_MAGIC,
+    TEXT_INDEX_VERSION,
 };
 use shardex::error::ShardexError;
 use shardex::identifiers::DocumentId;
@@ -166,10 +165,7 @@ fn test_text_index_header_operations() {
         header.next_entry_offset,
         TextIndexHeader::SIZE as u64 + 2 * DocumentTextEntry::SIZE as u64
     );
-    assert_eq!(
-        header.total_entries_size(),
-        2 * DocumentTextEntry::SIZE as u64
-    );
+    assert_eq!(header.total_entries_size(), 2 * DocumentTextEntry::SIZE as u64);
 }
 
 #[test]
@@ -244,10 +240,7 @@ fn test_text_data_header_operations() {
     // Add text
     header.add_text(512);
     assert_eq!(header.total_text_size, 512);
-    assert_eq!(
-        header.next_text_offset,
-        TextDataHeader::SIZE as u64 + 512 + 8
-    ); // +8 for length prefixes
+    assert_eq!(header.next_text_offset, TextDataHeader::SIZE as u64 + 512 + 8); // +8 for length prefixes
     assert!(!header.is_empty());
 
     let utilization = header.utilization_ratio();
@@ -256,10 +249,7 @@ fn test_text_data_header_operations() {
     // Add more text
     header.add_text(256);
     assert_eq!(header.total_text_size, 768);
-    assert_eq!(
-        header.next_text_offset,
-        TextDataHeader::SIZE as u64 + 768 + 16
-    ); // +16 for two sets of length prefixes
+    assert_eq!(header.next_text_offset, TextDataHeader::SIZE as u64 + 768 + 16); // +16 for two sets of length prefixes
 
     let new_utilization = header.utilization_ratio();
     // Utilization might decrease due to overhead (length prefixes) relative to text size
@@ -299,29 +289,14 @@ fn test_memory_layout_consistency() {
     assert_eq!(std::mem::align_of::<DocumentTextEntry>(), 16);
 
     // Verify SIZE constants match actual sizes
-    assert_eq!(
-        TextIndexHeader::SIZE,
-        std::mem::size_of::<TextIndexHeader>()
-    );
+    assert_eq!(TextIndexHeader::SIZE, std::mem::size_of::<TextIndexHeader>());
     assert_eq!(TextDataHeader::SIZE, std::mem::size_of::<TextDataHeader>());
-    assert_eq!(
-        DocumentTextEntry::SIZE,
-        std::mem::size_of::<DocumentTextEntry>()
-    );
+    assert_eq!(DocumentTextEntry::SIZE, std::mem::size_of::<DocumentTextEntry>());
 
     // Verify sizes are multiples of alignment (important for arrays)
-    assert_eq!(
-        TextIndexHeader::SIZE % std::mem::align_of::<TextIndexHeader>(),
-        0
-    );
-    assert_eq!(
-        TextDataHeader::SIZE % std::mem::align_of::<TextDataHeader>(),
-        0
-    );
-    assert_eq!(
-        DocumentTextEntry::SIZE % std::mem::align_of::<DocumentTextEntry>(),
-        0
-    );
+    assert_eq!(TextIndexHeader::SIZE % std::mem::align_of::<TextIndexHeader>(), 0);
+    assert_eq!(TextDataHeader::SIZE % std::mem::align_of::<TextDataHeader>(), 0);
+    assert_eq!(DocumentTextEntry::SIZE % std::mem::align_of::<DocumentTextEntry>(), 0);
 
     // Verify headers are reasonably sized
     const _: () = assert!(TextIndexHeader::SIZE >= 80 + 4 + 8); // FileHeader + entry_count + next_entry_offset
@@ -351,31 +326,16 @@ fn test_bytemuck_pod_compatibility() {
 
     // Compare the important fields (timestamps may differ)
     assert_eq!(index_header.entry_count, index_restored.entry_count);
-    assert_eq!(
-        index_header.next_entry_offset,
-        index_restored.next_entry_offset
-    );
+    assert_eq!(index_header.next_entry_offset, index_restored.next_entry_offset);
     assert_eq!(index_header._padding, index_restored._padding);
-    assert_eq!(
-        index_header.file_header.magic,
-        index_restored.file_header.magic
-    );
-    assert_eq!(
-        index_header.file_header.version,
-        index_restored.file_header.version
-    );
+    assert_eq!(index_header.file_header.magic, index_restored.file_header.magic);
+    assert_eq!(index_header.file_header.version, index_restored.file_header.version);
 
     assert_eq!(data_header.total_text_size, data_restored.total_text_size);
     assert_eq!(data_header.next_text_offset, data_restored.next_text_offset);
     assert_eq!(data_header._padding, data_restored._padding);
-    assert_eq!(
-        data_header.file_header.magic,
-        data_restored.file_header.magic
-    );
-    assert_eq!(
-        data_header.file_header.version,
-        data_restored.file_header.version
-    );
+    assert_eq!(data_header.file_header.magic, data_restored.file_header.magic);
+    assert_eq!(data_header.file_header.version, data_restored.file_header.version);
 
     assert_eq!(entry, entry_restored);
 }
@@ -492,19 +452,13 @@ fn test_default_implementations() {
     assert_eq!(default_index.next_entry_offset, new_index.next_entry_offset);
     assert_eq!(default_index._padding, new_index._padding);
     assert_eq!(default_index.file_header.magic, new_index.file_header.magic);
-    assert_eq!(
-        default_index.file_header.version,
-        new_index.file_header.version
-    );
+    assert_eq!(default_index.file_header.version, new_index.file_header.version);
 
     assert_eq!(default_data.total_text_size, new_data.total_text_size);
     assert_eq!(default_data.next_text_offset, new_data.next_text_offset);
     assert_eq!(default_data._padding, new_data._padding);
     assert_eq!(default_data.file_header.magic, new_data.file_header.magic);
-    assert_eq!(
-        default_data.file_header.version,
-        new_data.file_header.version
-    );
+    assert_eq!(default_data.file_header.version, new_data.file_header.version);
 }
 
 #[test]
@@ -525,10 +479,7 @@ fn test_boundary_conditions() {
     let limit_entry = DocumentTextEntry::new(doc_id, 0, limit_size);
     match limit_entry.validate() {
         Ok(_) => {} // Expected success
-        Err(e) => panic!(
-            "Limit entry validation failed: {:?}, size was {}",
-            e, limit_size
-        ),
+        Err(e) => panic!("Limit entry validation failed: {:?}, size was {}", e, limit_size),
     }
 
     // Test just over the limit

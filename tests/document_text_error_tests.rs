@@ -232,10 +232,7 @@ fn test_utf8_boundary_errors() {
         ShardexError::InvalidRange { .. } => {
             // Expected error for invalid UTF-8 boundary
         }
-        e => panic!(
-            "Expected InvalidRange error for UTF-8 boundary, got {:?}",
-            e
-        ),
+        e => panic!("Expected InvalidRange error for UTF-8 boundary, got {:?}", e),
     }
 
     // Test extraction starting in the middle of a multi-byte character
@@ -247,10 +244,7 @@ fn test_utf8_boundary_errors() {
         ShardexError::InvalidRange { .. } => {
             // Expected error for invalid UTF-8 boundary
         }
-        e => panic!(
-            "Expected InvalidRange error for UTF-8 boundary, got {:?}",
-            e
-        ),
+        e => panic!("Expected InvalidRange error for UTF-8 boundary, got {:?}", e),
     }
 
     // Test valid UTF-8 boundary extraction (should succeed)
@@ -383,10 +377,7 @@ fn test_concurrent_error_scenarios() {
             DocumentId::new(),
             "This text is way too long for the small limit we have set",
         ),
-        (
-            DocumentId::new(),
-            "Another text that exceeds the configured size limit",
-        ),
+        (DocumentId::new(), "Another text that exceeds the configured size limit"),
     ];
 
     // Store valid documents
@@ -446,22 +437,13 @@ fn test_error_propagation_chain() {
     // Both should produce the same error type
     match (store_result.unwrap_err(), store_safe_result.unwrap_err()) {
         (
-            ShardexError::DocumentTooLarge {
-                size: s1,
-                max_size: m1,
-            },
-            ShardexError::DocumentTooLarge {
-                size: s2,
-                max_size: m2,
-            },
+            ShardexError::DocumentTooLarge { size: s1, max_size: m1 },
+            ShardexError::DocumentTooLarge { size: s2, max_size: m2 },
         ) => {
             assert_eq!(s1, s2);
             assert_eq!(m1, m2);
         }
-        (e1, e2) => panic!(
-            "Expected matching DocumentTooLarge errors, got {:?} and {:?}",
-            e1, e2
-        ),
+        (e1, e2) => panic!("Expected matching DocumentTooLarge errors, got {:?} and {:?}", e1, e2),
     }
 }
 
@@ -627,10 +609,7 @@ fn test_stress_error_conditions() {
     // Generate many error conditions rapidly
     for i in 0..100 {
         let doc_id = DocumentId::new();
-        let large_text = format!(
-            "This is document {} that is too large for the tiny limit",
-            i
-        );
+        let large_text = format!("This is document {} that is too large for the tiny limit", i);
 
         let result = storage.store_text_safe(doc_id, &large_text);
         assert!(result.is_err());

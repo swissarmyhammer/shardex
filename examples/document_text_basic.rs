@@ -36,39 +36,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut index = ShardexImpl::create(config).await?;
 
     // Sample documents with text and corresponding embeddings
-    let documents = vec![
+    let documents = &[
         (
             "The quick brown fox jumps over the lazy dog. This classic sentence contains every letter of the English alphabet.",
             vec![
-                (0, 9, "The quick"), // "The quick"
+                (0, 9, "The quick"),  // "The quick"
                 (10, 9, "brown fox"), // "brown fox"
-                (20, 5, "jumps"), // "jumps"
-                (31, 8, "the lazy"), // "the lazy"
-                (40, 3, "dog"), // "dog"
-            ]
+                (20, 5, "jumps"),     // "jumps"
+                (31, 8, "the lazy"),  // "the lazy"
+                (40, 3, "dog"),       // "dog"
+            ],
         ),
         (
             "Artificial intelligence and machine learning are transforming how we process and analyze data in modern applications.",
             vec![
                 (0, 20, "Artificial intelligence"), // "Artificial intelligence"
-                (25, 16, "machine learning"), // "machine learning"
-                (46, 12, "transforming"), // "transforming"
-                (67, 7, "process"), // "process"
-                (79, 7, "analyze"), // "analyze"
-                (87, 4, "data"), // "data"
-            ]
+                (25, 16, "machine learning"),       // "machine learning"
+                (46, 12, "transforming"),           // "transforming"
+                (67, 7, "process"),                 // "process"
+                (79, 7, "analyze"),                 // "analyze"
+                (87, 4, "data"),                    // "data"
+            ],
         ),
         (
             "Space exploration continues to push the boundaries of human knowledge and technological innovation.",
             vec![
                 (0, 16, "Space exploration"), // "Space exploration"
-                (30, 4, "push"), // "push"
-                (39, 10, "boundaries"), // "boundaries"
-                (53, 5, "human"), // "human"
-                (59, 9, "knowledge"), // "knowledge"
-                (73, 13, "technological"), // "technological"
-                (87, 10, "innovation"), // "innovation"
-            ]
+                (30, 4, "push"),              // "push"
+                (39, 10, "boundaries"),       // "boundaries"
+                (53, 5, "human"),             // "human"
+                (59, 9, "knowledge"),         // "knowledge"
+                (73, 13, "technological"),    // "technological"
+                (87, 10, "innovation"),       // "innovation"
+            ],
         ),
     ];
 
@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Store each document with text and postings atomically
     for (i, (document_text, segments)) in documents.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i + 1) as u128);
-        
+
         // Create postings for this document
         let mut postings = Vec::new();
         for (start, length, _text_segment) in segments {
@@ -91,14 +91,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         // Store document text and postings atomically
-        index.replace_document_with_postings(
-            doc_id,
-            document_text.to_string(),
-            postings
-        ).await?;
+        index
+            .replace_document_with_postings(doc_id, document_text.to_string(), postings)
+            .await?;
 
-        println!("  Document {}: {} characters, {} segments",
-                 i + 1, document_text.len(), segments.len());
+        println!(
+            "  Document {}: {} characters, {} segments",
+            i + 1,
+            document_text.len(),
+            segments.len()
+        );
     }
 
     // Flush to ensure all data is written
@@ -111,15 +113,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for i in 1..=documents.len() {
         let doc_id = DocumentId::from_raw(i as u128);
-        
+
         match index.get_document_text(doc_id).await {
             Ok(text) => {
-                println!("Document {}: \"{}\"", i, 
-                         if text.len() > 60 { 
-                             format!("{}...", &text[..60])
-                         } else {
-                             text
-                         });
+                println!(
+                    "Document {}: \"{}\"",
+                    i,
+                    if text.len() > 60 {
+                        format!("{}...", &text[..60])
+                    } else {
+                        text
+                    }
+                );
             }
             Err(e) => println!("Error retrieving document {}: {}", i, e),
         }
@@ -130,7 +135,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("=========================================");
 
     let doc_id = DocumentId::from_raw(1);
-    let sample_postings = vec![
+    let sample_postings = &[
         Posting {
             document_id: doc_id,
             start: 0,
@@ -154,9 +159,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (i, posting) in sample_postings.iter().enumerate() {
         match index.extract_text(posting).await {
             Ok(extracted_text) => {
-                println!("  Posting {}: '{}' ({}:{}+{})",
-                         i + 1, extracted_text, posting.document_id.raw(),
-                         posting.start, posting.length);
+                println!(
+                    "  Posting {}: '{}' ({}:{}+{})",
+                    i + 1,
+                    extracted_text,
+                    posting.document_id.raw(),
+                    posting.start,
+                    posting.length
+                );
             }
             Err(e) => println!("  Error extracting posting {}: {}", i + 1, e),
         }
@@ -175,10 +185,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (query_desc, query_terms) in search_queries {
         println!("\\nSearching for: {}", query_desc);
         let query_vector = generate_segment_vector(query_terms);
-        
+
         // Search for top 3 most similar postings
         let results = index.search(&query_vector, 3, None).await?;
-        
+
         if results.is_empty() {
             println!("  No results found");
             continue;
@@ -192,16 +202,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 length: result.length,
                 vector: result.vector.clone(),
             };
-            
+
             match index.extract_text(&result_posting).await {
                 Ok(result_text) => {
-                    println!("  {}. '{}' (score: {:.4}, doc: {})",
-                             i + 1, result_text, result.similarity_score,
-                             result.document_id.raw());
+                    println!(
+                        "  {}. '{}' (score: {:.4}, doc: {})",
+                        i + 1,
+                        result_text,
+                        result.similarity_score,
+                        result.document_id.raw()
+                    );
                 }
                 Err(e) => {
-                    println!("  {}. Error extracting text: {} (doc: {})",
-                             i + 1, e, result.document_id.raw());
+                    println!(
+                        "  {}. Error extracting text: {} (doc: {})",
+                        i + 1,
+                        e,
+                        result.document_id.raw()
+                    );
                 }
             }
         }
@@ -225,7 +243,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         length: 50,
         vector: generate_segment_vector("invalid"),
     };
-    
+
     match index.extract_text(&invalid_posting).await {
         Ok(_) => println!("  Unexpected success for invalid range"),
         Err(e) => println!("  ✓ Correctly handled invalid range: {}", e),
@@ -259,7 +277,7 @@ fn generate_segment_vector(text: &str) -> Vec<f32> {
         let hash = simple_hash(word);
         let index = (hash % 128) as usize;
         vector[index] += 1.0 / (i + 1) as f32;
-        
+
         // Add some character-based features for variety
         for (j, ch) in word.chars().enumerate() {
             let char_index = ((ch as u32 + j as u32) % 128) as usize;
@@ -280,7 +298,6 @@ fn generate_segment_vector(text: &str) -> Vec<f32> {
 
 /// Simple hash function for demonstration purposes
 fn simple_hash(s: &str) -> u32 {
-    s.bytes().fold(0u32, |acc, byte| {
-        acc.wrapping_mul(31).wrapping_add(byte as u32)
-    })
+    s.bytes()
+        .fold(0u32, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as u32))
 }
