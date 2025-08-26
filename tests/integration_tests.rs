@@ -4,18 +4,18 @@
 //! together for parallel access patterns, ensuring indices correspond between
 //! the two storage systems.
 
+use shardex::test_utils::{create_temp_dir_for_test, test_constants};
 use shardex::{DocumentId, PostingStorage, ShardexError, VectorStorage};
-use tempfile::TempDir;
 
 /// Test that PostingStorage and VectorStorage can be used together with aligned indices
 #[test]
 fn test_parallel_storage_alignment() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors.dat");
     let posting_path = temp_dir.path().join("postings.dat");
 
-    let capacity = 100;
-    let vector_dimension = 128;
+    let capacity = test_constants::DEFAULT_SHARD_SIZE;
+    let vector_dimension = test_constants::DEFAULT_VECTOR_SIZE;
 
     // Create both storages with the same capacity
     let mut vector_storage = VectorStorage::create(&vector_path, vector_dimension, capacity)?;
@@ -64,7 +64,7 @@ fn test_parallel_storage_alignment() -> Result<(), ShardexError> {
 /// Test that removing items maintains alignment between storages
 #[test]
 fn test_parallel_storage_removal_alignment() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors.dat");
     let posting_path = temp_dir.path().join("postings.dat");
 
@@ -139,7 +139,7 @@ fn test_parallel_storage_removal_alignment() -> Result<(), ShardexError> {
 /// Test persistence and reopening of aligned storages
 #[test]
 fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors_persist.dat");
     let posting_path = temp_dir.path().join("postings_persist.dat");
 
@@ -214,7 +214,7 @@ fn test_parallel_storage_persistence() -> Result<(), ShardexError> {
 /// Test that both storages handle capacity limits consistently
 #[test]
 fn test_parallel_storage_capacity_limits() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors_capacity.dat");
     let posting_path = temp_dir.path().join("postings_capacity.dat");
 
@@ -258,7 +258,7 @@ fn test_parallel_storage_capacity_limits() -> Result<(), ShardexError> {
 /// Test iteration over active items in both storages
 #[test]
 fn test_parallel_storage_active_iteration() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors_iter.dat");
     let posting_path = temp_dir.path().join("postings_iter.dat");
 
@@ -314,7 +314,7 @@ fn test_parallel_storage_active_iteration() -> Result<(), ShardexError> {
 /// Test basic performance characteristics
 #[test]
 fn test_parallel_storage_basic_performance() -> Result<(), ShardexError> {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = create_temp_dir_for_test("integration_test");
     let vector_path = temp_dir.path().join("vectors_perf.dat");
     let posting_path = temp_dir.path().join("postings_perf.dat");
 

@@ -3,49 +3,18 @@
 //! This test suite verifies that the copy-on-write implementation provides
 //! safe concurrent access patterns as specified in the requirements.
 
-use shardex::{CowShardexIndex, Shard, ShardexConfig, ShardexIndex};
+use shardex::test_utils::TestSetupBuilder;
+use shardex::{CowShardexIndex, Shard};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
-use tempfile::TempDir;
-
-/// RAII-based test environment for isolated testing
-struct TestEnvironment {
-    pub temp_dir: TempDir,
-    #[allow(dead_code)]
-    pub test_name: String,
-}
-
-impl TestEnvironment {
-    fn new(test_name: &str) -> Self {
-        let temp_dir = TempDir::new()
-            .unwrap_or_else(|e| panic!("Failed to create temp dir for test {}: {}", test_name, e));
-
-        Self {
-            temp_dir,
-            test_name: test_name.to_string(),
-        }
-    }
-
-    fn path(&self) -> &std::path::Path {
-        self.temp_dir.path()
-    }
-
-    fn path_buf(&self) -> std::path::PathBuf {
-        self.temp_dir.path().to_path_buf()
-    }
-}
 
 /// Test concurrent readers don't block each other
 #[test]
 fn test_concurrent_readers_non_blocking() {
-    let _test_env = TestEnvironment::new("test_concurrent_readers_non_blocking");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(128)
-        .shard_size(100);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, index) = TestSetupBuilder::new("test_concurrent_readers_non_blocking")
+        .build_with_index()
+        .expect("Failed to create test index");
     let cow_index = Arc::new(CowShardexIndex::new(index));
 
     const NUM_READERS: usize = 10;
@@ -108,13 +77,11 @@ fn test_concurrent_readers_non_blocking() {
 /// Test that readers get consistent snapshots during writes
 #[tokio::test]
 async fn test_reader_consistency_during_writes() {
-    let _test_env = TestEnvironment::new("test_reader_consistency_during_writes");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(64)
-        .shard_size(50);
-
-    let mut initial_index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, mut initial_index) = TestSetupBuilder::new("test_reader_consistency_during_writes")
+        .with_vector_size(64)
+        .with_shard_size(50)
+        .build_with_index()
+        .expect("Failed to create test index");
 
     // Add some initial shards
     for _ in 0..3 {
@@ -192,13 +159,11 @@ async fn test_reader_consistency_during_writes() {
 /// Test that multiple writers can be created and committed sequentially
 #[tokio::test]
 async fn test_sequential_writer_operations() {
-    let _test_env = TestEnvironment::new("test_sequential_writer_operations");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(32)
-        .shard_size(25);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, index) = TestSetupBuilder::new("test_sequential_writer_operations")
+        .with_vector_size(32)
+        .with_shard_size(25)
+        .build_with_index()
+        .expect("Failed to create test index");
     let cow_index = CowShardexIndex::new(index);
 
     let initial_count = cow_index.shard_count();
@@ -234,13 +199,11 @@ async fn test_sequential_writer_operations() {
 /// Test memory cleanup of old index versions
 #[tokio::test]
 async fn test_memory_cleanup_old_versions() {
-    let _test_env = TestEnvironment::new("test_memory_cleanup_old_versions");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(16)
-        .shard_size(20);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, index) = TestSetupBuilder::new("test_memory_cleanup_old_versions")
+        .with_vector_size(16)
+        .with_shard_size(20)
+        .build_with_index()
+        .expect("Failed to create test index");
     let cow_index = Arc::new(CowShardexIndex::new(index));
 
     // Create many readers that hold references to old versions
@@ -290,13 +253,11 @@ async fn test_memory_cleanup_old_versions() {
 /// Test atomic updates maintain index integrity
 #[test]
 fn test_atomic_update_integrity() {
-    let _test_env = TestEnvironment::new("test_atomic_update_integrity");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(8)
-        .shard_size(10);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, index) = TestSetupBuilder::new("test_atomic_update_integrity")
+        .with_vector_size(8)
+        .with_shard_size(10)
+        .build_with_index()
+        .expect("Failed to create test index");
     let cow_index = Arc::new(CowShardexIndex::new(index));
 
     const NUM_CONCURRENT_OPERATIONS: usize = 10; // Reduced for simpler test
@@ -374,13 +335,9 @@ fn test_atomic_update_integrity() {
 /// Test performance overhead is minimal for typical workloads
 #[test]
 fn test_performance_overhead() {
-    let _test_env = TestEnvironment::new("test_performance_overhead");
-    let config = ShardexConfig::new()
-        .directory_path(_test_env.path())
-        .vector_size(128)
-        .shard_size(100);
-
-    let index = ShardexIndex::create(config).expect("Failed to create index");
+    let (_test_env, _config, index) = TestSetupBuilder::new("test_performance_overhead")
+        .build_with_index()
+        .expect("Failed to create test index");
     let cow_index = CowShardexIndex::new(index);
 
     const NUM_READS: usize = 1000;
