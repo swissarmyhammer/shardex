@@ -59,12 +59,19 @@
 //!    - Complex initialization is required  
 //!    - Fields contain non-Default types
 //!    ```rust
+//!    use std::time::Instant;
+//!    
+//!    #[derive(Debug, Clone)]
+//!    pub struct ComplexMetrics {
+//!        pub start_time: Instant,
+//!        pub threshold: f64,
+//!    }
+//!    
 //!    impl Default for ComplexMetrics {
 //!        fn default() -> Self {
 //!            Self {
 //!                start_time: Instant::now(), // Can't derive this
 //!                threshold: 0.95,           // Non-zero default
-//!                // ...
 //!            }
 //!        }
 //!    }
@@ -73,6 +80,17 @@
 //! 3. **AVOID** redundant patterns like:
 //!    ```rust
 //!    // DON'T DO THIS - just derive Default instead
+//!    #[derive(Debug, Clone)]
+//!    pub struct SomeStruct {
+//!        pub count: u64,
+//!    }
+//!    
+//!    impl SomeStruct {
+//!        pub fn new() -> Self {
+//!            Self { count: 0 }
+//!        }
+//!    }
+//!    
 //!    impl Default for SomeStruct {
 //!        fn default() -> Self {
 //!            Self::new() // If new() just sets zero/empty values
@@ -88,9 +106,9 @@
 //!    // Instead of one large struct with 30+ fields:
 //!    #[derive(Debug, Clone, Default)]
 //!    pub struct DocumentMetrics {
-//!        pub basic: BasicMetrics,
-//!        pub performance: PerformanceMetrics,
-//!        pub cache: CacheMetrics,
+//!        pub documents_stored: u64,
+//!        pub total_size: u64,
+//!        pub average_latency: f64,
 //!    }
 //!    ```
 //! 3. **GROUP** related fields into cohesive types
@@ -113,11 +131,16 @@
 //! - Structs with validation requirements
 //! 
 //! ```rust
-//! impl ConfigStruct {
+//! #[derive(Debug, Clone, Default)]
+//! pub struct MyConfig {
+//!     pub timeout: u64,
+//! }
+//! 
+//! impl MyConfig {
 //!     pub fn new() -> Self { Self::default() }
 //!     
-//!     pub fn field1(mut self, value: Type) -> Self {
-//!         self.field1 = value;
+//!     pub fn with_timeout(mut self, timeout: u64) -> Self {
+//!         self.timeout = timeout;
 //!         self
 //!     }
 //! }

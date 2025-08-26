@@ -66,7 +66,7 @@ pub trait Shardex {
     async fn flush_with_stats(&mut self) -> Result<FlushStats, Self::Error> {
         // Default implementation just calls flush and returns empty stats
         self.flush().await?;
-        Ok(FlushStats::new())
+        Ok(FlushStats::default())
     }
 
     /// Get index statistics
@@ -559,7 +559,7 @@ impl ShardexImpl {
     /// Enhanced flush implementation with durability guarantees and consistency validation
     async fn flush_internal(&mut self) -> Result<FlushStats, ShardexError> {
         let start_time = std::time::Instant::now();
-        let mut stats = FlushStats::new();
+        let mut stats = FlushStats::default();
 
         debug!("Starting comprehensive flush operation with durability guarantees");
 

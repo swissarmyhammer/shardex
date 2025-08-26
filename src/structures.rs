@@ -675,7 +675,7 @@ impl Display for IndexStats {
 ///
 /// FlushStats provides detailed timing information and metrics for flush operations,
 /// enabling performance monitoring and optimization of the durability guarantees.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct FlushStats {
     /// Time spent flushing WAL operations
     pub wal_flush_duration: std::time::Duration,
@@ -696,19 +696,7 @@ pub struct FlushStats {
 }
 
 impl FlushStats {
-    /// Create new flush stats with zero values
-    pub fn new() -> Self {
-        Self {
-            wal_flush_duration: std::time::Duration::ZERO,
-            shard_apply_duration: std::time::Duration::ZERO,
-            shard_sync_duration: std::time::Duration::ZERO,
-            validation_duration: std::time::Duration::ZERO,
-            total_duration: std::time::Duration::ZERO,
-            shards_synced: 0,
-            operations_applied: 0,
-            bytes_synced: 0,
-        }
-    }
+
 
     /// Get total flush duration in milliseconds
     pub fn total_duration_ms(&self) -> u64 {

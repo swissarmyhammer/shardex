@@ -61,7 +61,7 @@ pub struct DetailedIndexStats {
 /// - Message-passing pattern with dedicated metrics collection thread
 /// - Atomic counters for simple metrics
 /// - Single RwLock for complex aggregated metrics
-/// This would reduce lock contention and improve performance
+///   This would reduce lock contention and improve performance
 pub struct PerformanceMonitor {
     /// Search operation metrics
     search_metrics: Arc<RwLock<SearchMetrics>>,
