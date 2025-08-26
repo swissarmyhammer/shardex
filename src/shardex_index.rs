@@ -1778,7 +1778,11 @@ impl ShardexIndex {
     /// # Returns
     /// * `Ok(())` - Text successfully stored
     /// * `Err(ShardexError)` - Text storage not enabled, text too large, or storage error
-    pub fn store_document_text(&mut self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
+    pub fn store_document_text(
+        &mut self,
+        document_id: DocumentId,
+        text: &str,
+    ) -> Result<(), ShardexError> {
         match &mut self.document_text_storage {
             Some(storage) => storage.store_text(document_id, text),
             None => Err(ShardexError::InvalidInput {
@@ -1834,7 +1838,10 @@ impl ShardexIndex {
     ///
     /// * `Ok(String)` - The complete document text content
     /// * `Err(ShardexError)` - Text storage not enabled, document not found, or task execution error
-    pub async fn get_document_text_async(&self, document_id: DocumentId) -> Result<String, ShardexError> {
+    pub async fn get_document_text_async(
+        &self,
+        document_id: DocumentId,
+    ) -> Result<String, ShardexError> {
         match &self.document_text_storage {
             Some(storage) => {
                 // Since DocumentTextStorage methods are already safe and fast,
@@ -1865,7 +1872,10 @@ impl ShardexIndex {
     ///
     /// * `Ok(String)` - The extracted text substring
     /// * `Err(ShardexError)` - Text storage not enabled, invalid coordinates, or task execution error
-    pub async fn extract_text_from_posting_async(&self, posting: &Posting) -> Result<String, ShardexError> {
+    pub async fn extract_text_from_posting_async(
+        &self,
+        posting: &Posting,
+    ) -> Result<String, ShardexError> {
         match &self.document_text_storage {
             Some(storage) => {
                 // Memory-mapped file operations are fast, no need for spawn_blocking
@@ -1982,7 +1992,7 @@ impl ShardexIndex {
             vector_size: self.vector_size,
             max_document_text_size: match &self.document_text_storage {
                 Some(_) => 10 * 1024 * 1024, // Default 10MB if text storage is enabled
-                None => 0, // Disabled if no text storage
+                None => 0,                   // Disabled if no text storage
             },
         }
     }
@@ -2007,7 +2017,13 @@ impl ShardexIndex {
     }
 
     /// Add a posting to the appropriate shard
-    pub fn add_posting(&mut self, document_id: DocumentId, start: u32, length: u32, vector: Vec<f32>) -> Result<(), ShardexError> {
+    pub fn add_posting(
+        &mut self,
+        document_id: DocumentId,
+        start: u32,
+        length: u32,
+        vector: Vec<f32>,
+    ) -> Result<(), ShardexError> {
         // Validate vector dimension
         if vector.len() != self.vector_size {
             return Err(ShardexError::InvalidDimension {
@@ -2026,7 +2042,7 @@ impl ShardexIndex {
         let shard_id = self.determine_shard_for_posting(&posting)?;
         let shard = self.get_shard_mut(shard_id)?;
         shard.add_posting(posting)?;
-        
+
         Ok(())
     }
 
@@ -2034,20 +2050,23 @@ impl ShardexIndex {
     pub fn remove_document(&mut self, document_id: DocumentId) -> Result<(), ShardexError> {
         // Collect shard IDs first to avoid borrow checker issues
         let shard_ids: Vec<ShardId> = self.shards.iter().map(|s| s.id).collect();
-        
+
         for shard_id in shard_ids {
             let shard = self.get_shard_mut(shard_id)?;
             shard.remove_document(document_id)?;
         }
-        
+
         Ok(())
     }
 
     /// Create a new index with the provided layout and configuration
-    pub fn create_new(layout: DirectoryLayout, config: ShardexConfig) -> Result<Self, ShardexError> {
+    pub fn create_new(
+        layout: DirectoryLayout,
+        config: ShardexConfig,
+    ) -> Result<Self, ShardexError> {
         // Use the directory from the layout
         let directory = layout.root_path().to_path_buf();
-        
+
         // Validate configuration
         config.validate()?;
 

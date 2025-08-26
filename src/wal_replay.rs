@@ -61,8 +61,10 @@ impl RecoveryStats {
 
     /// Get the total number of operations (applied + skipped from duplicates)
     pub fn total_operations_processed(&self) -> usize {
-        self.add_posting_operations + self.remove_document_operations + 
-        self.text_store_operations + self.text_delete_operations
+        self.add_posting_operations
+            + self.remove_document_operations
+            + self.text_store_operations
+            + self.text_delete_operations
     }
 
     /// Get the total number of text operations processed
@@ -304,18 +306,20 @@ impl WalReplayer {
                         error = %e,
                         "Failed to apply operation during WAL replay"
                     );
-                    
+
                     // Update error counter for text operations
                     match operation {
-                        WalOperation::StoreDocumentText { .. } | WalOperation::DeleteDocumentText { .. } => {
+                        WalOperation::StoreDocumentText { .. }
+                        | WalOperation::DeleteDocumentText { .. } => {
                             self.recovery_stats.text_storage_errors += 1;
                         }
                         _ => {}
                     }
-                    
+
                     // Add to general error list
-                    self.recovery_stats.add_error(format!("Failed to apply {:?}: {}", operation, e));
-                    
+                    self.recovery_stats
+                        .add_error(format!("Failed to apply {:?}: {}", operation, e));
+
                     // Continue with other operations rather than failing the entire transaction
                     // This provides better resilience during recovery
                 }
@@ -431,54 +435,72 @@ impl WalReplayer {
         document_id: DocumentId,
         text: &str,
     ) -> Result<(), ShardexError> {
-        tracing::debug!("Replaying store document text: {} ({} bytes)", 
-                       document_id, text.len());
-        
+        tracing::debug!(
+            "Replaying store document text: {} ({} bytes)",
+            document_id,
+            text.len()
+        );
+
         // Increment counter for store operations
         self.recovery_stats.text_store_operations += 1;
-        
+
         // Apply to index-level text storage using public API
         match self.shardex_index.store_document_text(document_id, text) {
             Ok(()) => {
-                tracing::debug!("Successfully replayed text storage for document {}", document_id);
+                tracing::debug!(
+                    "Successfully replayed text storage for document {}",
+                    document_id
+                );
                 // Update bytes replayed on success
                 self.recovery_stats.total_text_bytes_replayed += text.len() as u64;
                 Ok(())
             }
             Err(e) => {
-                tracing::error!("Failed to replay text storage for document {}: {}", document_id, e);
+                tracing::error!(
+                    "Failed to replay text storage for document {}: {}",
+                    document_id,
+                    e
+                );
                 self.recovery_stats.text_storage_errors += 1;
-                
+
                 // Add error to errors_encountered for proper error tracking
                 self.recovery_stats.add_error(format!(
-                    "Text storage error for document {}: {}", document_id, e
+                    "Text storage error for document {}: {}",
+                    document_id, e
                 ));
-                
+
                 // Attempt recovery based on error type
                 self.handle_text_storage_error(&e, document_id, text)?;
                 Ok(())
             }
         }
     }
-    
+
     /// Replay document text deletion operation
     fn replay_delete_document_text(&mut self, document_id: DocumentId) -> Result<(), ShardexError> {
         tracing::debug!("Replaying delete document text: {}", document_id);
-        
+
         // Increment counter for delete operations
         self.recovery_stats.text_delete_operations += 1;
-        
+
         // For append-only storage, deletions are typically logical
         // Since DocumentTextStorage doesn't have a delete method yet, we'll log the operation
         // In a full implementation, this would call a deletion method
         if self.shardex_index.has_text_storage() {
-            tracing::debug!("Document text deletion for {} replayed (logical deletion)", document_id);
+            tracing::debug!(
+                "Document text deletion for {} replayed (logical deletion)",
+                document_id
+            );
             // In a full implementation, this might call a mark_for_deletion method
             Ok(())
         } else {
-            tracing::warn!("WAL contains text deletion for document {} but text storage not enabled", document_id);
+            tracing::warn!(
+                "WAL contains text deletion for document {} but text storage not enabled",
+                document_id
+            );
             self.recovery_stats.add_error(format!(
-                "WAL contains text deletion for document {} but text storage not enabled", document_id
+                "WAL contains text deletion for document {} but text storage not enabled",
+                document_id
             ));
             Ok(())
         }
@@ -491,9 +513,12 @@ impl WalReplayer {
         document_id: DocumentId,
         _text: &str,
     ) -> Result<(), ShardexError> {
-        tracing::error!("Handling text storage error during replay for document {}: {}", 
-                       document_id, error);
-        
+        tracing::error!(
+            "Handling text storage error during replay for document {}: {}",
+            document_id,
+            error
+        );
+
         match error {
             ShardexError::TextCorruption(msg) => {
                 if msg.contains("Index file size mismatch") {
@@ -513,8 +538,12 @@ impl WalReplayer {
                 }
             }
             ShardexError::DocumentTooLarge { size, max_size } => {
-                tracing::warn!("Document {} too large ({} bytes > {} max) during replay, skipping", 
-                              document_id, size, max_size);
+                tracing::warn!(
+                    "Document {} too large ({} bytes > {} max) during replay, skipping",
+                    document_id,
+                    size,
+                    max_size
+                );
                 Ok(())
             }
             _ => {
@@ -599,10 +628,10 @@ impl WalReplayer {
     pub fn validate_text_storage_after_replay(&self) -> Result<(), ShardexError> {
         if self.shardex_index.has_text_storage() {
             tracing::info!("Validating text storage consistency after WAL replay");
-            
+
             // Use public API to get basic statistics
             let stats = self.shardex_index.text_storage_stats();
-            
+
             match stats {
                 Some(stats) => {
                     tracing::info!(
@@ -614,7 +643,7 @@ impl WalReplayer {
                     // Check if storage is in a reasonable state
                     if stats.document_count > 0 && stats.total_text_size == 0 {
                         return Err(ShardexError::text_corruption(
-                            "Text storage has entries but zero total size"
+                            "Text storage has entries but zero total size",
                         ));
                     }
                 }
@@ -622,7 +651,7 @@ impl WalReplayer {
                     tracing::warn!("Could not retrieve text storage statistics during validation");
                 }
             }
-            
+
             Ok(())
         } else {
             tracing::debug!("No text storage to validate");
@@ -657,7 +686,7 @@ impl WalReplayer {
     /// ```
     pub fn get_comprehensive_stats(&self) -> String {
         let stats = &self.recovery_stats;
-        
+
         format!(
             "WAL Recovery Statistics:
 - Segments processed: {}
@@ -785,18 +814,18 @@ mod tests {
         assert_eq!(stats.total_text_operations(), 8);
         assert!(stats.has_text_storage_errors());
         assert_eq!(stats.total_operations_processed(), 8); // Only text operations
-        
+
         // Add other operations
         stats.add_posting_operations = 10;
         stats.remove_document_operations = 2;
-        
+
         assert_eq!(stats.total_operations_processed(), 20); // All operations
     }
 
     #[test]
     fn test_recovery_stats_comprehensive() {
         let mut stats = RecoveryStats::new();
-        
+
         // Simulate various operations
         stats.segments_processed = 3;
         stats.transactions_replayed = 50;
@@ -808,16 +837,16 @@ mod tests {
         stats.text_delete_operations = 5;
         stats.total_text_bytes_replayed = 1048576; // 1MB
         stats.text_storage_errors = 1;
-        
+
         assert_eq!(stats.total_operations_processed(), 120);
         assert_eq!(stats.total_text_operations(), 30);
         assert!(stats.has_text_storage_errors());
         assert!(!stats.has_errors()); // No general errors
-        
+
         // Add a general error
         stats.add_error("Some error");
         assert!(stats.has_errors());
-        
+
         // Success rate should be based on transactions
         let expected_rate = (50.0 / 55.0) * 100.0; // 50 replayed / (50 + 5) total
         assert!((stats.success_rate() - expected_rate).abs() < 0.01);
@@ -826,7 +855,7 @@ mod tests {
     #[tokio::test]
     async fn test_text_operation_replay_with_storage() {
         let _test_env = TestEnvironment::new("test_text_operation_replay_with_storage");
-        
+
         // Create config with text storage enabled
         let config = ShardexConfig::new()
             .directory_path(_test_env.path())
@@ -862,8 +891,10 @@ mod tests {
         assert_eq!(retrieved_text.unwrap(), test_text);
 
         // Test delete document text operation
-        let delete_op = WalOperation::DeleteDocumentText { document_id: doc_id };
-        
+        let delete_op = WalOperation::DeleteDocumentText {
+            document_id: doc_id,
+        };
+
         let result = replayer.apply_operation(&delete_op);
         assert!(result.is_ok(), "Delete operation should succeed");
 
@@ -875,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn test_text_operation_replay_without_storage() {
         let _test_env = TestEnvironment::new("test_text_operation_replay_without_storage");
-        
+
         // Create config with text storage disabled
         let config = ShardexConfig::new()
             .directory_path(_test_env.path())
@@ -897,16 +928,27 @@ mod tests {
 
         // Apply the store operation - should handle gracefully
         let result = replayer.apply_operation(&store_op);
-        assert!(result.is_ok(), "Store operation should handle missing storage gracefully");
+        assert!(
+            result.is_ok(),
+            "Store operation should handle missing storage gracefully"
+        );
 
         // Verify that an error was logged (check error messages)
         let stats = replayer.recovery_stats();
-        assert!(!stats.errors_encountered.is_empty(), "Should have logged an error for missing text storage");
-        
+        assert!(
+            !stats.errors_encountered.is_empty(),
+            "Should have logged an error for missing text storage"
+        );
+
         // The error message should indicate text storage is not enabled
-        let has_text_storage_error = stats.errors_encountered.iter()
+        let has_text_storage_error = stats
+            .errors_encountered
+            .iter()
             .any(|msg| msg.to_lowercase().contains("text storage not enabled"));
-        assert!(has_text_storage_error, "Should have specific error about text storage not enabled");
+        assert!(
+            has_text_storage_error,
+            "Should have specific error about text storage not enabled"
+        );
     }
 
     #[test]
@@ -963,7 +1005,7 @@ mod tests {
         replayer.recovery_stats.text_storage_errors = 1;
 
         let stats_display = replayer.get_comprehensive_stats();
-        
+
         assert!(stats_display.contains("Segments processed: 2"));
         assert!(stats_display.contains("Transactions replayed: 10"));
         assert!(stats_display.contains("StoreDocumentText operations: 5"));

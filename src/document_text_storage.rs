@@ -861,7 +861,7 @@ impl DocumentTextStorage {
             ShardexError::text_corruption(format!("Index header validation failed: {}", e))
         })?;
 
-        // Validate data header  
+        // Validate data header
         self.data_header.validate().map_err(|e| {
             ShardexError::text_corruption(format!("Data header validation failed: {}", e))
         })?;
@@ -877,7 +877,7 @@ impl DocumentTextStorage {
         // Check index file size consistency
         let expected_index_size = self.index_header.next_entry_offset;
         let actual_index_size = self.text_index_file.len() as u64;
-        
+
         if expected_index_size > actual_index_size {
             return Err(ShardexError::text_corruption(format!(
                 "Index file size mismatch: header indicates {} bytes, file is {} bytes",
@@ -888,7 +888,7 @@ impl DocumentTextStorage {
         // Check data file size consistency
         let expected_data_size = self.data_header.next_text_offset;
         let actual_data_size = self.text_data_file.len() as u64;
-        
+
         if expected_data_size > actual_data_size {
             return Err(ShardexError::text_corruption(format!(
                 "Data file size mismatch: header indicates {} bytes, file is {} bytes",
@@ -918,18 +918,16 @@ impl DocumentTextStorage {
             return Err(ShardexError::invalid_range(
                 index,
                 1,
-                self.index_header.entry_count as u64
+                self.index_header.entry_count as u64,
             ));
         }
 
         let offset = self.index_header.offset_for_entry(index);
         let entry: DocumentTextEntry = self.text_index_file.read_at(offset as usize)?;
-        
+
         // Validate the entry to detect corruption
         entry.validate().map_err(|e| {
-            ShardexError::text_corruption(format!(
-                "Corrupted entry at index {}: {}", index, e
-            ))
+            ShardexError::text_corruption(format!("Corrupted entry at index {}: {}", index, e))
         })?;
 
         Ok(entry)
@@ -939,9 +937,12 @@ impl DocumentTextStorage {
     ///
     /// Checks that the entry's text offset and length point to a valid
     /// region within the data file bounds.
-    pub fn validate_entry_data_region(&self, entry: &DocumentTextEntry) -> Result<(), ShardexError> {
+    pub fn validate_entry_data_region(
+        &self,
+        entry: &DocumentTextEntry,
+    ) -> Result<(), ShardexError> {
         let data_file_size = self.text_data_file.len() as u64;
-        
+
         // Check that offset is within bounds
         if entry.text_offset >= data_file_size {
             return Err(ShardexError::text_corruption(format!(
@@ -966,7 +967,11 @@ impl DocumentTextStorage {
     ///
     /// Public wrapper around the private read_text_at_offset method to allow
     /// the recovery system to validate specific text regions.
-    pub fn read_text_at_offset_public(&self, offset: u64, length: u64) -> Result<String, ShardexError> {
+    pub fn read_text_at_offset_public(
+        &self,
+        offset: u64,
+        length: u64,
+    ) -> Result<String, ShardexError> {
         self.read_text_at_offset(offset, length)
     }
 
@@ -1031,10 +1036,10 @@ impl DocumentTextStorage {
         // 2. Create new index entries for each text block found
         // 3. Rebuild the index file with discovered entries
         // 4. Update headers to reflect new index
-        
+
         // For now, return error indicating this is not yet implemented
         Err(ShardexError::text_corruption(
-            "Index rebuild from data file not yet implemented"
+            "Index rebuild from data file not yet implemented",
         ))
     }
 
@@ -1048,10 +1053,10 @@ impl DocumentTextStorage {
         // 2. Truncate data file to end of that entry
         // 3. Update headers to reflect new file size
         // 4. Return (new_offset, entries_lost)
-        
+
         // For now, return error indicating this is not yet implemented
         Err(ShardexError::text_corruption(
-            "Truncate to last valid not yet implemented"
+            "Truncate to last valid not yet implemented",
         ))
     }
 
@@ -1063,7 +1068,7 @@ impl DocumentTextStorage {
     pub fn report_error_metrics(&self, error: &ShardexError, operation: &str) {
         // In a production system, this would integrate with the actual monitoring system
         // For now, we'll use tracing to log the error metrics
-        
+
         match error {
             ShardexError::TextCorruption(msg) => {
                 tracing::error!(
@@ -1072,45 +1077,49 @@ impl DocumentTextStorage {
                     corruption_details = msg,
                     "Text storage corruption detected"
                 );
-                
+
                 // Could increment corruption error counter in monitoring system:
                 // monitor.increment_counter("text_storage.corruption_errors", &[
                 //     ("operation", operation),
                 // ]);
             }
-            
+
             ShardexError::DocumentTooLarge { size, max_size } => {
                 tracing::error!(
-                    error_type = "document_too_large", 
+                    error_type = "document_too_large",
                     operation = operation,
                     document_size = size,
                     max_size = max_size,
                     "Document exceeds size limit"
                 );
-                
+
                 // Could record size limit violations:
                 // monitor.increment_counter("text_storage.size_limit_errors", &[
                 //     ("operation", operation),
                 // ]);
                 // monitor.record_histogram("text_storage.rejected_document_size", *size as f64, &[]);
             }
-            
-            ShardexError::InvalidRange { start, length, document_length } => {
+
+            ShardexError::InvalidRange {
+                start,
+                length,
+                document_length,
+            } => {
                 tracing::error!(
                     error_type = "invalid_range",
-                    operation = operation, 
+                    operation = operation,
                     range_start = start,
                     range_length = length,
                     document_length = document_length,
                     "Invalid text range requested"
                 );
-                
+
                 // Could track range errors:
                 // monitor.increment_counter("text_storage.range_errors", &[
                 //     ("operation", operation),
                 // ]);
             }
-            
+
             ShardexError::Io(io_error) => {
                 tracing::error!(
                     error_type = "io_error",
@@ -1119,14 +1128,14 @@ impl DocumentTextStorage {
                     io_error_msg = %io_error,
                     "I/O error during text storage operation"
                 );
-                
+
                 // Could track I/O errors:
                 // monitor.increment_counter("text_storage.io_errors", &[
                 //     ("operation", operation),
                 //     ("io_error_kind", &format!("{:?}", io_error.kind())),
                 // ]);
             }
-            
+
             ShardexError::DocumentTextNotFound { document_id } => {
                 tracing::warn!(
                     error_type = "document_not_found",
@@ -1134,13 +1143,13 @@ impl DocumentTextStorage {
                     document_id = document_id,
                     "Document text not found"
                 );
-                
+
                 // Could track not found errors:
                 // monitor.increment_counter("text_storage.not_found_errors", &[
                 //     ("operation", operation),
                 // ]);
             }
-            
+
             _ => {
                 tracing::error!(
                     error_type = "other_error",
@@ -1149,7 +1158,7 @@ impl DocumentTextStorage {
                     error_debug = ?error,
                     "Other text storage error"
                 );
-                
+
                 // Could track other error types:
                 // monitor.increment_counter("text_storage.other_errors", &[
                 //     ("operation", operation),
@@ -1163,7 +1172,12 @@ impl DocumentTextStorage {
     ///
     /// Reports successful operation metrics to the monitoring system for
     /// performance tracking and capacity planning.
-    pub fn report_operation_metrics(&self, operation: &str, duration: std::time::Duration, bytes_processed: usize) {
+    pub fn report_operation_metrics(
+        &self,
+        operation: &str,
+        duration: std::time::Duration,
+        bytes_processed: usize,
+    ) {
         tracing::info!(
             operation = operation,
             duration_ms = duration.as_millis(),
@@ -1173,7 +1187,7 @@ impl DocumentTextStorage {
             utilization_ratio = self.utilization_ratio(),
             "Text storage operation completed"
         );
-        
+
         // In a production system, this would report to actual monitoring:
         // if let Some(monitor) = &self.performance_monitor {
         //     monitor.record_operation(operation, duration, bytes_processed).await;

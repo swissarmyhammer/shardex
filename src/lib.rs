@@ -39,9 +39,11 @@
 //! - **Bloom filter optimization** for efficient document deletion
 //! - **Crash recovery** from unexpected shutdowns
 
+pub mod async_document_text_storage;
 pub mod batch_processor;
 pub mod bloom_filter;
 pub mod concurrent;
+pub mod concurrent_document_text_storage;
 pub mod config;
 pub mod config_persistence;
 pub mod cow_index;
@@ -49,6 +51,7 @@ pub mod crash_recovery;
 pub mod deduplication;
 pub mod distance;
 pub mod document_text_entry;
+pub mod document_text_performance;
 pub mod document_text_storage;
 pub mod document_transaction_coordinator;
 pub mod error;
@@ -64,6 +67,7 @@ pub mod shard;
 pub mod shardex;
 pub mod shardex_index;
 pub mod structures;
+pub mod text_memory_pool;
 pub mod transactions;
 pub mod vector_storage;
 pub mod wal;
@@ -83,6 +87,9 @@ pub use bloom_filter::{BloomFilter, BloomFilterBuilder, BloomFilterHeader, Bloom
 pub use concurrent::{
     ConcurrencyConfig, ConcurrencyMetrics, ConcurrentShardex, WriteOperationType,
 };
+pub use concurrent_document_text_storage::{
+    ConcurrentDocumentTextStorage, ConcurrentStorageConfig, ConcurrentStorageMetrics,
+};
 pub use config::ShardexConfig;
 pub use config_persistence::{ConfigurationManager, PersistedConfig};
 pub use cow_index::{CowShardexIndex, IndexWriter};
@@ -92,6 +99,9 @@ pub use distance::DistanceMetric;
 pub use document_text_entry::{
     DocumentTextEntry, TextDataHeader, TextIndexHeader, TEXT_DATA_MAGIC, TEXT_DATA_VERSION,
     TEXT_INDEX_MAGIC, TEXT_INDEX_VERSION,
+};
+pub use document_text_performance::{
+    AccessPattern, CacheHealth, CacheHealthReport, OptimizedMappingStats, OptimizedMemoryMapping,
 };
 pub use document_text_storage::DocumentTextStorage;
 pub use document_transaction_coordinator::{DocumentTransactionCoordinator, TransactionStatistics};
@@ -106,9 +116,10 @@ pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, Validat
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use monitoring::{
-    BloomFilterMetrics, DetailedIndexStats, HistoricalData, HistoricalDataPoint,
-    PercentileCalculator, PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics,
-    TrendAnalysis, WriteMetrics,
+    BloomFilterMetrics, DetailedIndexStats, DocumentTextMetrics, DocumentTextOperation,
+    HistoricalData, HistoricalDataPoint, PercentileCalculator,
+    PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics, TrendAnalysis,
+    WriteMetrics,
 };
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use search_coordinator::{
@@ -120,6 +131,9 @@ pub use shardex_index::{IndexConfig, IndexStatistics, ShardexIndex, ShardexMetad
 pub use structures::{
     FlushStats, IndexStats, Posting, PostingHeader, SearchResult, SearchResultHeader,
 };
+pub use text_memory_pool::{
+    MemoryPoolConfig, MemoryPoolStats, PooledBytes, PooledString, TextMemoryPool,
+};
 pub use transactions::{
     BatchConfig, BatchStats, WalBatchHandle, WalBatchManager, WalOperation, WalTransaction,
     WalTransactionHeader,
@@ -127,6 +141,10 @@ pub use transactions::{
 pub use vector_storage::VectorStorage;
 pub use wal::{WalManager, WalSegment};
 pub use wal_replay::{RecoveryStats, WalReplayer};
+
+pub use async_document_text_storage::{
+    AsyncDocumentTextStorage, AsyncStorageConfig, AsyncStorageMetrics,
+};
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;
