@@ -622,7 +622,7 @@ impl LazyIndexWriter {
     ///
     /// # Returns
     /// Result indicating success or failure of the commit operation
-    pub fn commit_changes(mut self) -> Result<(), ShardexError> {
+    pub fn commit_changes(self) -> Result<(), ShardexError> {
         let start_time = Instant::now();
 
         // If no modifications were made, we can skip the expensive reconstruction

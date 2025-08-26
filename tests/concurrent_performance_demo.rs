@@ -72,8 +72,7 @@ async fn test_concurrent_throughput_demonstration() {
                         // Simulate light read work
                         let shard_count = index.shard_count();
                         Ok(shard_count)
-                    })
-                    .await;
+                    });
 
                 if result.is_ok() {
                     reader_successes += 1;
@@ -163,7 +162,7 @@ async fn test_concurrent_throughput_demonstration() {
     );
 
     // Final system state should be consistent
-    let final_metrics = concurrent.concurrency_metrics();
+    let final_metrics = concurrent.concurrency_metrics().await;
     assert_eq!(final_metrics.active_readers, 0, "No readers should remain active");
     assert_eq!(final_metrics.active_writers, 0, "No writers should remain active");
 
@@ -183,8 +182,7 @@ async fn test_basic_coordination_functionality() {
         .read_operation(|index| {
             let shard_count = index.shard_count();
             Ok(shard_count)
-        })
-        .await;
+        });
 
     assert!(read_result.is_ok(), "Basic read operation should succeed");
     assert_eq!(read_result.unwrap(), 0, "Empty index should have 0 shards");
@@ -201,7 +199,7 @@ async fn test_basic_coordination_functionality() {
     assert_eq!(write_result.unwrap(), 0, "Empty index should have 0 shards");
 
     // Verify system metrics
-    let metrics = concurrent.concurrency_metrics();
+    let metrics = concurrent.concurrency_metrics().await;
     assert_eq!(metrics.active_readers, 0, "No active readers after operations");
     assert_eq!(metrics.active_writers, 0, "No active writers after operations");
     assert!(metrics.current_epoch > 1, "Epoch should advance after write operations");
@@ -215,9 +213,7 @@ async fn test_coordination_statistics() {
     let concurrent = create_test_concurrent_shardex(&_test_env);
 
     // Initial stats should be empty
-    let initial_stats = concurrent
-        .coordination_stats()
-        .expect("Failed to get initial stats");
+    let initial_stats = concurrent.coordination_stats().await;
     assert_eq!(initial_stats.total_writes, 0, "Should start with no writes");
 
     // Perform some write operations
@@ -231,9 +227,7 @@ async fn test_coordination_statistics() {
     }
 
     // Check updated statistics
-    let final_stats = concurrent
-        .coordination_stats()
-        .expect("Failed to get final stats");
+    let final_stats = concurrent.coordination_stats().await;
     assert_eq!(
         final_stats.total_writes, NUM_WRITES,
         "Should track all write operations"
@@ -267,8 +261,7 @@ async fn test_concurrent_readers_non_blocking() {
                     // Simulate some read work
                     std::thread::sleep(Duration::from_millis(10));
                     Ok(index.shard_count())
-                })
-                .await;
+                });
 
             let reader_duration = reader_start.elapsed();
             (reader_id, result, reader_duration)

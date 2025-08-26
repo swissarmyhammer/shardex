@@ -158,7 +158,7 @@ impl ShardexMetadata {
         Self {
             id,
             centroid,
-            posting_count: base_metadata.active_count,
+            posting_count: base_metadata.current_count,
             capacity,
             last_modified: SystemTime::now(),
             utilization,
@@ -170,9 +170,9 @@ impl ShardexMetadata {
     /// Update metadata from a shard instance
     pub fn update_from_shard(&mut self, shard: &Shard) {
         self.centroid = shard.get_centroid().to_vec();
-        self.posting_count = shard.active_count();
+        self.posting_count = shard.current_count();
         self.utilization = if self.capacity > 0 {
-            self.posting_count as f32 / self.capacity as f32
+            shard.active_count() as f32 / self.capacity as f32
         } else {
             0.0
         };
@@ -1162,6 +1162,39 @@ impl ShardexIndex {
     }
 
     /// Get index statistics
+    /// Calculate active and deleted posting counts across all shards
+    /// 
+    /// This method aggregates posting counts from both cached and uncached shards.
+    /// For cached shards, it uses the actual active_count() method.
+    /// For uncached shards, it estimates based on utilization and capacity.
+    fn calculate_posting_counts(&self) -> (usize, usize) {
+        let mut total_active = 0;
+        let mut total_deleted = 0;
+
+        for shard_metadata in &self.shards {
+            if let Some(cached_shard) = self.shard_cache.get(&shard_metadata.id) {
+                // For cached shards, get actual counts
+                let active_count = cached_shard.active_count();
+                let current_count = cached_shard.current_count();
+                let deleted_count = current_count.saturating_sub(active_count);
+                
+                total_active += active_count;
+                total_deleted += deleted_count;
+            } else {
+                // For uncached shards, estimate based on utilization
+                // The posting_count in metadata represents total postings
+                let total_postings = shard_metadata.posting_count;
+                let estimated_active = (shard_metadata.utilization * shard_metadata.capacity as f32) as usize;
+                let estimated_deleted = total_postings.saturating_sub(estimated_active);
+                
+                total_active += estimated_active;
+                total_deleted += estimated_deleted;
+            }
+        }
+
+        (total_active, total_deleted)
+    }
+
     pub fn statistics(&self) -> IndexStatistics {
         let total_postings = self.shards.iter().map(|s| s.posting_count).sum();
         let total_capacity = self.shards.iter().map(|s| s.capacity).sum();
@@ -1269,14 +1302,15 @@ impl ShardexIndex {
     /// Get index statistics in a format compatible with structures::IndexStats
     pub fn stats(&self, pending_operations: usize) -> Result<crate::structures::IndexStats, ShardexError> {
         let stats = self.statistics();
+        let (active_postings, deleted_postings) = self.calculate_posting_counts();
 
         Ok(crate::structures::IndexStats {
             total_shards: stats.total_shards,
             total_postings: stats.total_postings,
             pending_operations,
             memory_usage: stats.total_memory_usage,
-            active_postings: stats.total_postings, // Assume all postings are active for now
-            deleted_postings: 0,                   // Deleted postings tracking not implemented yet
+            active_postings,
+            deleted_postings,
             average_shard_utilization: stats.average_utilization,
             vector_dimension: stats.vector_dimension,
             disk_usage: stats.total_memory_usage,          // Approximate disk usage
@@ -1563,7 +1597,7 @@ impl ShardexIndex {
         if let Some(metadata) = self.shards.iter_mut().find(|s| s.id == shard_id) {
             // Update posting count and utilization from the shard
             let shard_metadata = shard.metadata();
-            metadata.posting_count = shard_metadata.active_count;
+            metadata.posting_count = shard_metadata.current_count;
             metadata.utilization = shard_metadata.active_count as f32 / shard.capacity() as f32;
             metadata.last_modified = SystemTime::now();
 
@@ -3646,7 +3680,7 @@ mod tests {
         assert_eq!(deleted_count, 2);
 
         let updated_metadata = index.shards.iter().find(|s| s.id == shard_id).unwrap();
-        assert_eq!(updated_metadata.posting_count, 0);
+        assert_eq!(updated_metadata.posting_count, 2); // Total postings remains the same
         assert!(updated_metadata.utilization < initial_utilization);
     }
 
@@ -4036,5 +4070,66 @@ mod tests {
 
         // After close, text storage should be None
         assert!(!index.has_text_storage());
+    }
+
+    #[test]
+    fn test_deleted_postings_tracking() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ShardexConfig::new()
+            .directory_path(temp_dir.path())
+            .vector_size(384)
+            .shardex_segment_size(100);
+        let mut index = ShardexIndex::create(config).unwrap();
+
+        // Create a shard and add some postings
+        let shard_id = ShardId::new();
+        let shards_dir = temp_dir.path().join("shards");
+        std::fs::create_dir_all(&shards_dir).unwrap();
+        let mut shard = Shard::create(shard_id, 100, 384, shards_dir.clone()).unwrap();
+
+        let doc_id1 = DocumentId::new();
+        let doc_id2 = DocumentId::new();
+        let doc_id3 = DocumentId::new();
+        
+        let vector1 = vec![1.0; 384];
+        let vector2 = vec![2.0; 384];  
+        let vector3 = vec![3.0; 384];
+        
+        let posting1 = Posting::new(doc_id1, 0, 10, vector1, 384).unwrap();
+        let posting2 = Posting::new(doc_id2, 0, 10, vector2, 384).unwrap();
+        let posting3 = Posting::new(doc_id3, 0, 10, vector3, 384).unwrap();
+        
+        shard.add_posting(posting1).unwrap();
+        shard.add_posting(posting2).unwrap();
+        shard.add_posting(posting3).unwrap();
+
+        // Add shard to index
+        index.add_shard(shard).unwrap();
+
+        // Get initial statistics
+        let initial_stats = index.stats(0).unwrap();
+        assert_eq!(initial_stats.total_postings, 3);
+        assert_eq!(initial_stats.active_postings, 3);
+        assert_eq!(initial_stats.deleted_postings, 0);
+
+        // Delete one document
+        let deleted_count = index.delete_document(doc_id2).unwrap();
+        assert_eq!(deleted_count, 1);
+
+        // Get statistics after deletion
+        let after_delete_stats = index.stats(0).unwrap();
+        assert_eq!(after_delete_stats.total_postings, 3); // Total should remain the same
+        assert_eq!(after_delete_stats.active_postings, 2); // Should be 2 active
+        assert_eq!(after_delete_stats.deleted_postings, 1); // Should be 1 deleted
+
+        // Delete another document
+        let deleted_count = index.delete_document(doc_id1).unwrap();
+        assert_eq!(deleted_count, 1);
+
+        // Get final statistics
+        let final_stats = index.stats(0).unwrap();
+        assert_eq!(final_stats.total_postings, 3); // Total should remain the same
+        assert_eq!(final_stats.active_postings, 1); // Should be 1 active
+        assert_eq!(final_stats.deleted_postings, 2); // Should be 2 deleted
     }
 }

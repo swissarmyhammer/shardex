@@ -275,33 +275,27 @@ impl PerformanceMonitor {
         let mut metrics = self.search_metrics.write().await;
         
         // Update counters
+        let previous_total = metrics.total_searches;
         metrics.total_searches += 1;
         if success {
             metrics.successful_searches += 1;
         }
         
-        // Update timing and result statistics
-        let latency_ms = latency.as_millis() as u64;
-        metrics.total_search_time += latency;
-        metrics.total_results_returned += result_count;
-        
-        // Update min/max latencies
-        if latency_ms < metrics.min_search_latency_ms {
-            metrics.min_search_latency_ms = latency_ms;
-        }
-        if latency_ms > metrics.max_search_latency_ms {
-            metrics.max_search_latency_ms = latency_ms;
-        }
-        
-        // Update average calculations
-        metrics.average_search_latency_ms = metrics.total_search_time.as_millis() as u64 / metrics.total_searches;
-        metrics.average_results_per_search = if metrics.total_searches > 0 {
-            metrics.total_results_returned as f64 / metrics.total_searches as f64
+        // Update timing statistics using weighted average
+        let latency_ms = latency.as_millis() as f64;
+        if previous_total == 0 {
+            metrics.average_latency_ms = latency_ms;
         } else {
-            0.0
-        };
+            // Calculate weighted average of latency
+            metrics.average_latency_ms = (metrics.average_latency_ms * previous_total as f64 + latency_ms) / metrics.total_searches as f64;
+        }
         
-        metrics.last_updated = SystemTime::now();
+        // Update average results per search using weighted average  
+        if previous_total == 0 {
+            metrics.average_results_per_search = result_count as f64;
+        } else {
+            metrics.average_results_per_search = (metrics.average_results_per_search * previous_total as f64 + result_count as f64) / metrics.total_searches as f64;
+        }
     }
 
     /// Record a write operation
