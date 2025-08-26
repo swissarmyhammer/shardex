@@ -270,18 +270,38 @@ impl PerformanceMonitor {
     }
 
     /// Record a search operation
-    pub async fn record_search(&self, _latency: Duration, _result_count: usize, success: bool) {
-        // For now, we'll update the performance metrics directly
-        // In a full implementation, we'd use SearchRecordParams with the existing SearchMetrics
-
-        // Update the search latency for percentile calculations (simplified)
-        // This is a placeholder - in a real implementation we'd use proper percentile tracking
-
-        // Just track basic search stats for now to avoid unused variable warnings
+    pub async fn record_search(&self, latency: Duration, result_count: usize, success: bool) {
+        // Update search metrics with actual implementation
+        let mut metrics = self.search_metrics.write().await;
+        
+        // Update counters
+        metrics.total_searches += 1;
         if success {
-            // Search completed successfully with result_count results in latency time
-            // Could update internal metrics here
+            metrics.successful_searches += 1;
         }
+        
+        // Update timing and result statistics
+        let latency_ms = latency.as_millis() as u64;
+        metrics.total_search_time += latency;
+        metrics.total_results_returned += result_count;
+        
+        // Update min/max latencies
+        if latency_ms < metrics.min_search_latency_ms {
+            metrics.min_search_latency_ms = latency_ms;
+        }
+        if latency_ms > metrics.max_search_latency_ms {
+            metrics.max_search_latency_ms = latency_ms;
+        }
+        
+        // Update average calculations
+        metrics.average_search_latency_ms = metrics.total_search_time.as_millis() as u64 / metrics.total_searches;
+        metrics.average_results_per_search = if metrics.total_searches > 0 {
+            metrics.total_results_returned as f64 / metrics.total_searches as f64
+        } else {
+            0.0
+        };
+        
+        metrics.last_updated = SystemTime::now();
     }
 
     /// Record a write operation
