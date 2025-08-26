@@ -395,6 +395,10 @@ async fn test_full_integration_stack() {
         default_timeout: Duration::from_secs(30),
         read_ahead_window: 10,
         cleanup_interval: Duration::from_secs(60),
+        max_access_history: 1000,
+        prediction_temporal_window: Duration::from_secs(1800),
+        max_cooccurrence_patterns: 50,
+        prediction_count: 5,
     };
 
     // For this integration test, we'll use the concurrent storage directly
