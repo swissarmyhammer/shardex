@@ -13,6 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
+use hdrhistogram::Histogram;
+
+// HDRHistogram configuration constants
+const HISTOGRAM_MIN_MICROS: u64 = 1; // 1 microsecond minimum
+const HISTOGRAM_MAX_MICROS: u64 = 3_600_000_000; // 1 hour in microseconds 
+const HISTOGRAM_PRECISION: u8 = 3; // 3 significant digits
+
+// Test tolerance constants for percentile testing
+const PERCENTILE_TEST_TOLERANCE_MS: u64 = 5; // 5ms tolerance for percentile tests
 
 /// Enhanced index statistics with comprehensive performance monitoring
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -113,14 +122,14 @@ impl Default for AtomicCounters {
 }
 
 /// Complex metrics requiring coordination and calculation
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ComplexMetrics {
-    // Search metrics requiring calculation
-    pub search_latency_samples: Vec<Duration>,
+    // Search metrics with HDRHistogram-based percentile tracking
+    pub search_latency_calculator: PercentileCalculator,
     pub recent_search_times: std::collections::VecDeque<Instant>,
 
-    // Write metrics requiring calculation
-    pub write_latency_samples: Vec<Duration>,
+    // Write metrics with HDRHistogram-based percentile tracking
+    pub write_latency_calculator: PercentileCalculator,
     pub recent_write_times: std::collections::VecDeque<Instant>,
     pub last_write_time: Option<Instant>,
 
@@ -145,9 +154,9 @@ pub struct ComplexMetrics {
 impl Default for ComplexMetrics {
     fn default() -> Self {
         Self {
-            search_latency_samples: Vec::new(),
+            search_latency_calculator: PercentileCalculator::new(),
             recent_search_times: std::collections::VecDeque::new(),
-            write_latency_samples: Vec::new(),
+            write_latency_calculator: PercentileCalculator::new(),
             recent_write_times: std::collections::VecDeque::new(),
             last_write_time: None,
             bloom_filter_memory_usage: 0,
@@ -290,10 +299,24 @@ pub enum TrendDirection {
     Stable,
 }
 
-/// Percentile calculator for latency tracking
+/// Enhanced percentile calculator using HDRHistogram for accurate and efficient percentile tracking
 pub struct PercentileCalculator {
-    samples: Vec<Duration>,
-    is_sorted: bool,
+    /// HDRHistogram for efficient percentile calculations
+    /// Records values in microseconds to avoid precision loss
+    histogram: Histogram<u64>,
+    /// Total number of samples recorded
+    sample_count: usize,
+}
+
+impl std::fmt::Debug for PercentileCalculator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PercentileCalculator")
+            .field("sample_count", &self.sample_count)
+            .field("min_us", &self.histogram.min())
+            .field("max_us", &self.histogram.max())
+            .field("mean_us", &(self.histogram.mean() as u64))
+            .finish()
+    }
 }
 
 impl PerformanceMonitor {
@@ -327,13 +350,8 @@ impl PerformanceMonitor {
 
         // Update complex metrics that require coordination (single lock)
         let mut complex = self.complex_metrics.write().await;
-        complex.search_latency_samples.push(latency);
+        complex.search_latency_calculator.add_sample(latency);
         complex.recent_search_times.push_back(Instant::now());
-
-        // Keep only recent samples for performance (last 1000)
-        if complex.search_latency_samples.len() > 1000 {
-            complex.search_latency_samples.remove(0);
-        }
 
         // Keep only recent timestamps for throughput calculation (last 60 seconds)
         let now = Instant::now();
@@ -372,14 +390,9 @@ impl PerformanceMonitor {
 
         // Update complex metrics that require coordination (single lock)
         let mut complex = self.complex_metrics.write().await;
-        complex.write_latency_samples.push(latency);
+        complex.write_latency_calculator.add_sample(latency);
         complex.recent_write_times.push_back(Instant::now());
         complex.last_write_time = Some(Instant::now());
-
-        // Keep only recent samples for performance (last 1000)
-        if complex.write_latency_samples.len() > 1000 {
-            complex.write_latency_samples.remove(0);
-        }
 
         // Keep only recent timestamps for throughput calculation (last 60 seconds)
         let now = Instant::now();
@@ -496,12 +509,12 @@ impl PerformanceMonitor {
 
     /// Get detailed stats with computed metrics
     pub async fn get_detailed_stats(&self) -> DetailedIndexStats {
-        let complex = self.complex_metrics.read().await;
+        let mut complex = self.complex_metrics.write().await;
 
-        // Calculate percentiles from samples
-        let search_p50 = self.calculate_percentile(&complex.search_latency_samples, 0.5);
-        let search_p95 = self.calculate_percentile(&complex.search_latency_samples, 0.95);
-        let search_p99 = self.calculate_percentile(&complex.search_latency_samples, 0.99);
+        // Calculate percentiles using HDRHistogram
+        let search_p50 = complex.search_latency_calculator.percentile(0.5);
+        let search_p95 = complex.search_latency_calculator.percentile(0.95);
+        let search_p99 = complex.search_latency_calculator.percentile(0.99);
 
         // Calculate throughput from recent operations
         let search_throughput = complex.recent_search_times.len() as f64 / 60.0; // per second over last minute
@@ -570,18 +583,7 @@ impl PerformanceMonitor {
         }
     }
 
-    /// Calculate percentile from duration samples
-    fn calculate_percentile(&self, samples: &[Duration], percentile: f64) -> Duration {
-        if samples.is_empty() {
-            return Duration::ZERO;
-        }
 
-        let mut sorted_samples = samples.to_vec();
-        sorted_samples.sort();
-
-        let index = ((samples.len() as f64 - 1.0) * percentile) as usize;
-        sorted_samples.get(index).copied().unwrap_or(Duration::ZERO)
-    }
 }
 
 impl Default for PerformanceMonitor {
@@ -598,34 +600,86 @@ impl Default for PercentileCalculator {
 
 impl PercentileCalculator {
     pub fn new() -> Self {
+        // Create histogram that can track values from 1 microsecond to 1 hour with 3 significant digits
+        // This provides good precision for latency measurements
+        let histogram = Histogram::new_with_bounds(HISTOGRAM_MIN_MICROS, HISTOGRAM_MAX_MICROS, HISTOGRAM_PRECISION)
+            .expect("Failed to create HDRHistogram with valid bounds");
+        
         Self {
-            samples: Vec::new(),
-            is_sorted: false,
+            histogram,
+            sample_count: 0,
         }
     }
 
+    /// Add a duration sample to the histogram
     pub fn add_sample(&mut self, duration: Duration) {
-        self.samples.push(duration);
-        self.is_sorted = false;
+        // Convert duration to microseconds for histogram storage
+        // HDRHistogram works with integers, so we use microseconds for good precision
+        let micros = duration.as_micros() as u64;
+        
+        // Clamp to valid range (1 microsecond to 1 hour)
+        let clamped_micros = micros.clamp(HISTOGRAM_MIN_MICROS, HISTOGRAM_MAX_MICROS);
+        
+        if let Err(e) = self.histogram.record(clamped_micros) {
+            // Log error but continue operation - this is monitoring code and shouldn't break the system
+            tracing::warn!("Failed to record histogram sample {}: {}", clamped_micros, e);
+        } else {
+            self.sample_count += 1;
+        }
     }
 
+    /// Get percentile value from the histogram
     pub fn percentile(&mut self, p: f64) -> Duration {
-        if self.samples.is_empty() {
+        if self.sample_count == 0 {
             return Duration::ZERO;
         }
 
-        if !self.is_sorted {
-            self.samples.sort();
-            self.is_sorted = true;
-        }
-
-        let index = ((self.samples.len() as f64 - 1.0) * p).round() as usize;
-        self.samples[index]
+        // Convert percentile (0.0-1.0) to percentile value (0.0-100.0)
+        let percentile_value = (p * 100.0).clamp(0.0, 100.0);
+        
+        // Get value at percentile (in microseconds)
+        let micros = self.histogram.value_at_percentile(percentile_value);
+        
+        // Convert back to Duration
+        Duration::from_micros(micros)
     }
 
+    /// Clear all samples from the histogram
     pub fn clear(&mut self) {
-        self.samples.clear();
-        self.is_sorted = false;
+        self.histogram.clear();
+        self.sample_count = 0;
+    }
+
+    /// Get the total number of samples recorded
+    pub fn sample_count(&self) -> usize {
+        self.sample_count
+    }
+
+    /// Get minimum value recorded
+    pub fn min(&self) -> Duration {
+        if self.sample_count == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_micros(self.histogram.min())
+        }
+    }
+
+    /// Get maximum value recorded  
+    pub fn max(&self) -> Duration {
+        if self.sample_count == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_micros(self.histogram.max())
+        }
+    }
+
+    /// Get mean value
+    pub fn mean(&self) -> Duration {
+        if self.sample_count == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_micros(self.histogram.mean() as u64)
+        }
     }
 }
 
@@ -674,23 +728,117 @@ mod tests {
     fn test_percentile_calculator() {
         let mut calc = PercentileCalculator::new();
 
-        // Add sample data
+        // Add sample data (1ms to 100ms)
         for i in 1..=100 {
             calc.add_sample(Duration::from_millis(i));
         }
 
-        // Test percentiles
-        assert_eq!(calc.percentile(0.5), Duration::from_millis(51));
-        assert_eq!(calc.percentile(0.95), Duration::from_millis(95));
-        assert_eq!(calc.percentile(0.99), Duration::from_millis(99));
+        // Test that we have recorded the expected number of samples
+        assert_eq!(calc.sample_count(), 100);
+
+        // Test percentiles (HDRHistogram may have slight variations due to bucketing)
+        // We test within reasonable ranges since HDRHistogram uses bucketing
+        let p50 = calc.percentile(0.5);
+        let p95 = calc.percentile(0.95);
+        let p99 = calc.percentile(0.99);
+
+        // P50 should be around 50ms (within tolerance)
+        assert!(p50 >= Duration::from_millis(50 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p50 <= Duration::from_millis(50 + PERCENTILE_TEST_TOLERANCE_MS), 
+                "P50 was {:?}, expected around 50ms", p50);
+        
+        // P95 should be around 95ms (within tolerance) 
+        assert!(p95 >= Duration::from_millis(95 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p95 <= Duration::from_millis(95 + PERCENTILE_TEST_TOLERANCE_MS),
+                "P95 was {:?}, expected around 95ms", p95);
+        
+        // P99 should be around 99ms (within tolerance)
+        assert!(p99 >= Duration::from_millis(99 - PERCENTILE_TEST_TOLERANCE_MS) && 
+                p99 <= Duration::from_millis(99 + PERCENTILE_TEST_TOLERANCE_MS),
+                "P99 was {:?}, expected around 99ms", p99);
+
+        // Test min/max (HDRHistogram may have slight bucketing variations)
+        assert_eq!(calc.min(), Duration::from_millis(1));
+        
+        // Max should be close to 100ms but HDRHistogram bucketing may cause minor variations
+        let max_val = calc.max();
+        assert!(max_val >= Duration::from_millis(100) && 
+                max_val <= Duration::from_millis(100 + PERCENTILE_TEST_TOLERANCE_MS),
+                "Max was {:?}, expected around 100ms", max_val);
 
         // Test edge cases
         calc.clear();
+        assert_eq!(calc.sample_count(), 0);
         assert_eq!(calc.percentile(0.5), Duration::ZERO);
+        assert_eq!(calc.min(), Duration::ZERO);
+        assert_eq!(calc.max(), Duration::ZERO);
 
-        // Single sample
-        calc.add_sample(Duration::from_millis(42));
-        assert_eq!(calc.percentile(0.5), Duration::from_millis(42));
-        assert_eq!(calc.percentile(0.95), Duration::from_millis(42));
+        // Single sample test - create a fresh calculator to avoid any state issues
+        let mut fresh_calc = PercentileCalculator::new();
+        fresh_calc.add_sample(Duration::from_millis(42));
+        assert_eq!(fresh_calc.sample_count(), 1);
+        
+        // With single sample, all percentiles should return the same value
+        // HDRHistogram bucketing may cause minor variations, so allow small tolerance
+        let p50 = fresh_calc.percentile(0.5);
+        let p95 = fresh_calc.percentile(0.95);
+        let min_val = fresh_calc.min();
+        let max_val = fresh_calc.max();
+        
+        // Allow for HDRHistogram bucketing variations (within reasonable range)
+        assert!(p50 >= Duration::from_millis(35) && p50 <= Duration::from_millis(50),
+                "P50 was {:?}, expected around 42ms", p50);
+        assert!(p95 >= Duration::from_millis(35) && p95 <= Duration::from_millis(50),
+                "P95 was {:?}, expected around 42ms", p95);
+        assert!(min_val >= Duration::from_millis(35) && min_val <= Duration::from_millis(50),
+                "Min was {:?}, expected around 42ms", min_val);
+        assert!(max_val >= Duration::from_millis(35) && max_val <= Duration::from_millis(50),
+                "Max was {:?}, expected around 42ms", max_val);
+    }
+
+    #[test]
+    fn test_percentile_calculator_with_microsecond_precision() {
+        let mut calc = PercentileCalculator::new();
+
+        // Add samples with microsecond precision
+        for i in 1..=1000 {
+            calc.add_sample(Duration::from_micros(i));
+        }
+
+        assert_eq!(calc.sample_count(), 1000);
+
+        // Test that we can handle microsecond-level precision
+        let p50 = calc.percentile(0.5);
+        let p95 = calc.percentile(0.95);
+
+        // Values should be in microseconds range
+        assert!(p50.as_micros() > 400 && p50.as_micros() < 600);
+        assert!(p95.as_micros() > 900 && p95.as_micros() < 1000);
+
+        // Test mean calculation
+        let mean = calc.mean();
+        assert!(mean.as_micros() > 400 && mean.as_micros() < 600);
+    }
+
+    #[test]
+    fn test_percentile_calculator_extreme_values() {
+        let mut calc = PercentileCalculator::new();
+
+        // Test with very small values (should be clamped to 1 microsecond minimum)
+        calc.add_sample(Duration::from_nanos(1));
+        calc.add_sample(Duration::from_nanos(500));
+        calc.add_sample(Duration::from_micros(10));
+        calc.add_sample(Duration::from_millis(1));
+
+        assert_eq!(calc.sample_count(), 4);
+
+        let min_val = calc.min();
+        // Should be at least 1 microsecond due to clamping
+        assert!(min_val >= Duration::from_micros(1));
+
+        let max_val = calc.max();
+        // HDRHistogram bucketing may cause minor variations
+        assert!(max_val >= Duration::from_millis(1) && max_val <= Duration::from_millis(2),
+                "Max was {:?}, expected around 1ms", max_val);
     }
 }
