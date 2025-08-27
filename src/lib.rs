@@ -224,9 +224,9 @@ pub use integrity::{CorruptionReport, IntegrityConfig, IntegrityManager, Validat
 pub use layout::{CleanupManager, DirectoryLayout, FileDiscovery, IndexMetadata};
 pub use memory::{FileHeader, MemoryMappedFile, StandardHeader};
 pub use monitoring::{
-    BloomFilterMetrics, DetailedIndexStats, DocumentTextMetrics, DocumentTextOperation, HistoricalData,
-    HistoricalDataPoint, PercentileCalculator, PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics,
-    TrendAnalysis, WriteMetrics,
+    BloomFilterMetrics, DetailedIndexStats, DocumentTextMetrics, HistoricalData, HistoricalDataPoint,
+    PercentileCalculator, PerformanceMonitor as MonitoringPerformanceMonitor, ResourceMetrics, TrendAnalysis,
+    WriteMetrics,
 };
 pub use posting_storage::{PostingStorage, PostingStorageHeader};
 pub use search_coordinator::{PerformanceMonitor, SearchCoordinator, SearchCoordinatorConfig, SearchMetrics};
