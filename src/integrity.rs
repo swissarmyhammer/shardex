@@ -2942,7 +2942,7 @@ impl IntegrityChecker {
     /// Check if magic bytes are valid for any known file type
     /// Uses centralized registry to avoid hardcoded magic byte comparisons
     fn is_valid_magic(&self, magic: &[u8; 4]) -> bool {
-        Self::VALID_PRODUCTION_MAGIC_BYTES.iter().any(|&valid_magic| magic == valid_magic)
+        Self::VALID_PRODUCTION_MAGIC_BYTES.contains(&magic)
     }
 
     /// Get file type description from magic bytes for diagnostic purposes

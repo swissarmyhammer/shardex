@@ -3,7 +3,7 @@
 //! This test demonstrates that the concurrent coordination system provides
 //! the expected performance characteristics and deadlock-free operation.
 
-// Placeholder file - performance demo not currently implemented
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,6 +11,21 @@ use tokio::task::JoinSet;
 
 mod common;
 use common::{create_test_concurrent_shardex, TestEnvironment};
+
+/// Helper function to collect task results from JoinSet with consistent error handling
+async fn collect_task_results(
+    tasks: &mut JoinSet<(usize, usize, &'static str)>,
+    test_name: &str,
+) -> Vec<(usize, usize, &'static str)> {
+    let mut results = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok((id, successes, role)) => results.push((id, successes, role)),
+            Err(e) => eprintln!("{} task failed: {}", test_name, e),
+        }
+    }
+    results
+}
 
 #[tokio::test]
 async fn test_concurrent_throughput_demonstration() {
@@ -75,13 +90,7 @@ async fn test_concurrent_throughput_demonstration() {
     }
 
     // Collect results
-    let mut results = Vec::new();
-    while let Some(result) = tasks.join_next().await {
-        match result {
-            Ok((id, successes, role)) => results.push((id, successes, role)),
-            Err(e) => eprintln!("Task failed: {}", e),
-        }
-    }
+    let results = collect_task_results(&mut tasks, "Concurrent throughput").await;
 
     let total_duration = start_time.elapsed();
     let total_successful = successful_operations.load(Ordering::SeqCst);
@@ -401,13 +410,7 @@ async fn test_realistic_document_workload_performance() {
     }
 
     // Collect results
-    let mut results = Vec::new();
-    while let Some(result) = tasks.join_next().await {
-        match result {
-            Ok((id, successes, role)) => results.push((id, successes, role)),
-            Err(e) => eprintln!("Task failed: {}", e),
-        }
-    }
+    let results = collect_task_results(&mut tasks, "Realistic workload").await;
 
     let total_duration = start_time.elapsed();
     let total_successful = successful_operations.load(Ordering::SeqCst);
@@ -563,13 +566,7 @@ async fn test_high_concurrency_stress() {
     }
 
     // Collect results
-    let mut results = Vec::new();
-    while let Some(result) = tasks.join_next().await {
-        match result {
-            Ok((id, successes, role)) => results.push((id, successes, role)),
-            Err(e) => eprintln!("High concurrency task failed: {}", e),
-        }
-    }
+    let results = collect_task_results(&mut tasks, "High concurrency stress").await;
 
     let total_duration = start_time.elapsed();
     let total_successful = successful_operations.load(Ordering::SeqCst);
