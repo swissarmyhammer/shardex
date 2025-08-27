@@ -147,6 +147,7 @@
 //! ```
 
 pub mod async_document_text_storage;
+pub mod constants;
 pub mod batch_processor;
 pub mod bloom_filter;
 pub mod concurrent;

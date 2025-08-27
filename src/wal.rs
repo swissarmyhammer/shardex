@@ -3,6 +3,7 @@
 //! This module provides fixed-size memory-mapped WAL segments with atomic operations
 //! for thread-safe write pointer management and segment lifecycle.
 
+use crate::constants::magic;
 use crate::error::ShardexError;
 use crate::layout::{DirectoryLayout, FileDiscovery};
 use crate::memory::{MemoryMappedFile, StandardHeader};
@@ -10,8 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-/// WAL file magic bytes for identification
-const WAL_MAGIC: &[u8; 4] = b"WLOG";
+
 /// WAL version number for format compatibility
 const WAL_VERSION: u32 = 1;
 /// Reserved space after StandardHeader for WAL metadata
@@ -108,7 +108,7 @@ impl WalSegment {
         let mut memory_map = MemoryMappedFile::create(&file_path, capacity)?;
 
         // Write header with initial metadata
-        let header = StandardHeader::new_without_checksum(WAL_MAGIC, WAL_VERSION, StandardHeader::SIZE as u64);
+        let header = StandardHeader::new_without_checksum(magic::WAL, WAL_VERSION, StandardHeader::SIZE as u64);
         memory_map.write_at(0, &header)?;
         memory_map.sync()?;
 
@@ -130,7 +130,7 @@ impl WalSegment {
 
         // Read and validate header
         let header: StandardHeader = memory_map.read_at(0)?;
-        header.validate_magic(WAL_MAGIC)?;
+        header.validate_magic(magic::WAL)?;
         header.validate_version(WAL_VERSION, WAL_VERSION)?;
         header.validate_structure()?;
 
@@ -340,7 +340,7 @@ impl WalSegment {
 
         // Read and validate header with full structure validation including checksums
         let header: StandardHeader = memory_map.read_at(0)?;
-        header.validate_magic(WAL_MAGIC)?;
+        header.validate_magic(magic::WAL)?;
         header.validate_version(WAL_VERSION, WAL_VERSION)?;
         header.validate_structure()?;
 

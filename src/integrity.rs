@@ -68,6 +68,7 @@
 //! ```
 
 use crate::config::ShardexConfig;
+use crate::constants::magic;
 use crate::error::ShardexError;
 use crate::memory::{FileHeader, MemoryMappedFile};
 use serde::{Deserialize, Serialize};
@@ -2384,11 +2385,11 @@ impl IntegrityManager {
             let magic = &file_data[0..4];
 
             match magic {
-                b"PSTR" => {
+                x if x == magic::POSTING_STORAGE => {
                     // PostingStorage file - magic is at beginning of FileHeader
                     self.validate_posting_storage_file(mmf, start_time)
                 }
-                b"VSTR" => {
+                x if x == magic::VECTOR_STORAGE => {
                     // VectorStorage file - magic is at beginning of FileHeader
                     self.validate_vector_storage_file(mmf, start_time)
                 }
@@ -3183,7 +3184,7 @@ mod tests {
         let corrupted_data = vec![99u8; 100]; // Different data
 
         // Create header with checksum for original data
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &original_data);
 
         // But write corrupted data instead
         mmf.write_at(0, &header).unwrap();
@@ -3210,7 +3211,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &test_data);
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -3238,7 +3239,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &test_data);
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -3266,7 +3267,7 @@ mod tests {
         // Create a valid file
         let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
         let test_data = vec![42u8; 100];
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &test_data);
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -3378,7 +3379,7 @@ mod tests {
         let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
         let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
         let test_data = vec![42u8; data_size];
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &test_data);
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -3424,7 +3425,7 @@ mod tests {
         let corrupted_data = vec![99u8; 100];
 
         // Create header with checksum for original data but write corrupted data
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &original_data);
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &original_data);
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &corrupted_data)
@@ -3455,7 +3456,7 @@ mod tests {
             let mut mmf = MemoryMappedFile::create(file_path, 1024).unwrap();
             let data_size = 1024 - FileHeader::SIZE; // All remaining space after header
             let test_data = vec![42u8; data_size];
-            let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &test_data);
+            let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &test_data);
 
             mmf.write_at(0, &header).unwrap();
             mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap();
@@ -4036,7 +4037,7 @@ mod tests {
         test_data[50] = 0xFF;
         test_data[51] = 0xFF;
 
-        let header = FileHeader::new(b"TEST", 1, FileHeader::SIZE as u64, &vec![42u8; data_size]); // Original checksum
+        let header = FileHeader::new(magic::TEST_GENERIC, 1, FileHeader::SIZE as u64, &vec![42u8; data_size]); // Original checksum
 
         mmf.write_at(0, &header).unwrap();
         mmf.write_slice_at(FileHeader::SIZE, &test_data).unwrap(); // Corrupted data
@@ -4071,7 +4072,7 @@ mod tests {
 
         // Create a valid posting storage header
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 128),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 128),
             capacity: 2,
             current_count: 2,
             active_count: 2,
@@ -4123,7 +4124,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 64),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 64),
             capacity: 10,
             current_count: 0,
             active_count: 0,
@@ -4147,7 +4148,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 320),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 320),
             capacity: 5,
             current_count: 10, // Exceeds capacity
             active_count: 10,
@@ -4177,7 +4178,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 120),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 120),
             capacity: 10,
             current_count: 2,
             active_count: 2,
@@ -4206,7 +4207,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 200),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 200),
             capacity: 10,
             current_count: 5,
             active_count: 5,
@@ -4253,7 +4254,7 @@ mod tests {
         let header_size = std::mem::size_of::<crate::posting_storage::PostingStorageHeader>();
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 320),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 320),
             capacity: 10,
             current_count: 10,
             active_count: 10,
@@ -4314,7 +4315,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 120),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 120),
             capacity: 10,
             current_count: 2,
             active_count: 2,
@@ -4361,7 +4362,7 @@ mod tests {
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let header = crate::posting_storage::PostingStorageHeader {
-            file_header: crate::memory::FileHeader::new_without_checksum(b"PSTR", 1, 140),
+            file_header: crate::memory::FileHeader::new_without_checksum(magic::POSTING_STORAGE, 1, 140),
             capacity: 10,
             current_count: 3,
             active_count: 2,           // Claims 2 active but we'll make all 3 active

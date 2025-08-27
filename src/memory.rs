@@ -16,6 +16,7 @@
 //!
 //! ```rust
 //! use shardex::memory::{MemoryMappedFile, StandardHeader};
+//! use shardex::constants::magic;
 //! use tempfile::TempDir;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +27,7 @@
 //! let mut mmf = MemoryMappedFile::create(&file_path, 1024)?;
 //!
 //! // Write a header with magic bytes and version
-//! let header = StandardHeader::new(b"SHRD", 1, StandardHeader::SIZE as u64, &[42u8; 100]);
+//! let header = StandardHeader::new(magic::TEST_SHARD, 1, StandardHeader::SIZE as u64, &[42u8; 100]);
 //! mmf.write_at(0, &header)?;
 //!
 //! // Write some data
@@ -43,6 +44,7 @@
 //!
 //! ```rust
 //! use shardex::memory::{MemoryMappedFile, StandardHeader};
+//! use shardex::constants::magic;
 //! use std::path::Path;
 //!
 //! # fn read_example(file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +53,7 @@
 //!
 //! // Read and validate header
 //! let header: StandardHeader = mmf.read_at(0)?;
-//! header.validate_magic(b"SHRD")?;
+//! header.validate_magic(magic::TEST_SHARD)?;
 //! header.validate_checksum(&mmf.as_slice()[StandardHeader::SIZE..])?;
 //!
 //! // Read typed data
@@ -81,6 +83,7 @@
 //! # }
 //! ```
 
+use crate::constants::magic;
 use crate::error::ShardexError;
 use bytemuck::{Pod, Zeroable};
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -872,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_creation() {
-        let magic = b"TEST";
+        let magic = magic::TEST_GENERIC;
         let data = b"Hello, World!";
         let header = StandardHeader::new(magic, 1, StandardHeader::SIZE as u64, data);
 
@@ -888,19 +891,19 @@ mod tests {
 
     #[test]
     fn test_standard_header_magic_validation() {
-        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let header = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, b"data");
 
         // Valid magic
-        assert!(header.validate_magic(b"TEST").is_ok());
+        assert!(header.validate_magic(magic::TEST_GENERIC).is_ok());
 
         // Invalid magic
-        assert!(header.validate_magic(b"FAIL").is_err());
+        assert!(header.validate_magic(magic::TEST_FAILURE).is_err());
     }
 
     #[test]
     fn test_standard_header_checksum_validation() {
         let data = b"Hello, World!";
-        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, data);
+        let header = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, data);
 
         // Valid checksum
         assert!(header.validate_checksum(data).is_ok());
@@ -911,7 +914,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_update_checksum() {
-        let mut header = StandardHeader::new_without_checksum(b"TEST", 1, StandardHeader::SIZE as u64);
+        let mut header = StandardHeader::new_without_checksum(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64);
         assert_eq!(header.checksum, 0);
 
         let data = b"Some data";
@@ -924,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_bytemuck() {
-        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let header = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, b"data");
 
         // Should be able to convert to bytes
         let bytes = bytemuck::bytes_of(&header);
@@ -954,7 +957,7 @@ mod tests {
         {
             let mut mmf = MemoryMappedFile::create(&file_path, 1024).unwrap();
 
-            let header = StandardHeader::new(b"SHRD", 1, StandardHeader::SIZE as u64, data_bytes);
+            let header = StandardHeader::new(magic::TEST_SHARD, 1, StandardHeader::SIZE as u64, data_bytes);
             mmf.write_at(0, &header).unwrap();
             mmf.write_slice_at(StandardHeader::SIZE, &test_data)
                 .unwrap();
@@ -966,7 +969,7 @@ mod tests {
             let mmf = MemoryMappedFile::open_read_only(&file_path).unwrap();
 
             let header: StandardHeader = mmf.read_at(0).unwrap();
-            header.validate_magic(b"SHRD").unwrap();
+            header.validate_magic(magic::TEST_SHARD).unwrap();
 
             let read_data: &[u32] = mmf
                 .read_slice_at(StandardHeader::SIZE, test_data.len())
@@ -1002,7 +1005,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_version_validation() {
-        let header = StandardHeader::new(b"TEST", 5, StandardHeader::SIZE as u64, b"data");
+        let header = StandardHeader::new(magic::TEST_GENERIC, 5, StandardHeader::SIZE as u64, b"data");
 
         // Valid version ranges
         assert!(header.validate_version(1, 10).is_ok());
@@ -1023,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_standard_header_structure_validation() {
-        let mut header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let mut header = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, b"data");
 
         // Valid structure
         assert!(header.validate_structure().is_ok());
@@ -1057,21 +1060,21 @@ mod tests {
     #[test]
     fn test_standard_header_complete_validation() {
         let data = b"test data";
-        let header = StandardHeader::new(b"TEST", 2, StandardHeader::SIZE as u64, data);
+        let header = StandardHeader::new(magic::TEST_GENERIC, 2, StandardHeader::SIZE as u64, data);
 
         // Complete validation should pass
-        assert!(header.validate_complete(b"TEST", 1, 5, data).is_ok());
+        assert!(header.validate_complete(magic::TEST_GENERIC, 1, 5, data).is_ok());
 
         // Should fail with wrong magic
-        assert!(header.validate_complete(b"FAIL", 1, 5, data).is_err());
+        assert!(header.validate_complete(magic::TEST_FAILURE, 1, 5, data).is_err());
 
         // Should fail with version out of range
-        assert!(header.validate_complete(b"TEST", 3, 5, data).is_err());
-        assert!(header.validate_complete(b"TEST", 1, 1, data).is_err());
+        assert!(header.validate_complete(magic::TEST_GENERIC, 3, 5, data).is_err());
+        assert!(header.validate_complete(magic::TEST_GENERIC, 1, 1, data).is_err());
 
         // Should fail with wrong data
         assert!(header
-            .validate_complete(b"TEST", 1, 5, b"wrong data")
+            .validate_complete(magic::TEST_GENERIC, 1, 5, b"wrong data")
             .is_err());
     }
 
@@ -1079,7 +1082,7 @@ mod tests {
     fn test_standard_header_update_for_modification() {
         let initial_data = b"initial data";
         let mut header =
-            StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, initial_data);
+            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, initial_data);
 
         // Simulate some time passing and data changing
         let new_data = b"modified data";
@@ -1103,7 +1106,7 @@ mod tests {
         let data = b"test data";
 
         let header =
-            StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, created, modified, data);
+            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, created, modified, data);
 
         assert_eq!(header.created_at, created);
         assert_eq!(header.modified_at, modified);
@@ -1116,7 +1119,7 @@ mod tests {
         assert_eq!(StandardHeader::SIZE, 80);
 
         // Verify the structure layout
-        let header = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
+        let header = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, b"data");
         let bytes = bytemuck::bytes_of(&header);
         assert_eq!(bytes.len(), 80);
     }
@@ -1124,12 +1127,12 @@ mod tests {
     #[test]
     fn test_file_header_compatibility() {
         // Test that FileHeader is an alias for StandardHeader
-        let header: FileHeader = StandardHeader::new(b"TEST", 1, StandardHeader::SIZE as u64, b"data");
-        assert_eq!(header.magic, *b"TEST");
+        let header: FileHeader = StandardHeader::new(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, b"data");
+        assert_eq!(header.magic, *magic::TEST_GENERIC);
         assert_eq!(header.version, 1);
 
         // Test that FileHeader methods work
-        assert!(header.validate_magic(b"TEST").is_ok());
+        assert!(header.validate_magic(magic::TEST_GENERIC).is_ok());
         assert!(header.validate_checksum(b"data").is_ok());
     }
 
@@ -1149,12 +1152,12 @@ mod tests {
 
         // Headers with identical header metadata and same data should have same checksum
         // Use explicit timestamps to ensure headers are identical
-        let header1 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data1);
-        let header2 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data2);
+        let header1 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data1);
+        let header2 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data2);
         assert_eq!(header1.checksum, header2.checksum);
 
         // Different data should produce different checksums
-        let header3 = StandardHeader::new_with_timestamps(b"TEST", 1, StandardHeader::SIZE as u64, 1000, 1000, data3);
+        let header3 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data3);
         assert_ne!(header1.checksum, header3.checksum);
     }
 
