@@ -272,7 +272,7 @@ impl Default for CowMemoryConfig {
 ///
 /// This structure tracks key performance indicators and memory usage
 /// patterns for COW operations to help with optimization and monitoring.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CowMetrics {
     /// Number of active reader references currently held
     pub active_readers: usize,
@@ -290,21 +290,6 @@ pub struct CowMetrics {
     pub average_commit_time: Duration,
     /// Peak memory usage observed
     pub peak_memory_usage_bytes: usize,
-}
-
-impl Default for CowMetrics {
-    fn default() -> Self {
-        Self {
-            active_readers: 0,
-            pending_writers: 0,
-            memory_usage_bytes: 0,
-            clone_operations: 0,
-            average_clone_time: Duration::ZERO,
-            commit_count: 0,
-            average_commit_time: Duration::ZERO,
-            peak_memory_usage_bytes: 0,
-        }
-    }
 }
 
 /// Internal metrics tracking for CowShardexIndex
@@ -1387,5 +1372,20 @@ mod tests {
         assert_eq!(metrics1.clone_operations, metrics2.clone_operations);
         assert_eq!(metrics1.commit_count, metrics2.commit_count);
         assert_eq!(metrics1.memory_usage_bytes, metrics2.memory_usage_bytes);
+    }
+
+    #[test]
+    fn test_cow_metrics_default() {
+        let default_metrics = CowMetrics::default();
+
+        // Verify all zero/empty defaults
+        assert_eq!(default_metrics.active_readers, 0);
+        assert_eq!(default_metrics.pending_writers, 0);
+        assert_eq!(default_metrics.memory_usage_bytes, 0);
+        assert_eq!(default_metrics.clone_operations, 0);
+        assert_eq!(default_metrics.average_clone_time, Duration::ZERO);
+        assert_eq!(default_metrics.commit_count, 0);
+        assert_eq!(default_metrics.average_commit_time, Duration::ZERO);
+        assert_eq!(default_metrics.peak_memory_usage_bytes, 0);
     }
 }

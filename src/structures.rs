@@ -213,7 +213,7 @@ pub struct SearchResultHeader {
 /// Index statistics for monitoring and observability
 ///
 /// Provides comprehensive metrics about the index state and performance.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct IndexStats {
     /// Total number of shards in the index
     pub total_shards: usize,
@@ -637,12 +637,6 @@ impl IndexStats {
             .with_search_latency_p99(std::time::Duration::from_millis(300))
             .with_write_throughput(100.0)
             .with_bloom_filter_hit_rate(0.85)
-    }
-}
-
-impl Default for IndexStats {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1240,5 +1234,30 @@ mod tests {
         let stats_json = serde_json::to_string(&stats).unwrap();
         let stats_restored: IndexStats = serde_json::from_str(&stats_json).unwrap();
         assert_eq!(stats, stats_restored);
+    }
+
+    #[test]
+    fn test_index_stats_default() {
+        let default_stats = IndexStats::default();
+        let new_stats = IndexStats::new();
+
+        // Default should match new()
+        assert_eq!(default_stats, new_stats);
+
+        // Verify all zero/empty defaults
+        assert_eq!(default_stats.total_shards, 0);
+        assert_eq!(default_stats.total_postings, 0);
+        assert_eq!(default_stats.pending_operations, 0);
+        assert_eq!(default_stats.memory_usage, 0);
+        assert_eq!(default_stats.active_postings, 0);
+        assert_eq!(default_stats.deleted_postings, 0);
+        assert_eq!(default_stats.average_shard_utilization, 0.0);
+        assert_eq!(default_stats.vector_dimension, 0);
+        assert_eq!(default_stats.disk_usage, 0);
+        assert_eq!(default_stats.search_latency_p50, std::time::Duration::ZERO);
+        assert_eq!(default_stats.search_latency_p95, std::time::Duration::ZERO);
+        assert_eq!(default_stats.search_latency_p99, std::time::Duration::ZERO);
+        assert_eq!(default_stats.write_throughput, 0.0);
+        assert_eq!(default_stats.bloom_filter_hit_rate, 0.0);
     }
 }

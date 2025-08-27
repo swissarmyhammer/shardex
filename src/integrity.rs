@@ -1801,11 +1801,7 @@ impl IntegrityChecker {
             Ok(mmf) => mmf,
             Err(e) => {
                 notes.push(format!("Failed to open file for writing: {}", e));
-                return Ok((
-                    false,
-                    format!("Failed to open file for checksum repair: {}", e),
-                    notes,
-                ));
+                return Ok((false, format!("Failed to open file for checksum repair: {}", e), notes));
             }
         };
 
