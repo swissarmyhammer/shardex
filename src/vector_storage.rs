@@ -68,6 +68,7 @@
 //! # }
 //! ```
 
+use crate::constants::magic;
 use crate::error::ShardexError;
 use crate::memory::{FileHeader, MemoryMappedFile};
 use bytemuck::{Pod, Zeroable};
@@ -120,8 +121,7 @@ unsafe impl Pod for VectorStorageHeader {}
 // SAFETY: VectorStorageHeader can be safely zero-initialized
 unsafe impl Zeroable for VectorStorageHeader {}
 
-/// Magic bytes for vector storage files
-const VECTOR_STORAGE_MAGIC: &[u8; 4] = b"VSTR";
+
 /// Current version of the vector storage format
 const VECTOR_STORAGE_VERSION: u32 = 1;
 /// Default SIMD alignment (64 bytes for AVX-512)
@@ -159,7 +159,7 @@ impl VectorStorageHeader {
 
         Ok(Self {
             file_header: FileHeader::new_without_checksum(
-                VECTOR_STORAGE_MAGIC,
+                magic::VECTOR_STORAGE,
                 VECTOR_STORAGE_VERSION,
                 FileHeader::SIZE as u64,
             ),
@@ -176,7 +176,7 @@ impl VectorStorageHeader {
 
     /// Validate the header magic bytes and version
     pub fn validate(&self) -> Result<(), ShardexError> {
-        self.file_header.validate_magic(VECTOR_STORAGE_MAGIC)?;
+        self.file_header.validate_magic(magic::VECTOR_STORAGE)?;
 
         if self.file_header.version != VECTOR_STORAGE_VERSION {
             return Err(ShardexError::Corruption(format!(
@@ -885,9 +885,9 @@ mod tests {
         assert!(header.validate().is_ok());
 
         // Break magic bytes
-        header.file_header.magic = *b"XXXX";
+        header.file_header.magic = *magic::TEST_CORRUPTION;
         assert!(header.validate().is_err());
-        header.file_header.magic = *VECTOR_STORAGE_MAGIC;
+        header.file_header.magic = *magic::VECTOR_STORAGE;
 
         // Break version
         header.file_header.version = 999;

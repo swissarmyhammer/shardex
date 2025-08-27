@@ -72,6 +72,7 @@
 //! # }
 //! ```
 
+use crate::constants::magic;
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
 use crate::memory::{FileHeader, MemoryMappedFile};
@@ -125,8 +126,7 @@ unsafe impl Pod for PostingStorageHeader {}
 // SAFETY: PostingStorageHeader can be safely zero-initialized
 unsafe impl Zeroable for PostingStorageHeader {}
 
-/// Magic bytes for posting storage files
-const POSTING_STORAGE_MAGIC: &[u8; 4] = b"PSTR";
+
 /// Current version of the posting storage format
 const POSTING_STORAGE_VERSION: u32 = 1;
 
@@ -165,7 +165,7 @@ impl PostingStorageHeader {
 
         Ok(Self {
             file_header: FileHeader::new_without_checksum(
-                POSTING_STORAGE_MAGIC,
+                magic::POSTING_STORAGE,
                 POSTING_STORAGE_VERSION,
                 FileHeader::SIZE as u64,
             ),
@@ -183,7 +183,7 @@ impl PostingStorageHeader {
 
     /// Validate the header magic bytes and version
     pub fn validate(&self) -> Result<(), ShardexError> {
-        self.file_header.validate_magic(POSTING_STORAGE_MAGIC)?;
+        self.file_header.validate_magic(magic::POSTING_STORAGE)?;
 
         if self.file_header.version != POSTING_STORAGE_VERSION {
             return Err(ShardexError::Corruption(format!(
@@ -1023,9 +1023,9 @@ mod tests {
         assert!(header.validate().is_ok());
 
         // Break magic bytes
-        header.file_header.magic = *b"XXXX";
+        header.file_header.magic = *magic::TEST_CORRUPTION;
         assert!(header.validate().is_err());
-        header.file_header.magic = *POSTING_STORAGE_MAGIC;
+        header.file_header.magic = *magic::POSTING_STORAGE;
 
         // Break version
         header.file_header.version = 999;

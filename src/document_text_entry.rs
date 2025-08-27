@@ -80,16 +80,17 @@
 //! assert_eq!(header, restored);
 //! ```
 
+use crate::constants::magic;
 use crate::error::ShardexError;
 use crate::identifiers::DocumentId;
 use crate::memory::FileHeader;
 use bytemuck::{Pod, Zeroable};
 
 /// Magic bytes for text index files (`text_index.dat`)
-pub const TEXT_INDEX_MAGIC: &[u8; 4] = b"TIDX";
+pub const TEXT_INDEX_MAGIC: &[u8; 4] = magic::TEXT_INDEX;
 
 /// Magic bytes for text data files (`text_data.dat`)  
-pub const TEXT_DATA_MAGIC: &[u8; 4] = b"TDAT";
+pub const TEXT_DATA_MAGIC: &[u8; 4] = magic::TEXT_DATA;
 
 /// Current version for text index file format
 pub const TEXT_INDEX_VERSION: u32 = 1;
