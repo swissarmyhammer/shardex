@@ -11,6 +11,125 @@ use crate::shardex_index::ShardexIndex;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+/// Test environment macros to eliminate duplication
+/// 
+/// These macros provide standardized test setup patterns that automatically
+/// handle TestEnvironment creation, variable naming consistency, and test name
+/// string literal elimination.
+
+/// Create a synchronous test with a TestEnvironment
+/// 
+/// Automatically creates a TestEnvironment using the function name as the test name,
+/// eliminating string duplication and ensuring compile-time correctness.
+/// 
+/// # Usage
+/// 
+/// ```rust
+/// test_with_env!(test_my_functionality, {
+///     // Test body has access to _env variable
+///     let config = ShardexConfig::new().directory_path(_env.path());
+///     // ... rest of test
+/// });
+/// ```
+#[macro_export]
+macro_rules! test_with_env {
+    ($test_name:ident, $body:block) => {
+        #[test]
+        fn $test_name() {
+            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
+            {
+                $body
+            }
+        }
+    };
+}
+
+/// Create an async test with a TestEnvironment
+/// 
+/// Automatically creates a TestEnvironment using the function name as the test name,
+/// eliminating string duplication and ensuring compile-time correctness for async tests.
+/// 
+/// # Usage
+/// 
+/// ```rust
+/// async_test_with_env!(test_my_async_functionality, {
+///     // Test body has access to _env variable
+///     let config = ShardexConfig::new().directory_path(_env.path());
+///     let result = some_async_operation(config).await;
+///     // ... rest of test
+/// });
+/// ```
+#[macro_export]
+macro_rules! async_test_with_env {
+    ($test_name:ident, $body:block) => {
+        #[tokio::test]
+        async fn $test_name() {
+            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
+            {
+                $body
+            }
+        }
+    };
+}
+
+/// Create a test with TestEnvironment and custom setup
+/// 
+/// Combines TestEnvironment creation with a setup closure, useful for tests
+/// that need additional initialization beyond the basic environment.
+/// 
+/// # Usage
+/// 
+/// ```rust
+/// test_with_setup!(test_with_config, |_env| {
+///     let config = ShardexConfig::new()
+///         .directory_path(_env.path())
+///         .vector_size(256);
+///     (config,)
+/// }, |(config,)| {
+///     // Test body has access to both _env and config
+///     // ... test implementation
+/// });
+/// ```
+#[macro_export]
+macro_rules! test_with_setup {
+    ($test_name:ident, $setup:expr, $body:expr) => {
+        #[test]
+        fn $test_name() {
+            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
+            let setup_result = $setup(&_env);
+            $body(setup_result);
+        }
+    };
+}
+
+/// Create an async test with TestEnvironment and custom setup
+/// 
+/// Combines TestEnvironment creation with an async setup closure.
+/// 
+/// # Usage
+/// 
+/// ```rust
+/// async_test_with_setup!(test_with_index, |_env| async {
+///     let config = ShardexConfig::new().directory_path(_env.path());
+///     let index = ShardexIndex::create(config.clone()).await?;
+///     Ok((config, index))
+/// }, |result| async {
+///     let (config, index) = result.unwrap();
+///     // ... test implementation
+/// });
+/// ```
+#[macro_export]
+macro_rules! async_test_with_setup {
+    ($test_name:ident, $setup:expr, $body:expr) => {
+        #[tokio::test]
+        async fn $test_name() {
+            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
+            let setup_result = $setup(&_env).await;
+            $body(setup_result).await;
+        }
+    };
+}
+
 /// Error handling utilities for tests
 pub mod error {
     use crate::error::ShardexError;
@@ -437,6 +556,194 @@ impl TestSetupBuilder {
     /// Get the test name
     pub fn name(&self) -> &str {
         &self.test_name
+    }
+}
+
+/// Domain-specific test environment builders for common patterns
+/// 
+/// These builders provide specialized test setup for specific Shardex components,
+/// eliminating duplication while providing type-safe, ergonomic test initialization.
+
+/// Shardex-specific test environment builder
+/// 
+/// Provides convenience methods for creating test environments specifically
+/// tailored for Shardex testing, with pre-configured defaults and patterns
+/// commonly used in shardex tests.
+pub struct ShardexTestEnv {
+    pub env: TestEnvironment,
+    pub config: ShardexConfig,
+}
+
+impl ShardexTestEnv {
+    /// Create a new Shardex test environment with standard defaults
+    /// 
+    /// Automatically configures:
+    /// - TestEnvironment with the given test name
+    /// - ShardexConfig with appropriate defaults for testing
+    /// 
+    /// # Arguments
+    /// * `test_name` - Name of the test, will be used as TestEnvironment name
+    pub fn new(test_name: &str) -> Self {
+        let env = TestEnvironment::new(test_name);
+        let config = ShardexConfig::new()
+            .directory_path(env.path())
+            .vector_size(test_constants::DEFAULT_VECTOR_SIZE)
+            .shard_size(test_constants::DEFAULT_SHARD_SIZE);
+
+        Self { env, config }
+    }
+
+    /// Create with custom vector size
+    pub fn with_vector_size(mut self, size: usize) -> Self {
+        self.config = self.config.vector_size(size);
+        self
+    }
+
+    /// Create with custom shard size
+    pub fn with_shard_size(mut self, size: usize) -> Self {
+        self.config = self.config.shard_size(size);
+        self
+    }
+
+    /// Create with small configuration (for performance tests)
+    pub fn small(test_name: &str) -> Self {
+        Self::new(test_name)
+            .with_vector_size(test_constants::SMALL_VECTOR_SIZE)
+    }
+
+    /// Create with large configuration (for capacity tests)
+    pub fn large(test_name: &str) -> Self {
+        Self::new(test_name)
+            .with_vector_size(test_constants::LARGE_VECTOR_SIZE)
+            .with_shard_size(test_constants::LARGE_SHARD_SIZE)
+    }
+
+    /// Build and create a ShardexIndex
+    pub fn build_with_index(self) -> Result<(TestEnvironment, ShardexConfig, ShardexIndex), ShardexError> {
+        let index = ShardexIndex::create(self.config.clone())
+            .map_err(|e| ShardexError::InvalidInput {
+                field: "index_creation".to_string(),
+                reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
+                suggestion: "Check directory permissions and disk space".to_string(),
+            })?;
+
+        Ok((self.env, self.config, index))
+    }
+
+    /// Get reference to the test environment
+    pub fn env(&self) -> &TestEnvironment {
+        &self.env
+    }
+
+    /// Get reference to the config
+    pub fn config(&self) -> &ShardexConfig {
+        &self.config
+    }
+}
+
+/// Concurrent test environment builder
+/// 
+/// Specialized for testing concurrent operations and COW index patterns.
+/// Provides utilities for setting up concurrent test scenarios with
+/// appropriate configurations and test data.
+pub struct ConcurrentTestEnv {
+    pub env: TestEnvironment,
+    pub config: ShardexConfig,
+}
+
+impl ConcurrentTestEnv {
+    /// Create a new concurrent test environment
+    pub fn new(test_name: &str) -> Self {
+        let env = TestEnvironment::new(test_name);
+        let config = ShardexConfig::new()
+            .directory_path(env.path())
+            .vector_size(test_constants::DEFAULT_VECTOR_SIZE)
+            .shard_size(test_constants::DEFAULT_SHARD_SIZE);
+
+        Self { env, config }
+    }
+
+    /// Create with high concurrency configuration
+    pub fn high_concurrency(test_name: &str) -> Self {
+        Self::new(test_name)
+            .with_shard_size(test_constants::LARGE_SHARD_SIZE)
+    }
+
+    /// Set custom vector size
+    pub fn with_vector_size(mut self, size: usize) -> Self {
+        self.config = self.config.vector_size(size);
+        self
+    }
+
+    /// Set custom shard size
+    pub fn with_shard_size(mut self, size: usize) -> Self {
+        self.config = self.config.shard_size(size);
+        self
+    }
+
+    /// Build with COW index ready for concurrent operations
+    pub async fn build_with_cow_index(self) -> Result<(TestEnvironment, ShardexConfig, crate::cow_index::CowShardexIndex), ShardexError> {
+        let index = ShardexIndex::create(self.config.clone())
+            .map_err(|e| ShardexError::InvalidInput {
+                field: "index_creation".to_string(),
+                reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
+                suggestion: "Check directory permissions and disk space".to_string(),
+            })?;
+        
+        let cow_index = crate::cow_index::CowShardexIndex::new(index);
+        Ok((self.env, self.config, cow_index))
+    }
+
+    /// Build with concurrent Shardex ready for testing
+    pub async fn build_with_concurrent(self) -> Result<(TestEnvironment, ShardexConfig, crate::concurrent::ConcurrentShardex), ShardexError> {
+        let (env, config, cow_index) = self.build_with_cow_index().await?;
+        let concurrent = crate::concurrent::ConcurrentShardex::new(cow_index);
+        Ok((env, config, concurrent))
+    }
+}
+
+/// WAL test environment builder
+/// 
+/// Specialized for testing Write-Ahead Log functionality with appropriate
+/// configurations for WAL operations, replay testing, and recovery scenarios.
+pub struct WalTestEnv {
+    pub env: TestEnvironment,
+    pub config: ShardexConfig,
+}
+
+impl WalTestEnv {
+    /// Create a new WAL test environment
+    pub fn new(test_name: &str) -> Self {
+        let env = TestEnvironment::new(test_name);
+        let config = ShardexConfig::new()
+            .directory_path(env.path())
+            .vector_size(test_constants::DEFAULT_VECTOR_SIZE)
+            .shard_size(test_constants::DEFAULT_SHARD_SIZE);
+
+        Self { env, config }
+    }
+
+    /// Get the WAL directory path
+    pub fn wal_path(&self) -> PathBuf {
+        self.env.path().join("wal")
+    }
+
+    /// Create WAL directory if it doesn't exist
+    pub fn ensure_wal_dir(&self) -> std::io::Result<PathBuf> {
+        let wal_path = self.wal_path();
+        std::fs::create_dir_all(&wal_path)?;
+        Ok(wal_path)
+    }
+
+    /// Build with WAL manager ready for testing
+    pub fn build_with_wal_manager(self) -> Result<(TestEnvironment, ShardexConfig, crate::wal::WalManager), ShardexError> {
+        let _wal_path = self.ensure_wal_dir()
+            .map_err(|e| ShardexError::Wal(format!("Failed to create WAL directory: {}", e)))?;
+        
+        let layout = crate::layout::DirectoryLayout::new(self.env.path().to_path_buf());
+        let wal_manager = crate::wal::WalManager::new(layout, 1024 * 1024); // 1MB segments
+            
+        Ok((self.env, self.config, wal_manager))
     }
 }
 
