@@ -213,7 +213,7 @@ pub struct SearchResultHeader {
 /// Index statistics for monitoring and observability
 ///
 /// Provides comprehensive metrics about the index state and performance.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IndexStats {
     /// Total number of shards in the index
     pub total_shards: usize,
@@ -669,7 +669,7 @@ impl Display for IndexStats {
 ///
 /// FlushStats provides detailed timing information and metrics for flush operations,
 /// enabling performance monitoring and optimization of the durability guarantees.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlushStats {
     /// Time spent flushing WAL operations
     pub wal_flush_duration: std::time::Duration,

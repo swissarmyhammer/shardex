@@ -773,8 +773,7 @@ mod tests {
 
     #[test]
     fn test_shardex_test_env_with_custom_vector_size() {
-        let test_env = ShardexTestEnv::new("test_shardex_custom_vector")
-            .with_vector_size(256);
+        let test_env = ShardexTestEnv::new("test_shardex_custom_vector").with_vector_size(256);
 
         assert_eq!(test_env.config.vector_size, 256);
         assert_eq!(test_env.config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
@@ -782,8 +781,7 @@ mod tests {
 
     #[test]
     fn test_shardex_test_env_with_custom_shard_size() {
-        let test_env = ShardexTestEnv::new("test_shardex_custom_shard")
-            .with_shard_size(500);
+        let test_env = ShardexTestEnv::new("test_shardex_custom_shard").with_shard_size(500);
 
         assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
         assert_eq!(test_env.config.shard_size, 500);
@@ -837,16 +835,14 @@ mod tests {
 
     #[test]
     fn test_wal_test_env_with_custom_vector_size() {
-        let test_env = WalTestEnv::new("test_wal_custom_vector")
-            .with_vector_size(384);
+        let test_env = WalTestEnv::new("test_wal_custom_vector").with_vector_size(384);
 
         assert_eq!(test_env.config.vector_size, 384);
     }
 
     #[test]
     fn test_wal_test_env_with_custom_shard_size() {
-        let test_env = WalTestEnv::new("test_wal_custom_shard")
-            .with_shard_size(600);
+        let test_env = WalTestEnv::new("test_wal_custom_shard").with_shard_size(600);
 
         assert_eq!(test_env.config.shard_size, 600);
     }

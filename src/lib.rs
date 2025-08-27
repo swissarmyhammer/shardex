@@ -147,13 +147,13 @@
 //! ```
 
 pub mod async_document_text_storage;
-pub mod constants;
 pub mod batch_processor;
 pub mod bloom_filter;
 pub mod concurrent;
 pub mod concurrent_document_text_storage;
 pub mod config;
 pub mod config_persistence;
+pub mod constants;
 pub mod cow_index;
 pub mod crash_recovery;
 pub mod deduplication;

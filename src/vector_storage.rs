@@ -121,7 +121,6 @@ unsafe impl Pod for VectorStorageHeader {}
 // SAFETY: VectorStorageHeader can be safely zero-initialized
 unsafe impl Zeroable for VectorStorageHeader {}
 
-
 /// Current version of the vector storage format
 const VECTOR_STORAGE_VERSION: u32 = 1;
 /// Default SIMD alignment (64 bytes for AVX-512)

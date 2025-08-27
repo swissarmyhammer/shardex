@@ -387,16 +387,18 @@ impl TextStorageRecoveryManager {
         };
 
         let duration = start_time.elapsed();
-        
+
         // Record overall recovery attempt metrics
         if let Some(monitor) = &self.performance_monitor {
             let success = matches!(result, Ok(RecoveryResult::Successful { .. }));
-            monitor.update_resource_metrics(
-                0, // memory usage not tracked here
-                0, // disk usage not tracked here 
-                0, // file descriptor count not tracked here
-            ).await;
-            
+            monitor
+                .update_resource_metrics(
+                    0, // memory usage not tracked here
+                    0, // disk usage not tracked here
+                    0, // file descriptor count not tracked here
+                )
+                .await;
+
             // Log recovery attempt duration
             tracing::info!("Recovery attempt completed in {:?}, success: {}", duration, success);
         }
@@ -468,7 +470,7 @@ impl TextStorageRecoveryManager {
             Ok(_) => {
                 // Storage validation succeeded, this might be a transient issue
                 actions_taken.push("Storage validation succeeded".to_string());
-                
+
                 // Try to sync the storage to ensure everything is consistent
                 let sync_result = {
                     let storage = self.storage.lock().unwrap();
@@ -483,12 +485,14 @@ impl TextStorageRecoveryManager {
                         actions_taken.push("Storage synchronized successfully".to_string());
 
                         if let Some(monitor) = &self.performance_monitor {
-                            monitor.record_document_text_storage(
-                                crate::monitoring::DocumentTextOperation::Storage,
-                                duration,
-                                true,
-                                None,
-                            ).await;
+                            monitor
+                                .record_document_text_storage(
+                                    crate::monitoring::DocumentTextOperation::Storage,
+                                    duration,
+                                    true,
+                                    None,
+                                )
+                                .await;
                         }
 
                         Ok(RecoveryResult::Successful {
@@ -501,12 +505,14 @@ impl TextStorageRecoveryManager {
                         actions_taken.push(format!("Storage sync failed: {}", e));
 
                         if let Some(monitor) = &self.performance_monitor {
-                            monitor.record_document_text_storage(
-                                crate::monitoring::DocumentTextOperation::Storage,
-                                duration,
-                                false,
-                                None,
-                            ).await;
+                            monitor
+                                .record_document_text_storage(
+                                    crate::monitoring::DocumentTextOperation::Storage,
+                                    duration,
+                                    false,
+                                    None,
+                                )
+                                .await;
                         }
 
                         Ok(RecoveryResult::RequiresManualIntervention {
@@ -531,18 +537,20 @@ impl TextStorageRecoveryManager {
 
                 if let Some(monitor) = &self.performance_monitor {
                     monitor.record_document_text_health_check(false, 1).await;
-                    monitor.record_document_text_storage(
-                        crate::monitoring::DocumentTextOperation::Retrieval,
-                        duration,
-                        false,
-                        None,
-                    ).await;
+                    monitor
+                        .record_document_text_storage(
+                            crate::monitoring::DocumentTextOperation::Retrieval,
+                            duration,
+                            false,
+                            None,
+                        )
+                        .await;
                 }
 
                 // Categorize the I/O error for better guidance
                 let error_category = match io_error.kind() {
                     std::io::ErrorKind::PermissionDenied => "Permission denied",
-                    std::io::ErrorKind::NotFound => "File not found", 
+                    std::io::ErrorKind::NotFound => "File not found",
                     std::io::ErrorKind::WriteZero => "Disk full or write protected",
                     std::io::ErrorKind::Interrupted => "Operation interrupted",
                     std::io::ErrorKind::UnexpectedEof => "Unexpected end of file",
@@ -647,19 +655,23 @@ impl TextStorageRecoveryManager {
 
         // Record metrics
         if let Some(monitor) = &self.performance_monitor {
-            monitor.record_document_text_health_check(issues_found == 0, issues_found).await;
-            monitor.record_document_text_storage(
-                crate::monitoring::DocumentTextOperation::Retrieval,
-                duration,
-                issues_found == 0,
-                None,
-            ).await;
+            monitor
+                .record_document_text_health_check(issues_found == 0, issues_found)
+                .await;
+            monitor
+                .record_document_text_storage(
+                    crate::monitoring::DocumentTextOperation::Retrieval,
+                    duration,
+                    issues_found == 0,
+                    None,
+                )
+                .await;
         }
 
         if issues_found == 0 {
             // No issues found - the inconsistency might have been transient
             tracing::info!("Data consistency validation passed - inconsistency may have been transient");
-            
+
             // Try to sync to ensure everything is written to disk
             let sync_result = {
                 let storage = self.storage.lock().unwrap();
@@ -669,22 +681,20 @@ impl TextStorageRecoveryManager {
             match sync_result {
                 Ok(_) => {
                     actions_taken.push("Storage synchronized to disk".to_string());
-                    
+
                     Ok(RecoveryResult::Successful {
                         actions_taken,
                         data_lost: false,
                     })
                 }
-                Err(e) => {
-                    Ok(RecoveryResult::RequiresManualIntervention {
-                        reason: format!("Data validation passed but sync failed: {}", e),
-                        suggested_actions: vec![
-                            "Check available disk space".to_string(),
-                            "Verify file system integrity".to_string(),
-                            "Retry operation after addressing I/O issues".to_string(),
-                        ],
-                    })
-                }
+                Err(e) => Ok(RecoveryResult::RequiresManualIntervention {
+                    reason: format!("Data validation passed but sync failed: {}", e),
+                    suggested_actions: vec![
+                        "Check available disk space".to_string(),
+                        "Verify file system integrity".to_string(),
+                        "Retry operation after addressing I/O issues".to_string(),
+                    ],
+                }),
             }
         } else {
             // Issues found - manual intervention needed
@@ -705,7 +715,7 @@ impl TextStorageRecoveryManager {
         tracing::info!("Attempting to rebuild index file from data file");
 
         let start_time = std::time::Instant::now();
-        
+
         // First validate the data file to ensure it's safe to rebuild from
         let validation_result = {
             let storage = self.storage.lock().unwrap();
@@ -731,20 +741,22 @@ impl TextStorageRecoveryManager {
         };
 
         let duration = start_time.elapsed();
-        
+
         match rebuild_result {
             Ok(entries_recovered) => {
                 tracing::info!("Successfully rebuilt index file with {} entries", entries_recovered);
-                
+
                 // Record successful recovery metrics
                 if let Some(monitor) = &self.performance_monitor {
                     monitor.record_document_text_health_check(true, 0).await;
-                    monitor.record_document_text_storage(
-                        crate::monitoring::DocumentTextOperation::Storage,
-                        duration,
-                        true,
-                        Some(entries_recovered as u64),
-                    ).await;
+                    monitor
+                        .record_document_text_storage(
+                            crate::monitoring::DocumentTextOperation::Storage,
+                            duration,
+                            true,
+                            Some(entries_recovered as u64),
+                        )
+                        .await;
                 }
 
                 Ok(RecoveryResult::Successful {
@@ -758,16 +770,18 @@ impl TextStorageRecoveryManager {
             }
             Err(e) => {
                 tracing::error!("Failed to rebuild index file: {}", e);
-                
+
                 // Record failed recovery metrics
                 if let Some(monitor) = &self.performance_monitor {
                     monitor.record_document_text_health_check(false, 1).await;
-                    monitor.record_document_text_storage(
-                        crate::monitoring::DocumentTextOperation::Storage,
-                        duration,
-                        false,
-                        None,
-                    ).await;
+                    monitor
+                        .record_document_text_storage(
+                            crate::monitoring::DocumentTextOperation::Storage,
+                            duration,
+                            false,
+                            None,
+                        )
+                        .await;
                 }
 
                 Ok(RecoveryResult::RequiresManualIntervention {
@@ -789,7 +803,7 @@ impl TextStorageRecoveryManager {
 
         let start_time = std::time::Instant::now();
         let mut actions_taken = Vec::new();
-        
+
         // First validate headers to understand the extent of corruption
         let header_validation = {
             let storage = self.storage.lock().unwrap();
@@ -799,7 +813,7 @@ impl TextStorageRecoveryManager {
         match header_validation {
             Ok(_) => {
                 actions_taken.push("Headers validated successfully".to_string());
-                
+
                 // Headers are OK, check file sizes
                 let size_validation = {
                     let storage = self.storage.lock().unwrap();
@@ -809,7 +823,7 @@ impl TextStorageRecoveryManager {
                 match size_validation {
                     Ok(_) => {
                         actions_taken.push("File sizes validated successfully".to_string());
-                        
+
                         // Try to sync the storage to ensure consistency
                         let sync_result = {
                             let storage = self.storage.lock().unwrap();
@@ -817,21 +831,23 @@ impl TextStorageRecoveryManager {
                         };
 
                         let duration = start_time.elapsed();
-                        
+
                         match sync_result {
                             Ok(_) => {
                                 tracing::info!("Data file consistency recovered through sync");
                                 actions_taken.push("Storage synchronized to disk".to_string());
-                                
+
                                 // Record successful recovery
                                 if let Some(monitor) = &self.performance_monitor {
                                     monitor.record_document_text_health_check(true, 0).await;
-                                    monitor.record_document_text_storage(
-                                        crate::monitoring::DocumentTextOperation::Storage,
-                                        duration,
-                                        true,
-                                        None,
-                                    ).await;
+                                    monitor
+                                        .record_document_text_storage(
+                                            crate::monitoring::DocumentTextOperation::Storage,
+                                            duration,
+                                            true,
+                                            None,
+                                        )
+                                        .await;
                                 }
 
                                 Ok(RecoveryResult::Successful {
@@ -841,7 +857,7 @@ impl TextStorageRecoveryManager {
                             }
                             Err(e) => {
                                 tracing::error!("Failed to sync storage during recovery: {}", e);
-                                
+
                                 if let Some(monitor) = &self.performance_monitor {
                                     monitor.record_document_text_health_check(false, 1).await;
                                 }
@@ -860,7 +876,7 @@ impl TextStorageRecoveryManager {
                     }
                     Err(e) => {
                         tracing::error!("File size validation failed: {}", e);
-                        
+
                         if let Some(monitor) = &self.performance_monitor {
                             monitor.record_document_text_health_check(false, 1).await;
                         }
@@ -879,7 +895,7 @@ impl TextStorageRecoveryManager {
             }
             Err(e) => {
                 tracing::error!("Header validation failed: {}", e);
-                
+
                 if let Some(monitor) = &self.performance_monitor {
                     monitor.record_document_text_health_check(false, 1).await;
                 }
@@ -904,7 +920,7 @@ impl TextStorageRecoveryManager {
         let start_time = std::time::Instant::now();
         let mut actions_taken = Vec::new();
         let mut issues_found = 0;
-        
+
         // Get the current entry count to validate entries
         let entry_count = {
             let storage = self.storage.lock().unwrap();
@@ -931,20 +947,22 @@ impl TextStorageRecoveryManager {
         }
 
         let duration = start_time.elapsed();
-        
+
         if issues_found == 0 {
             tracing::info!("All entries validated successfully - no consistency issues found");
             actions_taken.push("All entries validated successfully".to_string());
-            
+
             // Record successful validation
             if let Some(monitor) = &self.performance_monitor {
                 monitor.record_document_text_health_check(true, 0).await;
-                monitor.record_document_text_storage(
-                    crate::monitoring::DocumentTextOperation::Retrieval,
-                    duration,
-                    true,
-                    Some(entry_count as u64),
-                ).await;
+                monitor
+                    .record_document_text_storage(
+                        crate::monitoring::DocumentTextOperation::Retrieval,
+                        duration,
+                        true,
+                        Some(entry_count as u64),
+                    )
+                    .await;
             }
 
             Ok(RecoveryResult::Successful {
@@ -953,9 +971,13 @@ impl TextStorageRecoveryManager {
             })
         } else if issues_found < entry_count / 10 {
             // If less than 10% of entries have issues, we can attempt recovery
-            tracing::warn!("Found {} inconsistent entries out of {}, attempting recovery", issues_found, entry_count);
+            tracing::warn!(
+                "Found {} inconsistent entries out of {}, attempting recovery",
+                issues_found,
+                entry_count
+            );
             actions_taken.push(format!("Found {} inconsistent entries", issues_found));
-            
+
             // Attempt to rebuild the index to fix consistency
             let rebuild_result = {
                 let mut storage = self.storage.lock().unwrap();
@@ -965,15 +987,19 @@ impl TextStorageRecoveryManager {
             match rebuild_result {
                 Ok(recovered_entries) => {
                     actions_taken.push(format!("Rebuilt index with {} entries", recovered_entries));
-                    
+
                     if let Some(monitor) = &self.performance_monitor {
-                        monitor.record_document_text_health_check(true, issues_found as usize).await;
-                        monitor.record_document_text_storage(
-                            crate::monitoring::DocumentTextOperation::Storage,
-                            duration,
-                            true,
-                            Some(recovered_entries as u64),
-                        ).await;
+                        monitor
+                            .record_document_text_health_check(true, issues_found as usize)
+                            .await;
+                        monitor
+                            .record_document_text_storage(
+                                crate::monitoring::DocumentTextOperation::Storage,
+                                duration,
+                                true,
+                                Some(recovered_entries as u64),
+                            )
+                            .await;
                     }
 
                     Ok(RecoveryResult::Successful {
@@ -983,9 +1009,11 @@ impl TextStorageRecoveryManager {
                 }
                 Err(e) => {
                     tracing::error!("Failed to rebuild index for consistency recovery: {}", e);
-                    
+
                     if let Some(monitor) = &self.performance_monitor {
-                        monitor.record_document_text_health_check(false, issues_found as usize).await;
+                        monitor
+                            .record_document_text_health_check(false, issues_found as usize)
+                            .await;
                     }
 
                     Ok(RecoveryResult::RequiresManualIntervention {
@@ -1001,14 +1029,23 @@ impl TextStorageRecoveryManager {
             }
         } else {
             // Too many issues for automatic recovery
-            tracing::error!("Too many consistency issues found: {} out of {}", issues_found, entry_count);
-            
+            tracing::error!(
+                "Too many consistency issues found: {} out of {}",
+                issues_found,
+                entry_count
+            );
+
             if let Some(monitor) = &self.performance_monitor {
-                monitor.record_document_text_health_check(false, issues_found as usize).await;
+                monitor
+                    .record_document_text_health_check(false, issues_found as usize)
+                    .await;
             }
 
             Ok(RecoveryResult::RequiresManualIntervention {
-                reason: format!("Extensive entry consistency issues: {} out of {} entries affected", issues_found, entry_count),
+                reason: format!(
+                    "Extensive entry consistency issues: {} out of {} entries affected",
+                    issues_found, entry_count
+                ),
                 suggested_actions: vec![
                     "Create emergency backup immediately".to_string(),
                     "Restore from known good backup".to_string(),

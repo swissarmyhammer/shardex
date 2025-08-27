@@ -126,7 +126,6 @@ unsafe impl Pod for PostingStorageHeader {}
 // SAFETY: PostingStorageHeader can be safely zero-initialized
 unsafe impl Zeroable for PostingStorageHeader {}
 
-
 /// Current version of the posting storage format
 const POSTING_STORAGE_VERSION: u32 = 1;
 

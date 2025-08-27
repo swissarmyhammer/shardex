@@ -72,7 +72,7 @@ impl Default for ConcurrentStorageConfig {
 }
 
 /// Performance metrics for concurrent operations
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConcurrentStorageMetrics {
     /// Total read operations
     pub read_operations: u64,

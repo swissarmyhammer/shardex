@@ -1168,9 +1168,9 @@ impl DocumentTextStorage {
     /// provides the same functionality as the synchronous version but can be
     /// integrated into async codebases.
     ///
-    /// **Important**: This operation is CPU-intensive and involves scanning the entire 
+    /// **Important**: This operation is CPU-intensive and involves scanning the entire
     /// data file. In the current implementation, it will block the async runtime during
-    /// execution. For non-blocking behavior in async applications, consider running 
+    /// execution. For non-blocking behavior in async applications, consider running
     /// this in a dedicated task or thread.
     ///
     /// # Returns
@@ -1196,18 +1196,21 @@ impl DocumentTextStorage {
         // Add async-specific tracing context for better debugging in async environments
         let span = tracing::info_span!("async_scan_and_rebuild_index");
         let _guard = span.enter();
-        
+
         tracing::info!("Starting async index rebuild operation");
-        
+
         // Call the synchronous implementation
         // Note: This blocks the async runtime - see method documentation for details
         let result = self.rebuild_index_from_data();
-        
+
         match &result {
-            Ok(count) => tracing::info!("Async index rebuild completed successfully: {} entries recovered", count),
+            Ok(count) => tracing::info!(
+                "Async index rebuild completed successfully: {} entries recovered",
+                count
+            ),
             Err(e) => tracing::error!("Async index rebuild failed: {}", e),
         }
-        
+
         result
     }
 
@@ -1475,7 +1478,7 @@ impl DocumentTextStorage {
     }
 
     /// Calculate the next aligned offset after a text block
-    /// 
+    ///
     /// Given an offset and text length, calculates the next 4-byte aligned offset
     /// accounting for the length prefix and text content.
     fn calculate_next_aligned_offset(&self, current_offset: u64, text_length: u64) -> u64 {
@@ -1488,15 +1491,14 @@ impl DocumentTextStorage {
     /// Given an offset and text length, calculates the aligned end position
     /// of the text block including length prefix and alignment padding.
     fn calculate_aligned_block_end(&self, offset: u64, text_length: u64) -> u64 {
-        (offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
-            & !(TEXT_BLOCK_ALIGNMENT - 1)
+        (offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1)) & !(TEXT_BLOCK_ALIGNMENT - 1)
     }
 
     /// Truncate to last valid entry (recovery operation)
     ///
     /// Scans through text entries to find the last valid one, truncates corrupted data,
-    /// and updates file headers atomically. This operation preserves valid data while 
-    /// removing corrupted portions. Essential for maintaining data integrity after 
+    /// and updates file headers atomically. This operation preserves valid data while
+    /// removing corrupted portions. Essential for maintaining data integrity after
     /// partial corruption events.
     ///
     /// # Returns
@@ -1600,15 +1602,14 @@ impl DocumentTextStorage {
         );
 
         // Perform the truncation using resize
-        self.text_data_file.resize(truncation_point as usize)
-            .map_err(|e| {
-                ShardexError::MemoryMapping(format!("Failed to truncate data file: {}", e))
-            })?;
+        self.text_data_file
+            .resize(truncation_point as usize)
+            .map_err(|e| ShardexError::MemoryMapping(format!("Failed to truncate data file: {}", e)))?;
 
         // Update data header to reflect new file size
         let bytes_removed = original_next_offset - truncation_point;
         self.data_header.next_text_offset = truncation_point;
-        
+
         // Update total text size (subtract removed bytes)
         if self.data_header.total_text_size >= bytes_removed {
             self.data_header.total_text_size -= bytes_removed;
@@ -2578,21 +2579,21 @@ mod tests {
     async fn test_scan_and_rebuild_index_async_error_propagation() {
         let temp_dir = TempDir::new().unwrap();
         let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        
+
         // Store valid data
         let doc1 = DocumentId::new();
         storage.store_text(doc1, "Valid test data").unwrap();
-        
+
         // Clear the index to simulate corruption
         storage.index_header.entry_count = 0;
         storage.index_header.next_entry_offset = storage.index_header.file_header.header_size as u64;
-        
+
         // Try async rebuild - should succeed and recover the data
         let result = storage.scan_and_rebuild_index().await;
-        
+
         // Should succeed since rebuild is designed to recover from index corruption
         assert!(result.is_ok());
-        
+
         // Verify entries were recovered
         if let Ok(recovered_count) = result {
             assert!(recovered_count > 0, "Should have recovered at least one entry");
@@ -2603,16 +2604,16 @@ mod tests {
     async fn test_scan_and_rebuild_index_async_tracing_context() {
         let temp_dir = TempDir::new().unwrap();
         let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
-        
+
         // Store test data
         let doc1 = DocumentId::new();
         storage.store_text(doc1, "Tracing test data").unwrap();
-        
+
         // Call async rebuild and verify it completes - this test verifies the async
         // interface works correctly and that tracing context is added
         let recovered = storage.scan_and_rebuild_index().await.unwrap();
         assert!(recovered > 0);
-        
+
         // Verify that the method returns successfully and produces expected results
         assert_eq!(storage.entry_count(), recovered);
     }
@@ -2707,7 +2708,8 @@ mod tests {
         // Write a length that exceeds remaining file space
         let invalid_length = 0xFFFFFFFFu32; // Extremely large length
         let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
-        mut_slice[valid_end_offset as usize..valid_end_offset as usize + 4].copy_from_slice(&invalid_length.to_le_bytes());
+        mut_slice[valid_end_offset as usize..valid_end_offset as usize + 4]
+            .copy_from_slice(&invalid_length.to_le_bytes());
         storage.data_header.next_text_offset = valid_end_offset + 4;
 
         // Call truncate_to_last_valid
@@ -2764,7 +2766,8 @@ mod tests {
         // Add corruption at the end
         let corrupt_data = vec![0xFF; 100]; // Invalid data
         let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
-        mut_slice[valid_end_offset as usize..valid_end_offset as usize + corrupt_data.len()].copy_from_slice(&corrupt_data);
+        mut_slice[valid_end_offset as usize..valid_end_offset as usize + corrupt_data.len()]
+            .copy_from_slice(&corrupt_data);
         storage.data_header.next_text_offset = valid_end_offset + corrupt_data.len() as u64;
 
         // Call truncate_to_last_valid
@@ -2799,7 +2802,8 @@ mod tests {
         // Write length prefix and invalid UTF-8 data
         let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
         mut_slice[valid_end_offset as usize..valid_end_offset as usize + 4].copy_from_slice(&text_length.to_le_bytes());
-        mut_slice[valid_end_offset as usize + 4..valid_end_offset as usize + 4 + invalid_utf8_data.len()].copy_from_slice(&invalid_utf8_data);
+        mut_slice[valid_end_offset as usize + 4..valid_end_offset as usize + 4 + invalid_utf8_data.len()]
+            .copy_from_slice(&invalid_utf8_data);
         storage.data_header.next_text_offset = valid_end_offset + 4 + invalid_utf8_data.len() as u64;
 
         // Call truncate_to_last_valid

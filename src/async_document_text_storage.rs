@@ -396,7 +396,7 @@ impl ReadAheadBuffer {
 }
 
 /// Performance metrics for async operations
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AsyncStorageMetrics {
     /// Total async read operations
     pub async_reads: u64,

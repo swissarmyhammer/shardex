@@ -2119,8 +2119,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_search_euclidean_metric() {
-        let test_env = ShardexTestEnv::new("test_sync_search_euclidean_metric")
-            .with_vector_size(128);
+        let test_env = ShardexTestEnv::new("test_sync_search_euclidean_metric").with_vector_size(128);
 
         let shardex = ShardexImpl::new(test_env.config.clone()).unwrap();
         let query = vec![1.0; 128];
@@ -2170,8 +2169,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_knn_search_edge_cases() {
-        let test_env = ShardexTestEnv::new("test_knn_search_edge_cases")
-            .with_vector_size(128);
+        let test_env = ShardexTestEnv::new("test_knn_search_edge_cases").with_vector_size(128);
 
         // Test empty query validation
 

@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-
 /// WAL version number for format compatibility
 const WAL_VERSION: u32 = 1;
 /// Reserved space after StandardHeader for WAL metadata
