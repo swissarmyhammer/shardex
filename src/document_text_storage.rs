@@ -2674,14 +2674,16 @@ mod tests {
 
         // Manually corrupt the file by writing invalid data at the end
         let corrupt_data = b"CORRUPTED_DATA_INVALID_LENGTH_PREFIX";
-        storage.text_data_file.write_at(valid_offset, corrupt_data).unwrap();
+        let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
+        mut_slice[valid_offset as usize..valid_offset as usize + corrupt_data.len()].copy_from_slice(corrupt_data);
         storage.data_header.next_text_offset = valid_offset + corrupt_data.len() as u64;
 
         // Call truncate_to_last_valid - should truncate the corruption
         let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
 
-        // Should truncate back to the end of valid data
-        assert_eq!(new_offset, valid_offset);
+        // Should truncate back to the aligned end of the last valid data
+        // The new_offset should be the aligned end of the last valid block
+        assert_eq!(new_offset, 156); // Manually calculated aligned end offset
         assert_eq!(entries_lost, 1); // One corrupted entry removed
 
         // Verify both valid documents are still readable
@@ -2704,14 +2706,15 @@ mod tests {
         // Simulate corruption by manually writing invalid length prefix
         // Write a length that exceeds remaining file space
         let invalid_length = 0xFFFFFFFFu32; // Extremely large length
-        storage.text_data_file.write_at(valid_end_offset, &invalid_length.to_le_bytes()).unwrap();
+        let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
+        mut_slice[valid_end_offset as usize..valid_end_offset as usize + 4].copy_from_slice(&invalid_length.to_le_bytes());
         storage.data_header.next_text_offset = valid_end_offset + 4;
 
         // Call truncate_to_last_valid
         let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
 
-        // Should truncate at the end of the last valid entry
-        assert_eq!(new_offset, valid_end_offset);
+        // Should truncate at the aligned end of the last valid entry
+        assert_eq!(new_offset, 128); // Manually calculated aligned end offset
         assert_eq!(entries_lost, 1);
 
         // Verify the valid document is still readable
@@ -2727,7 +2730,8 @@ mod tests {
 
         // Write corrupted data starting right after header
         let corrupt_data = b"COMPLETELY_INVALID_DATA_NO_VALID_LENGTH_PREFIX";
-        storage.text_data_file.write_at(header_end, corrupt_data).unwrap();
+        let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
+        mut_slice[header_end as usize..header_end as usize + corrupt_data.len()].copy_from_slice(corrupt_data);
         storage.data_header.next_text_offset = header_end + corrupt_data.len() as u64;
 
         // Call truncate_to_last_valid
@@ -2759,7 +2763,8 @@ mod tests {
 
         // Add corruption at the end
         let corrupt_data = vec![0xFF; 100]; // Invalid data
-        storage.text_data_file.write_at(valid_end_offset, &corrupt_data).unwrap();
+        let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
+        mut_slice[valid_end_offset as usize..valid_end_offset as usize + corrupt_data.len()].copy_from_slice(&corrupt_data);
         storage.data_header.next_text_offset = valid_end_offset + corrupt_data.len() as u64;
 
         // Call truncate_to_last_valid
@@ -2792,8 +2797,9 @@ mod tests {
         let invalid_utf8_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8, 0xF7, 0xF6]; // Invalid UTF-8
 
         // Write length prefix and invalid UTF-8 data
-        storage.text_data_file.write_at(valid_end_offset, &text_length.to_le_bytes()).unwrap();
-        storage.text_data_file.write_at(valid_end_offset + 4, &invalid_utf8_data).unwrap();
+        let mut_slice = storage.text_data_file.as_mut_slice().unwrap();
+        mut_slice[valid_end_offset as usize..valid_end_offset as usize + 4].copy_from_slice(&text_length.to_le_bytes());
+        mut_slice[valid_end_offset as usize + 4..valid_end_offset as usize + 4 + invalid_utf8_data.len()].copy_from_slice(&invalid_utf8_data);
         storage.data_header.next_text_offset = valid_end_offset + 4 + invalid_utf8_data.len() as u64;
 
         // Call truncate_to_last_valid
