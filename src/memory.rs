@@ -83,7 +83,7 @@
 //! # }
 //! ```
 
-use crate::constants::magic;
+
 use crate::error::ShardexError;
 use bytemuck::{Pod, Zeroable};
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -751,6 +751,7 @@ const fn generate_crc32_table() -> [u32; 256] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::magic;
     use tempfile::{NamedTempFile, TempDir};
 
     #[test]
