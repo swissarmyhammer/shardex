@@ -579,7 +579,7 @@ async fn test_high_concurrency_stress() {
     }
 
     // Collect results
-    let results = collect_task_results(&mut tasks, "High concurrency stress").await;
+    let _results = collect_task_results(&mut tasks, "High concurrency stress").await;
 
     let total_duration = start_time.elapsed();
     let total_successful = successful_operations.load(Ordering::SeqCst);
