@@ -598,8 +598,8 @@ async fn test_performance_monitoring_integration() {
 
     // Simulate retrieval operations
     for i in 0..15 {
-        let latency = Duration::from_millis(5 + (i % 3));
-        let success = i % 15 != 14; // 93% success rate
+        let _latency = Duration::from_millis(5 + (i % 3));
+        let _success = i % 15 != 14; // 93% success rate
 
         monitor.increment_operations_counter();
     }
@@ -615,25 +615,25 @@ async fn test_performance_monitoring_integration() {
     }
 
     // Test concurrent operation monitoring
-    for concurrency in [1, 2, 5, 10] {
+    for _concurrency in [1, 2, 5, 10] {
         monitor.increment_operations_counter();
     }
 
     // Test memory pool monitoring
-    for (hit, size) in [(true, 1024), (false, 2048), (true, 1024), (true, 4096)] {
+    for (_hit, size) in [(true, 1024), (false, 2048), (true, 1024), (true, 4096)] {
         monitor.add_bytes_written(size as u64);
     }
 
     // Test async operation monitoring
     for i in 0..8 {
-        let latency = Duration::from_millis(20 + (i % 4) * 5);
+        let _latency = Duration::from_millis(20 + (i % 4) * 5);
         let success = i % 8 != 7; // 87.5% success rate
 
         monitor.increment_operations_counter();
         if success {
-            monitor.increment_success_counter();
+            monitor.increment_successful_writes();
         } else {
-            monitor.increment_failure_counter();
+            monitor.increment_failed_writes();
         }
     }
 

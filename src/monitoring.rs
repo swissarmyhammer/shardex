@@ -439,17 +439,31 @@ impl PerformanceMonitor {
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Increment the successful operations counter
-    pub fn increment_success_counter(&self) {
+    /// Increment the successful searches counter
+    pub fn increment_successful_searches(&self) {
         self.counters
             .successful_searches
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Increment the failed operations counter
-    pub fn increment_failure_counter(&self) {
+    /// Increment the failed searches counter  
+    pub fn increment_failed_searches(&self) {
         self.counters
             .failed_searches
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the successful writes counter
+    pub fn increment_successful_writes(&self) {
+        self.counters
+            .successful_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the failed writes counter
+    pub fn increment_failed_writes(&self) {
+        self.counters
+            .failed_writes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 

@@ -477,7 +477,7 @@ impl TextStorageRecoveryManager {
                     storage.sync()
                 };
 
-                let duration = start_time.elapsed();
+                let _duration = start_time.elapsed();
 
                 match sync_result {
                     Ok(_) => {
@@ -519,10 +519,9 @@ impl TextStorageRecoveryManager {
                 tracing::error!("Storage validation failed during I/O error recovery: {}", e);
                 actions_taken.push(format!("Storage validation failed: {}", e));
 
-                let duration = start_time.elapsed();
+                let _duration = start_time.elapsed();
 
                 if let Some(monitor) = &self.performance_monitor {
-                    monitor.increment_operations_counter();
                     monitor.increment_operations_counter();
                 }
 
@@ -630,7 +629,7 @@ impl TextStorageRecoveryManager {
             actions_taken.push("Skipped checksum verification due to structural issues".to_string());
         }
 
-        let duration = start_time.elapsed();
+        let _duration = start_time.elapsed();
 
         // Record metrics
         if let Some(monitor) = &self.performance_monitor {
@@ -739,7 +738,6 @@ impl TextStorageRecoveryManager {
                 // Record failed recovery metrics
                 if let Some(monitor) = &self.performance_monitor {
                     monitor.increment_operations_counter();
-                    monitor.increment_operations_counter();
                 }
 
                 Ok(RecoveryResult::RequiresManualIntervention {
@@ -788,7 +786,7 @@ impl TextStorageRecoveryManager {
                             storage.sync()
                         };
 
-                        let duration = start_time.elapsed();
+                        let _duration = start_time.elapsed();
 
                         match sync_result {
                             Ok(_) => {
