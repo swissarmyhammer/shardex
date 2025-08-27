@@ -5,8 +5,7 @@
 
 use shardex::{
     AsyncDocumentTextStorage, AsyncStorageConfig, ConcurrentDocumentTextStorage, ConcurrentStorageConfig, DocumentId,
-    DocumentTextOperation, DocumentTextStorage, MemoryPoolConfig, MonitoringPerformanceMonitor, ShardexError,
-    TextMemoryPool,
+    DocumentTextStorage, MemoryPoolConfig, MonitoringPerformanceMonitor, ShardexError, TextMemoryPool,
 };
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -594,19 +593,15 @@ async fn test_performance_monitoring_integration() {
         let success = i % 10 != 9; // 90% success rate
         let bytes = 1024 + (i * 100);
 
-        monitor
-            .record_document_text_storage(DocumentTextOperation::Store, latency, success, Some(bytes))
-            .await;
+        monitor.record_write(latency, bytes, success).await;
     }
 
     // Simulate retrieval operations
     for i in 0..15 {
-        let latency = Duration::from_millis(5 + (i % 3));
-        let success = i % 15 != 14; // 93% success rate
+        let _latency = Duration::from_millis(5 + (i % 3));
+        let _success = i % 15 != 14; // 93% success rate
 
-        monitor
-            .record_document_text_storage(DocumentTextOperation::Retrieve, latency, success, None)
-            .await;
+        monitor.increment_operations_counter();
     }
 
     // Test cache operation monitoring
@@ -614,34 +609,37 @@ async fn test_performance_monitoring_integration() {
         let hit = i % 3 != 0; // 66% hit rate
         let lookup_time = Duration::from_nanos(100 + (i as u64 * 10));
 
-        monitor.record_document_text_cache(hit, lookup_time).await;
-    }
-
-    // Test concurrent operation monitoring
-    for concurrency in [1, 2, 5, 10] {
         monitor
-            .record_document_text_concurrent(DocumentTextOperation::Concurrent, concurrency)
+            .record_bloom_filter_lookup(hit, lookup_time, false)
             .await;
     }
 
+    // Test concurrent operation monitoring
+    for _concurrency in [1, 2, 5, 10] {
+        monitor.increment_operations_counter();
+    }
+
     // Test memory pool monitoring
-    for (hit, size) in [(true, 1024), (false, 2048), (true, 1024), (true, 4096)] {
-        monitor.record_document_text_pool(hit, size).await;
+    for (_hit, size) in [(true, 1024), (false, 2048), (true, 1024), (true, 4096)] {
+        monitor.add_bytes_written(size as u64);
     }
 
     // Test async operation monitoring
     for i in 0..8 {
-        let latency = Duration::from_millis(20 + (i % 4) * 5);
+        let _latency = Duration::from_millis(20 + (i % 4) * 5);
         let success = i % 8 != 7; // 87.5% success rate
 
-        monitor
-            .record_document_text_async(DocumentTextOperation::Async, latency, success)
-            .await;
+        monitor.increment_operations_counter();
+        if success {
+            monitor.increment_successful_writes();
+        } else {
+            monitor.increment_failed_writes();
+        }
     }
 
     // Test health check monitoring
-    monitor.record_document_text_health_check(true, 0).await;
-    monitor.record_document_text_health_check(false, 3).await;
+    monitor.increment_operations_counter();
+    monitor.increment_operations_counter();
 
     let total_duration = start_time.elapsed();
     println!("Monitoring integration test completed in: {:?}", total_duration);

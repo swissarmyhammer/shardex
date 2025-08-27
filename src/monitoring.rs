@@ -244,19 +244,6 @@ pub struct DocumentTextMetrics {
     pub document_retrieval_operations: u64,
 }
 
-/// Document text operation types for monitoring
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DocumentTextOperation {
-    Storage,
-    Retrieval,
-    Async,
-    Cache,
-    Pool,
-    Store,
-    Retrieve,
-    Concurrent,
-}
-
 /// Historical data for trending analysis
 #[derive(Debug, Clone)]
 pub struct HistoricalData {
@@ -438,70 +425,53 @@ impl PerformanceMonitor {
             .store(fd_count, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Record document text storage operation (stub for compatibility)
-    pub async fn record_document_text_storage(
-        &self,
-        _operation_type: DocumentTextOperation,
-        latency: Duration,
-        success: bool,
-        bytes: Option<u64>,
-    ) {
-        // Delegate to existing methods
-        if let Some(bytes) = bytes {
-            self.record_write(latency, bytes, success).await;
-        } else {
-            self.counters
-                .total_operations
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    /// Record document text cache operation (stub for compatibility)
-    pub async fn record_document_text_cache(&self, hit: bool, lookup_time: Duration) {
-        self.record_bloom_filter_lookup(hit, lookup_time, false)
-            .await;
-    }
-
-    /// Record document text concurrent operation (stub for compatibility)
-    pub async fn record_document_text_concurrent(&self, _operation_type: DocumentTextOperation, _concurrency: u64) {
+    /// Increment the total operations counter
+    pub fn increment_operations_counter(&self) {
         self.counters
             .total_operations
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Record document text pool operation (stub for compatibility)
-    pub async fn record_document_text_pool(&self, _hit: bool, size: usize) {
+    /// Add a specific count to the operations counter
+    pub fn add_operations_count(&self, count: u64) {
+        self.counters
+            .total_operations
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the successful searches counter
+    pub fn increment_successful_searches(&self) {
+        self.counters
+            .successful_searches
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the failed searches counter  
+    pub fn increment_failed_searches(&self) {
+        self.counters
+            .failed_searches
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the successful writes counter
+    pub fn increment_successful_writes(&self) {
+        self.counters
+            .successful_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the failed writes counter
+    pub fn increment_failed_writes(&self) {
+        self.counters
+            .failed_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Update bytes written counter
+    pub fn add_bytes_written(&self, bytes: u64) {
         self.counters
             .bytes_written
-            .fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Record document text async operation (stub for compatibility)
-    pub async fn record_document_text_async(
-        &self,
-        _operation_type: DocumentTextOperation,
-        _latency: Duration,
-        success: bool,
-    ) {
-        self.counters
-            .total_operations
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if success {
-            self.counters
-                .successful_writes
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        } else {
-            self.counters
-                .failed_writes
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    /// Record document text health check (stub for compatibility)
-    pub async fn record_document_text_health_check(&self, _passed: bool, _issues_found: usize) {
-        self.counters
-            .total_operations
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Get detailed stats with computed metrics
