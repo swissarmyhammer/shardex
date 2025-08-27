@@ -2059,7 +2059,7 @@ impl Shardex for ShardexImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{TestEnvironment, ShardexTestEnv};
+    use crate::test_utils::{ShardexTestEnv, TestEnvironment};
 
     #[tokio::test]
     async fn test_shardex_creation() {
@@ -2119,12 +2119,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_search_euclidean_metric() {
-        let _env = TestEnvironment::new("test_sync_search_euclidean_metric");
-        let config = ShardexConfig::new()
-            .directory_path(_env.path())
-            .vector_size(128);
+        let test_env = ShardexTestEnv::new("test_sync_search_euclidean_metric")
+            .with_vector_size(128);
 
-        let shardex = ShardexImpl::new(config).unwrap();
+        let shardex = ShardexImpl::new(test_env.config.clone()).unwrap();
         let query = vec![1.0; 128];
 
         let result = shardex
@@ -2172,14 +2170,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_knn_search_edge_cases() {
-        let _env = TestEnvironment::new("test_knn_search_edge_cases");
+        let test_env = ShardexTestEnv::new("test_knn_search_edge_cases")
+            .with_vector_size(128);
 
         // Test empty query validation
-        let config = ShardexConfig::new()
-            .directory_path(_env.path())
-            .vector_size(128);
 
-        let shardex = ShardexImpl::new(config).unwrap();
+        let shardex = ShardexImpl::new(test_env.config.clone()).unwrap();
 
         // Test with empty vector (k=0)
         let query = vec![1.0; 128];

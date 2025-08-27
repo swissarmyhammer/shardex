@@ -12,18 +12,18 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Test environment macros to eliminate duplication
-/// 
+///
 /// These macros provide standardized test setup patterns that automatically
 /// handle TestEnvironment creation, variable naming consistency, and test name
 /// string literal elimination.
 
 /// Create a synchronous test with a TestEnvironment
-/// 
+///
 /// Automatically creates a TestEnvironment using the function name as the test name,
 /// eliminating string duplication and ensuring compile-time correctness.
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```rust
 /// test_with_env!(test_my_functionality, {
 ///     // Test body has access to _env variable
@@ -31,7 +31,6 @@ use tempfile::TempDir;
 ///     // ... rest of test
 /// });
 /// ```
-#[macro_export]
 macro_rules! test_with_env {
     ($test_name:ident, $body:block) => {
         #[test]
@@ -45,12 +44,12 @@ macro_rules! test_with_env {
 }
 
 /// Create an async test with a TestEnvironment
-/// 
+///
 /// Automatically creates a TestEnvironment using the function name as the test name,
 /// eliminating string duplication and ensuring compile-time correctness for async tests.
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```rust
 /// async_test_with_env!(test_my_async_functionality, {
 ///     // Test body has access to _env variable
@@ -59,7 +58,6 @@ macro_rules! test_with_env {
 ///     // ... rest of test
 /// });
 /// ```
-#[macro_export]
 macro_rules! async_test_with_env {
     ($test_name:ident, $body:block) => {
         #[tokio::test]
@@ -73,12 +71,12 @@ macro_rules! async_test_with_env {
 }
 
 /// Create a test with TestEnvironment and custom setup
-/// 
+///
 /// Combines TestEnvironment creation with a setup closure, useful for tests
 /// that need additional initialization beyond the basic environment.
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```rust
 /// test_with_setup!(test_with_config, |_env| {
 ///     let config = ShardexConfig::new()
@@ -90,7 +88,6 @@ macro_rules! async_test_with_env {
 ///     // ... test implementation
 /// });
 /// ```
-#[macro_export]
 macro_rules! test_with_setup {
     ($test_name:ident, $setup:expr, $body:expr) => {
         #[test]
@@ -103,11 +100,11 @@ macro_rules! test_with_setup {
 }
 
 /// Create an async test with TestEnvironment and custom setup
-/// 
+///
 /// Combines TestEnvironment creation with an async setup closure.
-/// 
+///
 /// # Usage
-/// 
+///
 /// ```rust
 /// async_test_with_setup!(test_with_index, |_env| async {
 ///     let config = ShardexConfig::new().directory_path(_env.path());
@@ -118,7 +115,6 @@ macro_rules! test_with_setup {
 ///     // ... test implementation
 /// });
 /// ```
-#[macro_export]
 macro_rules! async_test_with_setup {
     ($test_name:ident, $setup:expr, $body:expr) => {
         #[tokio::test]
@@ -560,12 +556,12 @@ impl TestSetupBuilder {
 }
 
 /// Domain-specific test environment builders for common patterns
-/// 
+///
 /// These builders provide specialized test setup for specific Shardex components,
 /// eliminating duplication while providing type-safe, ergonomic test initialization.
 
 /// Shardex-specific test environment builder
-/// 
+///
 /// Provides convenience methods for creating test environments specifically
 /// tailored for Shardex testing, with pre-configured defaults and patterns
 /// commonly used in shardex tests.
@@ -576,11 +572,11 @@ pub struct ShardexTestEnv {
 
 impl ShardexTestEnv {
     /// Create a new Shardex test environment with standard defaults
-    /// 
+    ///
     /// Automatically configures:
     /// - TestEnvironment with the given test name
     /// - ShardexConfig with appropriate defaults for testing
-    /// 
+    ///
     /// # Arguments
     /// * `test_name` - Name of the test, will be used as TestEnvironment name
     pub fn new(test_name: &str) -> Self {
@@ -607,8 +603,7 @@ impl ShardexTestEnv {
 
     /// Create with small configuration (for performance tests)
     pub fn small(test_name: &str) -> Self {
-        Self::new(test_name)
-            .with_vector_size(test_constants::SMALL_VECTOR_SIZE)
+        Self::new(test_name).with_vector_size(test_constants::SMALL_VECTOR_SIZE)
     }
 
     /// Create with large configuration (for capacity tests)
@@ -620,12 +615,11 @@ impl ShardexTestEnv {
 
     /// Build and create a ShardexIndex
     pub fn build_with_index(self) -> Result<(TestEnvironment, ShardexConfig, ShardexIndex), ShardexError> {
-        let index = ShardexIndex::create(self.config.clone())
-            .map_err(|e| ShardexError::InvalidInput {
-                field: "index_creation".to_string(),
-                reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
-                suggestion: "Check directory permissions and disk space".to_string(),
-            })?;
+        let index = ShardexIndex::create(self.config.clone()).map_err(|e| ShardexError::InvalidInput {
+            field: "index_creation".to_string(),
+            reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
+            suggestion: "Check directory permissions and disk space".to_string(),
+        })?;
 
         Ok((self.env, self.config, index))
     }
@@ -642,7 +636,7 @@ impl ShardexTestEnv {
 }
 
 /// Concurrent test environment builder
-/// 
+///
 /// Specialized for testing concurrent operations and COW index patterns.
 /// Provides utilities for setting up concurrent test scenarios with
 /// appropriate configurations and test data.
@@ -665,8 +659,7 @@ impl ConcurrentTestEnv {
 
     /// Create with high concurrency configuration
     pub fn high_concurrency(test_name: &str) -> Self {
-        Self::new(test_name)
-            .with_shard_size(test_constants::LARGE_SHARD_SIZE)
+        Self::new(test_name).with_shard_size(test_constants::LARGE_SHARD_SIZE)
     }
 
     /// Set custom vector size
@@ -682,20 +675,23 @@ impl ConcurrentTestEnv {
     }
 
     /// Build with COW index ready for concurrent operations
-    pub async fn build_with_cow_index(self) -> Result<(TestEnvironment, ShardexConfig, crate::cow_index::CowShardexIndex), ShardexError> {
-        let index = ShardexIndex::create(self.config.clone())
-            .map_err(|e| ShardexError::InvalidInput {
-                field: "index_creation".to_string(),
-                reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
-                suggestion: "Check directory permissions and disk space".to_string(),
-            })?;
-        
+    pub async fn build_with_cow_index(
+        self,
+    ) -> Result<(TestEnvironment, ShardexConfig, crate::cow_index::CowShardexIndex), ShardexError> {
+        let index = ShardexIndex::create(self.config.clone()).map_err(|e| ShardexError::InvalidInput {
+            field: "index_creation".to_string(),
+            reason: format!("{}: {}", test_error_messages::FAILED_TO_CREATE_INDEX, e),
+            suggestion: "Check directory permissions and disk space".to_string(),
+        })?;
+
         let cow_index = crate::cow_index::CowShardexIndex::new(index);
         Ok((self.env, self.config, cow_index))
     }
 
     /// Build with concurrent Shardex ready for testing
-    pub async fn build_with_concurrent(self) -> Result<(TestEnvironment, ShardexConfig, crate::concurrent::ConcurrentShardex), ShardexError> {
+    pub async fn build_with_concurrent(
+        self,
+    ) -> Result<(TestEnvironment, ShardexConfig, crate::concurrent::ConcurrentShardex), ShardexError> {
         let (env, config, cow_index) = self.build_with_cow_index().await?;
         let concurrent = crate::concurrent::ConcurrentShardex::new(cow_index);
         Ok((env, config, concurrent))
@@ -703,7 +699,7 @@ impl ConcurrentTestEnv {
 }
 
 /// WAL test environment builder
-/// 
+///
 /// Specialized for testing Write-Ahead Log functionality with appropriate
 /// configurations for WAL operations, replay testing, and recovery scenarios.
 pub struct WalTestEnv {
@@ -712,6 +708,9 @@ pub struct WalTestEnv {
 }
 
 impl WalTestEnv {
+    /// Default WAL segment size for testing (1MB)
+    const DEFAULT_WAL_SEGMENT_SIZE: usize = 1024 * 1024;
+
     /// Create a new WAL test environment
     pub fn new(test_name: &str) -> Self {
         let env = TestEnvironment::new(test_name);
@@ -735,14 +734,29 @@ impl WalTestEnv {
         Ok(wal_path)
     }
 
+    /// Set custom vector size
+    pub fn with_vector_size(mut self, size: usize) -> Self {
+        self.config = self.config.vector_size(size);
+        self
+    }
+
+    /// Set custom shard size
+    pub fn with_shard_size(mut self, size: usize) -> Self {
+        self.config = self.config.shard_size(size);
+        self
+    }
+
     /// Build with WAL manager ready for testing
-    pub fn build_with_wal_manager(self) -> Result<(TestEnvironment, ShardexConfig, crate::wal::WalManager), ShardexError> {
-        let _wal_path = self.ensure_wal_dir()
+    pub fn build_with_wal_manager(
+        self,
+    ) -> Result<(TestEnvironment, ShardexConfig, crate::wal::WalManager), ShardexError> {
+        let _wal_path = self
+            .ensure_wal_dir()
             .map_err(|e| ShardexError::Wal(format!("Failed to create WAL directory: {}", e)))?;
-        
+
         let layout = crate::layout::DirectoryLayout::new(self.env.path().to_path_buf());
-        let wal_manager = crate::wal::WalManager::new(layout, 1024 * 1024); // 1MB segments
-            
+        let wal_manager = crate::wal::WalManager::new(layout, Self::DEFAULT_WAL_SEGMENT_SIZE);
+
         Ok((self.env, self.config, wal_manager))
     }
 }
@@ -853,5 +867,143 @@ mod tests {
 
         assert!(temp_dir.path().exists());
         assert!(temp_dir.path().is_dir());
+    }
+
+    // Tests for new domain-specific test environment builders
+
+    #[test]
+    fn test_shardex_test_env_basic() {
+        let test_env = ShardexTestEnv::new("test_shardex_env_basic");
+
+        assert_eq!(test_env.env.name(), "test_shardex_env_basic");
+        assert!(test_env.env.path().exists());
+        assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+        assert_eq!(test_env.config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
+        assert_eq!(test_env.config.directory_path, test_env.env.path());
+    }
+
+    #[test]
+    fn test_shardex_test_env_with_custom_vector_size() {
+        let test_env = ShardexTestEnv::new("test_shardex_custom_vector")
+            .with_vector_size(256);
+
+        assert_eq!(test_env.config.vector_size, 256);
+        assert_eq!(test_env.config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
+    }
+
+    #[test]
+    fn test_shardex_test_env_with_custom_shard_size() {
+        let test_env = ShardexTestEnv::new("test_shardex_custom_shard")
+            .with_shard_size(500);
+
+        assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+        assert_eq!(test_env.config.shard_size, 500);
+    }
+
+    #[test]
+    fn test_shardex_test_env_large() {
+        let test_env = ShardexTestEnv::large("test_shardex_large");
+
+        assert_eq!(test_env.config.shard_size, test_constants::LARGE_SHARD_SIZE);
+        assert_eq!(test_env.config.vector_size, test_constants::LARGE_VECTOR_SIZE);
+    }
+
+    #[test]
+    fn test_concurrent_test_env_basic() {
+        let test_env = ConcurrentTestEnv::new("test_concurrent_env_basic");
+
+        assert_eq!(test_env.env.name(), "test_concurrent_env_basic");
+        assert!(test_env.env.path().exists());
+        assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+        assert_eq!(test_env.config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
+    }
+
+    #[test]
+    fn test_concurrent_test_env_high_concurrency() {
+        let test_env = ConcurrentTestEnv::high_concurrency("test_concurrent_high");
+
+        assert_eq!(test_env.config.shard_size, test_constants::LARGE_SHARD_SIZE);
+        assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+    }
+
+    #[test]
+    fn test_concurrent_test_env_with_custom_sizes() {
+        let test_env = ConcurrentTestEnv::new("test_concurrent_custom")
+            .with_vector_size(512)
+            .with_shard_size(750);
+
+        assert_eq!(test_env.config.vector_size, 512);
+        assert_eq!(test_env.config.shard_size, 750);
+    }
+
+    #[test]
+    fn test_wal_test_env_basic() {
+        let test_env = WalTestEnv::new("test_wal_env_basic");
+
+        assert_eq!(test_env.env.name(), "test_wal_env_basic");
+        assert!(test_env.env.path().exists());
+        assert_eq!(test_env.config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+        assert_eq!(test_env.config.shard_size, test_constants::DEFAULT_SHARD_SIZE);
+    }
+
+    #[test]
+    fn test_wal_test_env_with_custom_vector_size() {
+        let test_env = WalTestEnv::new("test_wal_custom_vector")
+            .with_vector_size(384);
+
+        assert_eq!(test_env.config.vector_size, 384);
+    }
+
+    #[test]
+    fn test_wal_test_env_with_custom_shard_size() {
+        let test_env = WalTestEnv::new("test_wal_custom_shard")
+            .with_shard_size(600);
+
+        assert_eq!(test_env.config.shard_size, 600);
+    }
+
+    #[test]
+    fn test_wal_test_env_ensure_wal_dir() {
+        let test_env = WalTestEnv::new("test_wal_ensure_dir");
+
+        let result = test_env.ensure_wal_dir();
+        assert!(result.is_ok());
+
+        let wal_dir = result.unwrap();
+        assert!(wal_dir.exists());
+        assert!(wal_dir.is_dir());
+    }
+
+    #[test]
+    fn test_wal_test_env_build_with_wal_manager() {
+        let test_env = WalTestEnv::new("test_wal_build_manager");
+
+        let result = test_env.build_with_wal_manager();
+        assert!(result.is_ok());
+
+        let (_env, _config, _wal_manager) = result.unwrap();
+        // WAL manager creation should succeed with valid directory layout
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_test_env_build_with_cow_index() {
+        let test_env = ConcurrentTestEnv::new("test_concurrent_cow_index");
+
+        let result = test_env.build_with_cow_index().await;
+        assert!(result.is_ok());
+
+        let (_env, config, _cow_index) = result.unwrap();
+        assert_eq!(config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_test_env_build_with_concurrent() {
+        let test_env = ConcurrentTestEnv::new("test_concurrent_full_build");
+
+        let result = test_env.build_with_concurrent().await;
+        assert!(result.is_ok());
+
+        let (_env, config, _concurrent_shardex) = result.unwrap();
+        assert_eq!(config.vector_size, test_constants::DEFAULT_VECTOR_SIZE);
     }
 }
