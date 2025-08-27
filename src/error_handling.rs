@@ -320,14 +320,12 @@ pub enum RecoveryResult {
 /// Text storage recovery manager for automatic error recovery
 pub struct TextStorageRecoveryManager {
     /// Storage reference wrapped in mutex for recovery operations
-    #[allow(dead_code)] // TODO: Implement missing DocumentTextStorage methods
     storage: Arc<Mutex<DocumentTextStorage>>,
     /// Backup manager for pre-recovery backups
     backup_manager: BackupManager,
     /// Recovery configuration
     recovery_config: RecoveryConfig,
     /// Performance monitor for metrics
-    #[allow(dead_code)] // TODO: Implement missing DocumentTextStorage methods
     performance_monitor: Option<Arc<PerformanceMonitor>>,
 }
 
@@ -360,7 +358,10 @@ impl TextStorageRecoveryManager {
 
     /// Attempt automatic recovery from error
     pub async fn attempt_recovery(&mut self, error: &ShardexError) -> Result<RecoveryResult, ShardexError> {
-        match error {
+        let start_time = std::time::Instant::now();
+        tracing::info!("Starting recovery attempt for error: {}", error);
+
+        let result = match error {
             ShardexError::TextCorruption(msg) => self.recover_from_corruption(msg).await,
 
             ShardexError::Io(io_error) => self.recover_from_io_error(io_error).await,
@@ -383,7 +384,24 @@ impl TextStorageRecoveryManager {
             }
 
             _ => Ok(RecoveryResult::NotRecoverable),
+        };
+
+        let duration = start_time.elapsed();
+        
+        // Record overall recovery attempt metrics
+        if let Some(monitor) = &self.performance_monitor {
+            let success = matches!(result, Ok(RecoveryResult::Successful { .. }));
+            monitor.update_resource_metrics(
+                0, // memory usage not tracked here
+                0, // disk usage not tracked here 
+                0, // file descriptor count not tracked here
+            ).await;
+            
+            // Log recovery attempt duration
+            tracing::info!("Recovery attempt completed in {:?}, success: {}", duration, success);
         }
+
+        result
     }
 
     /// Recover from text corruption
@@ -432,74 +450,573 @@ impl TextStorageRecoveryManager {
     }
 
     /// Recover from I/O errors
-    async fn recover_from_io_error(&mut self, _io_error: &std::io::Error) -> Result<RecoveryResult, ShardexError> {
-        // For I/O errors, we primarily check if it's a transient issue
-        Ok(RecoveryResult::RequiresManualIntervention {
-            reason: "I/O error detected".to_string(),
-            suggested_actions: vec![
-                "Check disk space availability".to_string(),
-                "Verify file system integrity".to_string(),
-                "Check file permissions".to_string(),
-                "Retry operation after addressing I/O issue".to_string(),
-            ],
-        })
+    async fn recover_from_io_error(&mut self, io_error: &std::io::Error) -> Result<RecoveryResult, ShardexError> {
+        tracing::info!("Attempting to recover from I/O error: {}", io_error);
+
+        let start_time = std::time::Instant::now();
+        let mut actions_taken = Vec::new();
+
+        // Check if this is a transient I/O issue by attempting to validate storage
+        let validation_result = {
+            let storage = self.storage.lock().unwrap();
+            storage.validate_file_sizes()
+        };
+
+        actions_taken.push("Attempted storage validation after I/O error".to_string());
+
+        match validation_result {
+            Ok(_) => {
+                // Storage validation succeeded, this might be a transient issue
+                actions_taken.push("Storage validation succeeded".to_string());
+                
+                // Try to sync the storage to ensure everything is consistent
+                let sync_result = {
+                    let storage = self.storage.lock().unwrap();
+                    storage.sync()
+                };
+
+                let duration = start_time.elapsed();
+
+                match sync_result {
+                    Ok(_) => {
+                        tracing::info!("I/O error recovery successful through sync");
+                        actions_taken.push("Storage synchronized successfully".to_string());
+
+                        if let Some(monitor) = &self.performance_monitor {
+                            monitor.record_document_text_storage(
+                                crate::monitoring::DocumentTextOperation::Storage,
+                                duration,
+                                true,
+                                None,
+                            ).await;
+                        }
+
+                        Ok(RecoveryResult::Successful {
+                            actions_taken,
+                            data_lost: false,
+                        })
+                    }
+                    Err(e) => {
+                        tracing::warn!("Storage sync failed during I/O error recovery: {}", e);
+                        actions_taken.push(format!("Storage sync failed: {}", e));
+
+                        if let Some(monitor) = &self.performance_monitor {
+                            monitor.record_document_text_storage(
+                                crate::monitoring::DocumentTextOperation::Storage,
+                                duration,
+                                false,
+                                None,
+                            ).await;
+                        }
+
+                        Ok(RecoveryResult::RequiresManualIntervention {
+                            reason: format!("I/O error persists - sync failed: {}", e),
+                            suggested_actions: vec![
+                                "Check available disk space".to_string(),
+                                "Verify file system integrity".to_string(),
+                                "Check file permissions".to_string(),
+                                "Restart application and retry".to_string(),
+                                "Consider moving storage to different disk".to_string(),
+                            ],
+                        })
+                    }
+                }
+            }
+            Err(e) => {
+                // Storage validation failed, this might indicate more serious issues
+                tracing::error!("Storage validation failed during I/O error recovery: {}", e);
+                actions_taken.push(format!("Storage validation failed: {}", e));
+
+                let duration = start_time.elapsed();
+
+                if let Some(monitor) = &self.performance_monitor {
+                    monitor.record_document_text_health_check(false, 1).await;
+                    monitor.record_document_text_storage(
+                        crate::monitoring::DocumentTextOperation::Retrieval,
+                        duration,
+                        false,
+                        None,
+                    ).await;
+                }
+
+                // Categorize the I/O error for better guidance
+                let error_category = match io_error.kind() {
+                    std::io::ErrorKind::PermissionDenied => "Permission denied",
+                    std::io::ErrorKind::NotFound => "File not found", 
+                    std::io::ErrorKind::WriteZero => "Disk full or write protected",
+                    std::io::ErrorKind::Interrupted => "Operation interrupted",
+                    std::io::ErrorKind::UnexpectedEof => "Unexpected end of file",
+                    _ => "Unknown I/O error",
+                };
+
+                Ok(RecoveryResult::RequiresManualIntervention {
+                    reason: format!("I/O error with storage corruption: {} ({})", error_category, io_error),
+                    suggested_actions: match io_error.kind() {
+                        std::io::ErrorKind::PermissionDenied => vec![
+                            "Check and fix file permissions".to_string(),
+                            "Run application with appropriate privileges".to_string(),
+                            "Verify storage directory ownership".to_string(),
+                        ],
+                        std::io::ErrorKind::NotFound => vec![
+                            "Verify storage files exist".to_string(),
+                            "Restore missing files from backup".to_string(),
+                            "Reinitialize storage if necessary".to_string(),
+                        ],
+                        std::io::ErrorKind::WriteZero => vec![
+                            "Check available disk space".to_string(),
+                            "Verify disk is not write-protected".to_string(),
+                            "Clean up unnecessary files".to_string(),
+                            "Move storage to different disk".to_string(),
+                        ],
+                        _ => vec![
+                            "Check file system integrity".to_string(),
+                            "Verify hardware health".to_string(),
+                            "Restore from backup if corruption detected".to_string(),
+                            "Contact system administrator".to_string(),
+                        ],
+                    },
+                })
+            }
+        }
     }
 
     /// Recover from data inconsistency issues
     async fn recover_from_data_inconsistency(&mut self) -> Result<RecoveryResult, ShardexError> {
-        Ok(RecoveryResult::RequiresManualIntervention {
-            reason: "Data inconsistency detected".to_string(),
-            suggested_actions: vec![
-                "Validate storage files manually".to_string(),
-                "Consider rebuilding index from data file".to_string(),
-                "Restore from known good backup".to_string(),
-            ],
-        })
+        tracing::info!("Attempting to recover from data inconsistency");
+
+        let start_time = std::time::Instant::now();
+        let mut actions_taken = Vec::new();
+        let mut issues_found = 0;
+
+        // First, validate headers
+        let header_result = {
+            let storage = self.storage.lock().unwrap();
+            storage.validate_headers()
+        };
+
+        match header_result {
+            Ok(_) => {
+                actions_taken.push("Headers validated successfully".to_string());
+            }
+            Err(e) => {
+                issues_found += 1;
+                actions_taken.push(format!("Header validation failed: {}", e));
+                tracing::warn!("Header validation failed during data consistency recovery: {}", e);
+            }
+        }
+
+        // Second, validate file sizes
+        let size_result = {
+            let storage = self.storage.lock().unwrap();
+            storage.validate_file_sizes()
+        };
+
+        match size_result {
+            Ok(_) => {
+                actions_taken.push("File sizes validated successfully".to_string());
+            }
+            Err(e) => {
+                issues_found += 1;
+                actions_taken.push(format!("File size validation failed: {}", e));
+                tracing::warn!("File size validation failed during data consistency recovery: {}", e);
+            }
+        }
+
+        // Third, verify checksums if no major structural issues
+        if issues_found == 0 {
+            let checksum_result = {
+                let mut storage = self.storage.lock().unwrap();
+                storage.verify_checksums()
+            };
+
+            match checksum_result {
+                Ok(_) => {
+                    actions_taken.push("Checksums verified successfully".to_string());
+                }
+                Err(e) => {
+                    issues_found += 1;
+                    actions_taken.push(format!("Checksum verification failed: {}", e));
+                    tracing::warn!("Checksum verification failed during data consistency recovery: {}", e);
+                }
+            }
+        } else {
+            actions_taken.push("Skipped checksum verification due to structural issues".to_string());
+        }
+
+        let duration = start_time.elapsed();
+
+        // Record metrics
+        if let Some(monitor) = &self.performance_monitor {
+            monitor.record_document_text_health_check(issues_found == 0, issues_found).await;
+            monitor.record_document_text_storage(
+                crate::monitoring::DocumentTextOperation::Retrieval,
+                duration,
+                issues_found == 0,
+                None,
+            ).await;
+        }
+
+        if issues_found == 0 {
+            // No issues found - the inconsistency might have been transient
+            tracing::info!("Data consistency validation passed - inconsistency may have been transient");
+            
+            // Try to sync to ensure everything is written to disk
+            let sync_result = {
+                let storage = self.storage.lock().unwrap();
+                storage.sync()
+            };
+
+            match sync_result {
+                Ok(_) => {
+                    actions_taken.push("Storage synchronized to disk".to_string());
+                    
+                    Ok(RecoveryResult::Successful {
+                        actions_taken,
+                        data_lost: false,
+                    })
+                }
+                Err(e) => {
+                    Ok(RecoveryResult::RequiresManualIntervention {
+                        reason: format!("Data validation passed but sync failed: {}", e),
+                        suggested_actions: vec![
+                            "Check available disk space".to_string(),
+                            "Verify file system integrity".to_string(),
+                            "Retry operation after addressing I/O issues".to_string(),
+                        ],
+                    })
+                }
+            }
+        } else {
+            // Issues found - manual intervention needed
+            Ok(RecoveryResult::RequiresManualIntervention {
+                reason: format!("Data inconsistency detected: {} validation failures", issues_found),
+                suggested_actions: vec![
+                    "Create backup before manual intervention".to_string(),
+                    "Check file system integrity".to_string(),
+                    "Consider restoring from backup".to_string(),
+                    "Use recovery tools if backup is unavailable".to_string(),
+                ],
+            })
+        }
     }
 
     /// Recover index file from data file
     async fn recover_index_file(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to rebuild index file from data file");
 
-        // This would require significant extension of DocumentTextStorage
-        // For now, return manual intervention required
-        Ok(RecoveryResult::RequiresManualIntervention {
-            reason: "Index file corruption requires rebuild".to_string(),
-            suggested_actions: vec![
-                "Backup current state".to_string(),
-                "Use recovery tools to rebuild index from data file".to_string(),
-                "Restore from backup if rebuild fails".to_string(),
-            ],
-        })
+        let start_time = std::time::Instant::now();
+        
+        // First validate the data file to ensure it's safe to rebuild from
+        let validation_result = {
+            let storage = self.storage.lock().unwrap();
+            storage.validate_file_sizes()
+        };
+
+        if let Err(e) = validation_result {
+            tracing::error!("Data file validation failed before index rebuild: {}", e);
+            return Ok(RecoveryResult::RequiresManualIntervention {
+                reason: format!("Data file validation failed: {}", e),
+                suggested_actions: vec![
+                    "Check data file integrity manually".to_string(),
+                    "Restore from backup if data file is corrupted".to_string(),
+                    "Use specialized recovery tools".to_string(),
+                ],
+            });
+        }
+
+        // Attempt to rebuild the index from data file
+        let rebuild_result = {
+            let mut storage = self.storage.lock().unwrap();
+            storage.rebuild_index_from_data()
+        };
+
+        let duration = start_time.elapsed();
+        
+        match rebuild_result {
+            Ok(entries_recovered) => {
+                tracing::info!("Successfully rebuilt index file with {} entries", entries_recovered);
+                
+                // Record successful recovery metrics
+                if let Some(monitor) = &self.performance_monitor {
+                    monitor.record_document_text_health_check(true, 0).await;
+                    monitor.record_document_text_storage(
+                        crate::monitoring::DocumentTextOperation::Storage,
+                        duration,
+                        true,
+                        Some(entries_recovered as u64),
+                    ).await;
+                }
+
+                Ok(RecoveryResult::Successful {
+                    actions_taken: vec![
+                        "Validated data file integrity".to_string(),
+                        "Rebuilt index from data file".to_string(),
+                        format!("Recovered {} document entries", entries_recovered),
+                    ],
+                    data_lost: false,
+                })
+            }
+            Err(e) => {
+                tracing::error!("Failed to rebuild index file: {}", e);
+                
+                // Record failed recovery metrics
+                if let Some(monitor) = &self.performance_monitor {
+                    monitor.record_document_text_health_check(false, 1).await;
+                    monitor.record_document_text_storage(
+                        crate::monitoring::DocumentTextOperation::Storage,
+                        duration,
+                        false,
+                        None,
+                    ).await;
+                }
+
+                Ok(RecoveryResult::RequiresManualIntervention {
+                    reason: format!("Index rebuild failed: {}", e),
+                    suggested_actions: vec![
+                        "Check available disk space".to_string(),
+                        "Verify file permissions".to_string(),
+                        "Restore from backup if available".to_string(),
+                        "Contact support with error details".to_string(),
+                    ],
+                })
+            }
+        }
     }
 
     /// Recover data file consistency
     async fn recover_data_file(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to recover data file consistency");
 
-        // This would require methods to truncate and repair data files
-        Ok(RecoveryResult::RequiresManualIntervention {
-            reason: "Data file corruption requires repair".to_string(),
-            suggested_actions: vec![
-                "Backup current state".to_string(),
-                "Use recovery tools to repair data file".to_string(),
-                "Accept potential data loss for corrupted entries".to_string(),
-            ],
-        })
+        let start_time = std::time::Instant::now();
+        let mut actions_taken = Vec::new();
+        
+        // First validate headers to understand the extent of corruption
+        let header_validation = {
+            let storage = self.storage.lock().unwrap();
+            storage.validate_headers()
+        };
+
+        match header_validation {
+            Ok(_) => {
+                actions_taken.push("Headers validated successfully".to_string());
+                
+                // Headers are OK, check file sizes
+                let size_validation = {
+                    let storage = self.storage.lock().unwrap();
+                    storage.validate_file_sizes()
+                };
+
+                match size_validation {
+                    Ok(_) => {
+                        actions_taken.push("File sizes validated successfully".to_string());
+                        
+                        // Try to sync the storage to ensure consistency
+                        let sync_result = {
+                            let storage = self.storage.lock().unwrap();
+                            storage.sync()
+                        };
+
+                        let duration = start_time.elapsed();
+                        
+                        match sync_result {
+                            Ok(_) => {
+                                tracing::info!("Data file consistency recovered through sync");
+                                actions_taken.push("Storage synchronized to disk".to_string());
+                                
+                                // Record successful recovery
+                                if let Some(monitor) = &self.performance_monitor {
+                                    monitor.record_document_text_health_check(true, 0).await;
+                                    monitor.record_document_text_storage(
+                                        crate::monitoring::DocumentTextOperation::Storage,
+                                        duration,
+                                        true,
+                                        None,
+                                    ).await;
+                                }
+
+                                Ok(RecoveryResult::Successful {
+                                    actions_taken,
+                                    data_lost: false,
+                                })
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to sync storage during recovery: {}", e);
+                                
+                                if let Some(monitor) = &self.performance_monitor {
+                                    monitor.record_document_text_health_check(false, 1).await;
+                                }
+
+                                Ok(RecoveryResult::RequiresManualIntervention {
+                                    reason: format!("Data file sync failed: {}", e),
+                                    suggested_actions: vec![
+                                        "Check available disk space".to_string(),
+                                        "Verify file system integrity".to_string(),
+                                        "Check file permissions".to_string(),
+                                        "Restart application and retry".to_string(),
+                                    ],
+                                })
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("File size validation failed: {}", e);
+                        
+                        if let Some(monitor) = &self.performance_monitor {
+                            monitor.record_document_text_health_check(false, 1).await;
+                        }
+
+                        Ok(RecoveryResult::RequiresManualIntervention {
+                            reason: format!("File size inconsistency detected: {}", e),
+                            suggested_actions: vec![
+                                "Check file system for corruption".to_string(),
+                                "Restore from backup".to_string(),
+                                "Use specialized data recovery tools".to_string(),
+                                "Accept potential data loss and rebuild index".to_string(),
+                            ],
+                        })
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Header validation failed: {}", e);
+                
+                if let Some(monitor) = &self.performance_monitor {
+                    monitor.record_document_text_health_check(false, 1).await;
+                }
+
+                Ok(RecoveryResult::RequiresManualIntervention {
+                    reason: format!("Data file header corruption: {}", e),
+                    suggested_actions: vec![
+                        "Backup current state immediately".to_string(),
+                        "Restore from known good backup".to_string(),
+                        "Use specialized recovery tools to extract data".to_string(),
+                        "Contact support with corruption details".to_string(),
+                    ],
+                })
+            }
+        }
     }
 
     /// Recover entry consistency issues
     async fn recover_entry_consistency(&mut self) -> Result<RecoveryResult, ShardexError> {
         tracing::info!("Attempting to recover entry consistency");
 
-        Ok(RecoveryResult::RequiresManualIntervention {
-            reason: "Entry consistency issues detected".to_string(),
-            suggested_actions: vec![
-                "Validate all index entries against data file".to_string(),
-                "Remove or repair inconsistent entries".to_string(),
-                "Rebuild index if necessary".to_string(),
-            ],
-        })
+        let start_time = std::time::Instant::now();
+        let mut actions_taken = Vec::new();
+        let mut issues_found = 0;
+        
+        // Get the current entry count to validate entries
+        let entry_count = {
+            let storage = self.storage.lock().unwrap();
+            storage.get_entry_count()
+        };
+
+        actions_taken.push(format!("Found {} entries to validate", entry_count));
+        tracing::info!("Validating {} entries for consistency", entry_count);
+
+        // Validate each entry by checking if it points to valid data regions
+        for index in 0..entry_count {
+            let entry_validation = {
+                let storage = self.storage.lock().unwrap();
+                match storage.get_entry_at_index(index) {
+                    Ok(entry) => storage.validate_entry_data_region(&entry),
+                    Err(e) => Err(e),
+                }
+            };
+
+            if entry_validation.is_err() {
+                issues_found += 1;
+                tracing::warn!("Entry {} has consistency issues", index);
+            }
+        }
+
+        let duration = start_time.elapsed();
+        
+        if issues_found == 0 {
+            tracing::info!("All entries validated successfully - no consistency issues found");
+            actions_taken.push("All entries validated successfully".to_string());
+            
+            // Record successful validation
+            if let Some(monitor) = &self.performance_monitor {
+                monitor.record_document_text_health_check(true, 0).await;
+                monitor.record_document_text_storage(
+                    crate::monitoring::DocumentTextOperation::Retrieval,
+                    duration,
+                    true,
+                    Some(entry_count as u64),
+                ).await;
+            }
+
+            Ok(RecoveryResult::Successful {
+                actions_taken,
+                data_lost: false,
+            })
+        } else if issues_found < entry_count / 10 {
+            // If less than 10% of entries have issues, we can attempt recovery
+            tracing::warn!("Found {} inconsistent entries out of {}, attempting recovery", issues_found, entry_count);
+            actions_taken.push(format!("Found {} inconsistent entries", issues_found));
+            
+            // Attempt to rebuild the index to fix consistency
+            let rebuild_result = {
+                let mut storage = self.storage.lock().unwrap();
+                storage.rebuild_index_from_data()
+            };
+
+            match rebuild_result {
+                Ok(recovered_entries) => {
+                    actions_taken.push(format!("Rebuilt index with {} entries", recovered_entries));
+                    
+                    if let Some(monitor) = &self.performance_monitor {
+                        monitor.record_document_text_health_check(true, issues_found as usize).await;
+                        monitor.record_document_text_storage(
+                            crate::monitoring::DocumentTextOperation::Storage,
+                            duration,
+                            true,
+                            Some(recovered_entries as u64),
+                        ).await;
+                    }
+
+                    Ok(RecoveryResult::Successful {
+                        actions_taken,
+                        data_lost: false,
+                    })
+                }
+                Err(e) => {
+                    tracing::error!("Failed to rebuild index for consistency recovery: {}", e);
+                    
+                    if let Some(monitor) = &self.performance_monitor {
+                        monitor.record_document_text_health_check(false, issues_found as usize).await;
+                    }
+
+                    Ok(RecoveryResult::RequiresManualIntervention {
+                        reason: format!("Index rebuild failed with {} inconsistent entries: {}", issues_found, e),
+                        suggested_actions: vec![
+                            "Create backup before manual intervention".to_string(),
+                            "Use specialized tools to repair inconsistent entries".to_string(),
+                            "Consider restoring from backup".to_string(),
+                            "Contact support if issues persist".to_string(),
+                        ],
+                    })
+                }
+            }
+        } else {
+            // Too many issues for automatic recovery
+            tracing::error!("Too many consistency issues found: {} out of {}", issues_found, entry_count);
+            
+            if let Some(monitor) = &self.performance_monitor {
+                monitor.record_document_text_health_check(false, issues_found as usize).await;
+            }
+
+            Ok(RecoveryResult::RequiresManualIntervention {
+                reason: format!("Extensive entry consistency issues: {} out of {} entries affected", issues_found, entry_count),
+                suggested_actions: vec![
+                    "Create emergency backup immediately".to_string(),
+                    "Restore from known good backup".to_string(),
+                    "Use professional data recovery services".to_string(),
+                    "Consider rebuilding storage from source data".to_string(),
+                ],
+            })
+        }
     }
 }
 
