@@ -103,7 +103,7 @@ impl LruCache {
 }
 
 /// Performance statistics for optimized memory mapping
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct OptimizedMappingStats {
     /// Total cache hits
     pub cache_hits: u64,

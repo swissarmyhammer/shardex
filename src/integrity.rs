@@ -2220,7 +2220,10 @@ impl IntegrityChecker {
             notes.push("Attempting to validate and repair offset references".to_string());
 
             // Perform comprehensive pointer validation and repair
-            match self.validate_and_repair_pointers(corruption, &mut notes).await {
+            match self
+                .validate_and_repair_pointers(corruption, &mut notes)
+                .await
+            {
                 Ok((repaired, message)) => {
                     if repaired {
                         notes.push("Pointer corruption repair completed successfully".to_string());
@@ -2313,30 +2316,37 @@ impl IntegrityChecker {
         notes: &mut Vec<String>,
     ) -> Result<(bool, String), ShardexError> {
         let file_path = &corruption.file_path;
-        
+
         // Open file for reading to perform validation
         let mmf = MemoryMappedFile::open_read_only(file_path)?;
         let file_size = mmf.len() as u64;
-        
-        notes.push(format!("Validating pointers in file: {} (size: {} bytes)", 
-            file_path.display(), file_size));
+
+        notes.push(format!(
+            "Validating pointers in file: {} (size: {} bytes)",
+            file_path.display(),
+            file_size
+        ));
 
         // Determine file type and validate appropriate structures
-        let file_extension = file_path.extension()
+        let file_extension = file_path
+            .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
 
         let validation_result = match file_extension {
             "dat" => {
                 // Could be vector storage, posting storage, or other data file
-                self.validate_data_file_pointers(&mmf, file_path, file_size, notes).await?
+                self.validate_data_file_pointers(&mmf, file_path, file_size, notes)
+                    .await?
             }
             "wal" => {
-                self.validate_wal_file_pointers(&mmf, file_size, notes).await?
+                self.validate_wal_file_pointers(&mmf, file_size, notes)
+                    .await?
             }
             _ => {
                 // Generic validation for unknown file types
-                self.validate_generic_file_pointers(&mmf, file_size, notes).await?
+                self.validate_generic_file_pointers(&mmf, file_size, notes)
+                    .await?
             }
         };
 
@@ -2353,7 +2363,6 @@ impl IntegrityChecker {
     ) -> Result<(bool, String), ShardexError> {
         use crate::memory::StandardHeader;
 
-        
         if file_size < StandardHeader::SIZE as u64 {
             notes.push("File too small to contain valid header".to_string());
             return Ok((false, "File truncated before header".to_string()));
@@ -2370,7 +2379,10 @@ impl IntegrityChecker {
                 notes.push(format!("Recognized file type: {}", file_type));
             } else {
                 let magic_str = String::from_utf8_lossy(&header.magic);
-                notes.push(format!("Invalid magic bytes in header: {:?} ({})", header.magic, magic_str));
+                notes.push(format!(
+                    "Invalid magic bytes in header: {:?} ({})",
+                    header.magic, magic_str
+                ));
                 corruption_count += 1;
             }
         } else {
@@ -2383,13 +2395,13 @@ impl IntegrityChecker {
         // Validate data_offset
         if header.data_offset >= file_size {
             notes.push(format!(
-                "Header data_offset ({}) exceeds file size ({})", 
+                "Header data_offset ({}) exceeds file size ({})",
                 header.data_offset, file_size
             ));
             corruption_count += 1;
         } else if header.data_offset < StandardHeader::SIZE as u64 {
             notes.push(format!(
-                "Header data_offset ({}) overlaps with header region", 
+                "Header data_offset ({}) overlaps with header region",
                 header.data_offset
             ));
             corruption_count += 1;
@@ -2400,7 +2412,7 @@ impl IntegrityChecker {
         // Validate alignment of data_offset
         if header.data_offset % 8 != 0 {
             notes.push(format!(
-                "Header data_offset ({}) is not 8-byte aligned", 
+                "Header data_offset ({}) is not 8-byte aligned",
                 header.data_offset
             ));
             corruption_count += 1;
@@ -2409,7 +2421,9 @@ impl IntegrityChecker {
         // Check if this appears to be a vector storage file
         if header.magic == *crate::constants::magic::VECTOR_STORAGE {
             notes.push("Validating vector storage file structure".to_string());
-            let vector_validation = self.validate_vector_storage_pointers(mmf, file_path, file_size, notes).await?;
+            let vector_validation = self
+                .validate_vector_storage_pointers(mmf, file_path, file_size, notes)
+                .await?;
             if vector_validation.0 {
                 repaired_count += 1;
             } else {
@@ -2419,7 +2433,9 @@ impl IntegrityChecker {
         // Check if this appears to be a posting storage file
         else if header.magic == *crate::constants::magic::POSTING_STORAGE {
             notes.push("Validating posting storage file structure".to_string());
-            let posting_validation = self.validate_posting_storage_pointers(mmf, file_size, notes).await?;
+            let posting_validation = self
+                .validate_posting_storage_pointers(mmf, file_size, notes)
+                .await?;
             if posting_validation.0 {
                 repaired_count += 1;
             } else {
@@ -2433,13 +2449,13 @@ impl IntegrityChecker {
             Ok((true, "No pointer corruption detected".to_string()))
         } else if repaired_count > 0 {
             notes.push(format!(
-                "Found {} pointer issues, repaired {} automatically", 
+                "Found {} pointer issues, repaired {} automatically",
                 corruption_count, repaired_count
             ));
             Ok((true, "Pointer corruption partially repaired".to_string()))
         } else {
             notes.push(format!(
-                "Found {} pointer corruption issues that require manual intervention", 
+                "Found {} pointer corruption issues that require manual intervention",
                 corruption_count
             ));
             Ok((false, "Pointer corruption detected but not repairable".to_string()))
@@ -2471,8 +2487,8 @@ impl IntegrityChecker {
         file_size: u64,
         notes: &mut Vec<String>,
     ) -> Result<(bool, String), ShardexError> {
-        use crate::vector_storage::VectorStorageHeader;
         use crate::memory::StandardHeader;
+        use crate::vector_storage::VectorStorageHeader;
 
         let header_size = StandardHeader::SIZE as u64;
         if file_size < header_size + std::mem::size_of::<VectorStorageHeader>() as u64 {
@@ -2482,14 +2498,14 @@ impl IntegrityChecker {
 
         // Read vector storage header
         let vector_header: VectorStorageHeader = mmf.read_at(header_size as usize)?;
-        
+
         // Validate vector_data_offset
         if vector_header.vector_data_offset >= file_size {
             notes.push(format!(
                 "Vector data offset ({}) exceeds file size ({})",
                 vector_header.vector_data_offset, file_size
             ));
-            
+
             // Attempt to repair by setting offset to a reasonable default
             // This is only safe if we can determine a valid location
             let reasonable_offset = header_size + std::mem::size_of::<VectorStorageHeader>() as u64;
@@ -2498,8 +2514,11 @@ impl IntegrityChecker {
                     "Attempting to repair vector_data_offset from {} to {}",
                     vector_header.vector_data_offset, reasonable_offset
                 ));
-                
-                match self.repair_vector_data_offset(file_path, reasonable_offset, notes).await {
+
+                match self
+                    .repair_vector_data_offset(file_path, reasonable_offset, notes)
+                    .await
+                {
                     Ok(true) => {
                         notes.push("Vector data offset repair successful".to_string());
                         // Continue validation with repaired offset
@@ -2520,7 +2539,7 @@ impl IntegrityChecker {
         // Validate vector data region size
         let expected_vector_data_size = vector_header.capacity as u64 * vector_header.vector_size_bytes as u64;
         let available_space = file_size - vector_header.vector_data_offset;
-        
+
         if expected_vector_data_size > available_space {
             notes.push(format!(
                 "Vector data region requires {} bytes but only {} available",
@@ -2530,7 +2549,9 @@ impl IntegrityChecker {
         }
 
         // Validate alignment for SIMD operations
-        if vector_header.simd_alignment > 0 && vector_header.vector_data_offset % vector_header.simd_alignment as u64 != 0 {
+        if vector_header.simd_alignment > 0
+            && vector_header.vector_data_offset % vector_header.simd_alignment as u64 != 0
+        {
             notes.push(format!(
                 "Vector data offset ({}) not aligned to {} bytes for SIMD",
                 vector_header.vector_data_offset, vector_header.simd_alignment
@@ -2551,12 +2572,12 @@ impl IntegrityChecker {
         file_size: u64,
         notes: &mut Vec<String>,
     ) -> Result<(bool, String), ShardexError> {
-        use crate::structures::PostingHeader;
         use crate::memory::StandardHeader;
+        use crate::structures::PostingHeader;
 
         let header_size = StandardHeader::SIZE as u64;
         let posting_header_size = std::mem::size_of::<PostingHeader>() as u64;
-        
+
         if file_size < header_size + posting_header_size {
             notes.push("File too small for posting data".to_string());
             return Ok((false, "Posting data incomplete".to_string()));
@@ -2566,14 +2587,15 @@ impl IntegrityChecker {
         const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024; // 100MB
         const MAX_SAMPLE_SIZE: usize = 1000; // Maximum entries to validate for large files
         const CORRUPTION_TOLERANCE: f64 = 0.05; // 5% corruption rate triggers full scan
-        
+
         let estimated_posting_count = ((file_size - header_size) / posting_header_size) as usize;
         let use_sampling = file_size > LARGE_FILE_THRESHOLD && estimated_posting_count > MAX_SAMPLE_SIZE;
-        
+
         if use_sampling {
             notes.push(format!(
                 "Large file detected ({} MB, ~{} entries). Using sampling validation for performance.",
-                file_size / (1024 * 1024), estimated_posting_count
+                file_size / (1024 * 1024),
+                estimated_posting_count
             ));
         }
 
@@ -2599,7 +2621,7 @@ impl IntegrityChecker {
 
             if should_validate {
                 validation_entries += 1;
-                
+
                 // Progress reporting for long operations
                 if validation_entries > 0 && validation_entries % 10000 == 0 {
                     notes.push(format!("Validated {} entries so far...", validation_entries));
@@ -2643,7 +2665,9 @@ impl IntegrityChecker {
                             corruption_rate * 100.0
                         ));
                         // Restart with full validation
-                        return self.validate_posting_storage_pointers_full(mmf, file_size, notes).await;
+                        return self
+                            .validate_posting_storage_pointers_full(mmf, file_size, notes)
+                            .await;
                     }
                 }
             }
@@ -2666,10 +2690,10 @@ impl IntegrityChecker {
         if corrupt_pointers == 0 {
             Ok((true, "All posting storage pointers are valid".to_string()))
         } else {
-            Ok((false, format!(
-                "Found {} corrupted pointers in posting storage", 
-                corrupt_pointers
-            )))
+            Ok((
+                false,
+                format!("Found {} corrupted pointers in posting storage", corrupt_pointers),
+            ))
         }
     }
 
@@ -2680,12 +2704,12 @@ impl IntegrityChecker {
         file_size: u64,
         notes: &mut Vec<String>,
     ) -> Result<(bool, String), ShardexError> {
-        use crate::structures::PostingHeader;
         use crate::memory::StandardHeader;
+        use crate::structures::PostingHeader;
 
         let header_size = StandardHeader::SIZE as u64;
         let posting_header_size = std::mem::size_of::<PostingHeader>() as u64;
-        
+
         notes.push("Performing comprehensive full-file posting validation".to_string());
 
         // Scan through all posting headers
@@ -2729,10 +2753,13 @@ impl IntegrityChecker {
         if corrupt_pointers == 0 {
             Ok((true, "All posting storage pointers validated and valid".to_string()))
         } else {
-            Ok((false, format!(
-                "Found {} corrupted pointers in posting storage (full scan)", 
-                corrupt_pointers
-            )))
+            Ok((
+                false,
+                format!(
+                    "Found {} corrupted pointers in posting storage (full scan)",
+                    corrupt_pointers
+                ),
+            ))
         }
     }
 
@@ -2751,7 +2778,7 @@ impl IntegrityChecker {
         }
 
         let header: StandardHeader = mmf.read_at(0)?;
-        
+
         // Validate WAL magic bytes
         if header.magic != *crate::constants::magic::WAL {
             notes.push("Invalid WAL magic bytes".to_string());
@@ -2797,10 +2824,7 @@ impl IntegrityChecker {
         }
 
         if header.data_offset % 8 != 0 {
-            notes.push(format!(
-                "Data offset ({}) not 8-byte aligned",
-                header.data_offset
-            ));
+            notes.push(format!("Data offset ({}) not 8-byte aligned", header.data_offset));
             return Ok((false, "Data offset misaligned".to_string()));
         }
 
@@ -2850,10 +2874,13 @@ impl IntegrityChecker {
     ) -> Result<bool, ShardexError> {
         use crate::memory::MemoryMappedFile;
         use crate::vector_storage::VectorStorageHeader;
-        
-        notes.push(format!("Attempting to repair vector_data_offset to {} in file: {}", 
-            new_offset, file_path.display()));
-        
+
+        notes.push(format!(
+            "Attempting to repair vector_data_offset to {} in file: {}",
+            new_offset,
+            file_path.display()
+        ));
+
         // Open file in read-write mode
         let mut writable_mmf = match MemoryMappedFile::open_read_write(file_path) {
             Ok(mmf) => mmf,
@@ -2862,7 +2889,7 @@ impl IntegrityChecker {
                 return Ok(false);
             }
         };
-        
+
         // Read current header
         let mut header: VectorStorageHeader = match writable_mmf.read_at(0) {
             Ok(h) => h,
@@ -2871,39 +2898,47 @@ impl IntegrityChecker {
                 return Ok(false);
             }
         };
-        
+
         // Store original offset for logging
         let original_offset = header.vector_data_offset;
         notes.push(format!("Original vector_data_offset: {}", original_offset));
-        
+
         // Validate the new offset
         if new_offset < std::mem::size_of::<VectorStorageHeader>() as u64 {
-            notes.push(format!("New offset {} is too small (must be >= header size {})", 
-                new_offset, std::mem::size_of::<VectorStorageHeader>()));
+            notes.push(format!(
+                "New offset {} is too small (must be >= header size {})",
+                new_offset,
+                std::mem::size_of::<VectorStorageHeader>()
+            ));
             return Ok(false);
         }
-        
+
         if new_offset as usize >= writable_mmf.len() {
-            notes.push(format!("New offset {} exceeds file size {}", 
-                new_offset, writable_mmf.len()));
+            notes.push(format!(
+                "New offset {} exceeds file size {}",
+                new_offset,
+                writable_mmf.len()
+            ));
             return Ok(false);
         }
-        
+
         // Ensure new offset maintains proper alignment for SIMD operations
         if new_offset % 8 != 0 {
             notes.push(format!("New offset {} is not 8-byte aligned", new_offset));
             return Ok(false);
         }
-        
+
         // Update the header
         header.vector_data_offset = new_offset;
-        
+
         // Write the updated header back to the file
         match writable_mmf.write_at(0, &header) {
             Ok(()) => {
-                notes.push(format!("Successfully updated vector_data_offset from {} to {}", 
-                    original_offset, new_offset));
-                
+                notes.push(format!(
+                    "Successfully updated vector_data_offset from {} to {}",
+                    original_offset, new_offset
+                ));
+
                 // Verify the repair by reading the header back
                 match writable_mmf.read_at::<VectorStorageHeader>(0) {
                     Ok(verified_header) => {
@@ -2911,8 +2946,10 @@ impl IntegrityChecker {
                             notes.push("Repair verification successful - header updated correctly".to_string());
                             Ok(true)
                         } else {
-                            notes.push(format!("Repair verification failed: expected {}, got {}", 
-                                new_offset, verified_header.vector_data_offset));
+                            notes.push(format!(
+                                "Repair verification failed: expected {}, got {}",
+                                new_offset, verified_header.vector_data_offset
+                            ));
                             Ok(false)
                         }
                     }
@@ -5351,11 +5388,13 @@ mod tests {
         assert!(result.is_ok());
 
         let (_success, message, notes) = result.unwrap();
-        
+
         // Should attempt repair but may not succeed depending on actual corruption
         assert!(!notes.is_empty());
         assert!(message.contains("Pointer") || message.contains("pointer"));
-        assert!(notes.iter().any(|note| note.contains("Validating pointers")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("Validating pointers")));
     }
 
     #[tokio::test]
@@ -5387,10 +5426,12 @@ mod tests {
         assert!(result.is_ok());
 
         let (_success, _message, notes) = result.unwrap();
-        
+
         // Should detect and attempt to repair posting storage pointers
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("posting") || note.contains("Posting")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("posting") || note.contains("Posting")));
     }
 
     #[tokio::test]
@@ -5405,7 +5446,7 @@ mod tests {
         // Create a file with invalid magic bytes
         let test_file = temp_dir.path().join("invalid_magic.dat");
         let mut mmf = MemoryMappedFile::create(&test_file, 1024).unwrap();
-        
+
         // Write invalid header with corrupted magic bytes
         let invalid_header = crate::memory::StandardHeader::new_without_checksum(
             b"XXXX", // Invalid magic
@@ -5429,17 +5470,25 @@ mod tests {
         };
 
         // Create a mutable checker for the repair
-        let mut checker_mut = IntegrityChecker::new(temp_dir.path().to_path_buf(), 
-            ShardexConfig::new().directory_path(temp_dir.path().to_path_buf()).vector_size(128));
-        
-        let result = checker_mut.repair_structural_inconsistency(&corruption).await;
+        let mut checker_mut = IntegrityChecker::new(
+            temp_dir.path().to_path_buf(),
+            ShardexConfig::new()
+                .directory_path(temp_dir.path().to_path_buf())
+                .vector_size(128),
+        );
+
+        let result = checker_mut
+            .repair_structural_inconsistency(&corruption)
+            .await;
         assert!(result.is_ok());
 
         let (_success, _message, notes) = result.unwrap();
-        
+
         // Should detect invalid magic bytes
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("magic") || note.contains("Invalid")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("magic") || note.contains("Invalid")));
     }
 
     #[tokio::test]
@@ -5455,7 +5504,7 @@ mod tests {
         let test_file = temp_dir.path().join("out_of_bounds.dat");
         let file_size = 512u64;
         let mut mmf = MemoryMappedFile::create(&test_file, file_size as usize).unwrap();
-        
+
         // Write header with data_offset beyond file size
         let bad_header = crate::memory::StandardHeader::new_without_checksum(
             crate::constants::magic::TEST_GENERIC,
@@ -5478,17 +5527,25 @@ mod tests {
             detected_at: SystemTime::now(),
         };
 
-        let mut checker_mut = IntegrityChecker::new(temp_dir.path().to_path_buf(),
-            ShardexConfig::new().directory_path(temp_dir.path().to_path_buf()).vector_size(128));
-            
-        let result = checker_mut.repair_structural_inconsistency(&corruption).await;
+        let mut checker_mut = IntegrityChecker::new(
+            temp_dir.path().to_path_buf(),
+            ShardexConfig::new()
+                .directory_path(temp_dir.path().to_path_buf())
+                .vector_size(128),
+        );
+
+        let result = checker_mut
+            .repair_structural_inconsistency(&corruption)
+            .await;
         assert!(result.is_ok());
 
         let (_success, _message, notes) = result.unwrap();
-        
+
         // Should detect data_offset out of bounds
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("exceeds file size") || note.contains("out of bounds")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("exceeds file size") || note.contains("out of bounds")));
     }
 
     #[tokio::test]
@@ -5503,7 +5560,7 @@ mod tests {
         // Create a file with misaligned data_offset
         let test_file = temp_dir.path().join("misaligned.dat");
         let mut mmf = MemoryMappedFile::create(&test_file, 1024).unwrap();
-        
+
         // Write header with misaligned data_offset (not 8-byte aligned)
         let misaligned_header = crate::memory::StandardHeader::new_without_checksum(
             crate::constants::magic::TEST_GENERIC,
@@ -5526,17 +5583,25 @@ mod tests {
             detected_at: SystemTime::now(),
         };
 
-        let mut checker_mut = IntegrityChecker::new(temp_dir.path().to_path_buf(),
-            ShardexConfig::new().directory_path(temp_dir.path().to_path_buf()).vector_size(128));
-            
-        let result = checker_mut.repair_structural_inconsistency(&corruption).await;
+        let mut checker_mut = IntegrityChecker::new(
+            temp_dir.path().to_path_buf(),
+            ShardexConfig::new()
+                .directory_path(temp_dir.path().to_path_buf())
+                .vector_size(128),
+        );
+
+        let result = checker_mut
+            .repair_structural_inconsistency(&corruption)
+            .await;
         assert!(result.is_ok());
 
         let (_success, _message, notes) = result.unwrap();
-        
+
         // Should detect alignment issues
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("aligned") || note.contains("alignment")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("aligned") || note.contains("alignment")));
     }
 
     #[tokio::test]
@@ -5551,7 +5616,7 @@ mod tests {
         // Create a WAL file
         let wal_file = temp_dir.path().join("test.wal");
         let mut mmf = MemoryMappedFile::create(&wal_file, 1024).unwrap();
-        
+
         // Write valid WAL header
         let wal_header = crate::memory::StandardHeader::new_without_checksum(
             crate::constants::magic::WAL,
@@ -5574,17 +5639,25 @@ mod tests {
             detected_at: SystemTime::now(),
         };
 
-        let mut checker_mut = IntegrityChecker::new(temp_dir.path().to_path_buf(),
-            ShardexConfig::new().directory_path(temp_dir.path().to_path_buf()).vector_size(128));
-            
-        let result = checker_mut.repair_structural_inconsistency(&corruption).await;
+        let mut checker_mut = IntegrityChecker::new(
+            temp_dir.path().to_path_buf(),
+            ShardexConfig::new()
+                .directory_path(temp_dir.path().to_path_buf())
+                .vector_size(128),
+        );
+
+        let result = checker_mut
+            .repair_structural_inconsistency(&corruption)
+            .await;
         assert!(result.is_ok());
 
         let (_success, _message, notes) = result.unwrap();
-        
+
         // Should validate WAL file structure
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("WAL") || note.contains("wal")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("WAL") || note.contains("wal")));
     }
 
     #[test]
@@ -5607,7 +5680,7 @@ mod tests {
         assert!(!checker.is_valid_magic(b"XXXX"));
         assert!(!checker.is_valid_magic(b"YYYY"));
         assert!(!checker.is_valid_magic(b"ZZZZ"));
-        
+
         // Test test magic bytes (should be invalid for production validation)
         assert!(!checker.is_valid_magic(crate::constants::magic::TEST_GENERIC));
         assert!(!checker.is_valid_magic(crate::constants::magic::TEST_SHARD));
@@ -5615,13 +5688,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_repair_vector_data_offset_successful() {
-        use crate::vector_storage::{VectorStorage, VectorStorageHeader};
         use crate::memory::MemoryMappedFile;
+        use crate::vector_storage::{VectorStorage, VectorStorageHeader};
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
         let vector_file = temp_dir.path().join("test_vector.dat");
-        
+
         // Create a vector storage file with valid content
         let storage = VectorStorage::create(&vector_file, 4, 100).unwrap();
         drop(storage); // Close file to allow repair operations
@@ -5631,11 +5704,11 @@ mod tests {
             let mut mmf = MemoryMappedFile::open_read_write(&vector_file).unwrap();
             let mut header: VectorStorageHeader = mmf.read_at(0).unwrap();
             let _original_offset = header.vector_data_offset;
-            
+
             // Set invalid offset that exceeds file size
-            header.vector_data_offset = mmf.len() as u64 + 1000; 
+            header.vector_data_offset = mmf.len() as u64 + 1000;
             mmf.write_at(0, &header).unwrap();
-            
+
             // Verify corruption was written
             let corrupted_header: VectorStorageHeader = mmf.read_at(0).unwrap();
             assert_eq!(corrupted_header.vector_data_offset, mmf.len() as u64 + 1000);
@@ -5646,30 +5719,38 @@ mod tests {
             .directory_path(temp_dir.path().to_path_buf())
             .vector_size(4);
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
-        
+
         // Calculate a reasonable new offset
-        let reasonable_offset = std::mem::size_of::<crate::memory::StandardHeader>() as u64 
+        let reasonable_offset = std::mem::size_of::<crate::memory::StandardHeader>() as u64
             + std::mem::size_of::<VectorStorageHeader>() as u64;
-        
+
         let mut notes = Vec::new();
-        let result = checker.repair_vector_data_offset(&vector_file, reasonable_offset, &mut notes).await;
-        
+        let result = checker
+            .repair_vector_data_offset(&vector_file, reasonable_offset, &mut notes)
+            .await;
+
         // Verify repair succeeded
         assert!(result.is_ok());
         assert!(result.unwrap()); // Should return true for successful repair
-        
+
         // Verify repair was actually applied
         {
             let mmf = MemoryMappedFile::open_read_only(&vector_file).unwrap();
             let repaired_header: VectorStorageHeader = mmf.read_at(0).unwrap();
             assert_eq!(repaired_header.vector_data_offset, reasonable_offset);
         }
-        
+
         // Check that notes contain expected messages
         assert!(!notes.is_empty());
-        assert!(notes.iter().any(|note| note.contains("Attempting to repair")));
-        assert!(notes.iter().any(|note| note.contains("Successfully updated")));
-        assert!(notes.iter().any(|note| note.contains("verification successful")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("Attempting to repair")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("Successfully updated")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("verification successful")));
     }
 
     #[tokio::test]
@@ -5679,7 +5760,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let vector_file = temp_dir.path().join("test_vector.dat");
-        
+
         // Create a vector storage file
         let storage = VectorStorage::create(&vector_file, 4, 100).unwrap();
         drop(storage); // Close file
@@ -5692,7 +5773,9 @@ mod tests {
         // Test 1: Offset too small (smaller than header size)
         {
             let mut notes = Vec::new();
-            let result = checker.repair_vector_data_offset(&vector_file, 50, &mut notes).await;
+            let result = checker
+                .repair_vector_data_offset(&vector_file, 50, &mut notes)
+                .await;
             assert!(result.is_ok());
             assert!(!result.unwrap()); // Should fail
             assert!(notes.iter().any(|note| note.contains("too small")));
@@ -5702,7 +5785,9 @@ mod tests {
         {
             let file_size = std::fs::metadata(&vector_file).unwrap().len();
             let mut notes = Vec::new();
-            let result = checker.repair_vector_data_offset(&vector_file, file_size + 100, &mut notes).await;
+            let result = checker
+                .repair_vector_data_offset(&vector_file, file_size + 100, &mut notes)
+                .await;
             assert!(result.is_ok());
             assert!(!result.unwrap()); // Should fail
             assert!(notes.iter().any(|note| note.contains("exceeds file size")));
@@ -5712,7 +5797,9 @@ mod tests {
         {
             let mut notes = Vec::new();
             let misaligned_offset = 1000 + 7; // Not divisible by 8
-            let result = checker.repair_vector_data_offset(&vector_file, misaligned_offset, &mut notes).await;
+            let result = checker
+                .repair_vector_data_offset(&vector_file, misaligned_offset, &mut notes)
+                .await;
             assert!(result.is_ok());
             assert!(!result.unwrap()); // Should fail
             assert!(notes.iter().any(|note| note.contains("not 8-byte aligned")));
@@ -5725,20 +5812,22 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let nonexistent_file = temp_dir.path().join("does_not_exist.dat");
-        
+
         let config = ShardexConfig::new()
             .directory_path(temp_dir.path().to_path_buf())
             .vector_size(4);
         let checker = IntegrityChecker::new(temp_dir.path().to_path_buf(), config);
 
         let mut notes = Vec::new();
-        let result = checker.repair_vector_data_offset(&nonexistent_file, 1000, &mut notes).await;
-        
+        let result = checker
+            .repair_vector_data_offset(&nonexistent_file, 1000, &mut notes)
+            .await;
+
         // Should handle file access failure gracefully
         assert!(result.is_ok());
         assert!(!result.unwrap()); // Should return false for failure
-        assert!(notes.iter().any(|note| note.contains("Failed to open file")));
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("Failed to open file")));
     }
-
-
 }

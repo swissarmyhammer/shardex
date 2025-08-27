@@ -83,7 +83,6 @@
 //! # }
 //! ```
 
-
 use crate::error::ShardexError;
 use bytemuck::{Pod, Zeroable};
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -1064,14 +1063,22 @@ mod tests {
         let header = StandardHeader::new(magic::TEST_GENERIC, 2, StandardHeader::SIZE as u64, data);
 
         // Complete validation should pass
-        assert!(header.validate_complete(magic::TEST_GENERIC, 1, 5, data).is_ok());
+        assert!(header
+            .validate_complete(magic::TEST_GENERIC, 1, 5, data)
+            .is_ok());
 
         // Should fail with wrong magic
-        assert!(header.validate_complete(magic::TEST_FAILURE, 1, 5, data).is_err());
+        assert!(header
+            .validate_complete(magic::TEST_FAILURE, 1, 5, data)
+            .is_err());
 
         // Should fail with version out of range
-        assert!(header.validate_complete(magic::TEST_GENERIC, 3, 5, data).is_err());
-        assert!(header.validate_complete(magic::TEST_GENERIC, 1, 1, data).is_err());
+        assert!(header
+            .validate_complete(magic::TEST_GENERIC, 3, 5, data)
+            .is_err());
+        assert!(header
+            .validate_complete(magic::TEST_GENERIC, 1, 1, data)
+            .is_err());
 
         // Should fail with wrong data
         assert!(header
@@ -1082,8 +1089,14 @@ mod tests {
     #[test]
     fn test_standard_header_update_for_modification() {
         let initial_data = b"initial data";
-        let mut header =
-            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, initial_data);
+        let mut header = StandardHeader::new_with_timestamps(
+            magic::TEST_GENERIC,
+            1,
+            StandardHeader::SIZE as u64,
+            1000,
+            1000,
+            initial_data,
+        );
 
         // Simulate some time passing and data changing
         let new_data = b"modified data";
@@ -1106,8 +1119,14 @@ mod tests {
         let modified = 2000;
         let data = b"test data";
 
-        let header =
-            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, created, modified, data);
+        let header = StandardHeader::new_with_timestamps(
+            magic::TEST_GENERIC,
+            1,
+            StandardHeader::SIZE as u64,
+            created,
+            modified,
+            data,
+        );
 
         assert_eq!(header.created_at, created);
         assert_eq!(header.modified_at, modified);
@@ -1153,12 +1172,15 @@ mod tests {
 
         // Headers with identical header metadata and same data should have same checksum
         // Use explicit timestamps to ensure headers are identical
-        let header1 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data1);
-        let header2 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data2);
+        let header1 =
+            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data1);
+        let header2 =
+            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data2);
         assert_eq!(header1.checksum, header2.checksum);
 
         // Different data should produce different checksums
-        let header3 = StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data3);
+        let header3 =
+            StandardHeader::new_with_timestamps(magic::TEST_GENERIC, 1, StandardHeader::SIZE as u64, 1000, 1000, data3);
         assert_ne!(header1.checksum, header3.checksum);
     }
 

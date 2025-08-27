@@ -59,7 +59,7 @@ impl<T> BufferEntry<T> {
 }
 
 /// Statistics for memory pool performance
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryPoolStats {
     /// Total buffer requests
     pub total_requests: u64,

@@ -252,7 +252,7 @@ pub enum WriteOperationType {
 }
 
 /// Statistics for monitoring write coordination efficiency
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CoordinationStats {
     /// Total number of write operations coordinated
     pub total_writes: u64,

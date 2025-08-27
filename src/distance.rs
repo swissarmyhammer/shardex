@@ -7,7 +7,7 @@
 use crate::error::ShardexError;
 
 /// Supported distance metrics for vector similarity search
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DistanceMetric {
     /// Cosine similarity - measures the cosine of the angle between vectors
     /// Best for high-dimensional sparse vectors and text embeddings
