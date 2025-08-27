@@ -16,6 +16,7 @@
 //!
 //! ```rust
 //! use shardex::memory::{MemoryMappedFile, StandardHeader};
+//! use shardex::constants::magic;
 //! use tempfile::TempDir;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,6 +44,7 @@
 //!
 //! ```rust
 //! use shardex::memory::{MemoryMappedFile, StandardHeader};
+//! use shardex::constants::magic;
 //! use std::path::Path;
 //!
 //! # fn read_example(file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {

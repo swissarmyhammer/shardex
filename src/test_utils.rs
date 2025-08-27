@@ -17,114 +17,11 @@ use tempfile::TempDir;
 /// handle TestEnvironment creation, variable naming consistency, and test name
 /// string literal elimination.
 
-/// Create a synchronous test with a TestEnvironment
-///
-/// Automatically creates a TestEnvironment using the function name as the test name,
-/// eliminating string duplication and ensuring compile-time correctness.
-///
-/// # Usage
-///
-/// ```rust
-/// test_with_env!(test_my_functionality, {
-///     // Test body has access to _env variable
-///     let config = ShardexConfig::new().directory_path(_env.path());
-///     // ... rest of test
-/// });
-/// ```
-macro_rules! test_with_env {
-    ($test_name:ident, $body:block) => {
-        #[test]
-        fn $test_name() {
-            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
-            {
-                $body
-            }
-        }
-    };
-}
 
-/// Create an async test with a TestEnvironment
-///
-/// Automatically creates a TestEnvironment using the function name as the test name,
-/// eliminating string duplication and ensuring compile-time correctness for async tests.
-///
-/// # Usage
-///
-/// ```rust
-/// async_test_with_env!(test_my_async_functionality, {
-///     // Test body has access to _env variable
-///     let config = ShardexConfig::new().directory_path(_env.path());
-///     let result = some_async_operation(config).await;
-///     // ... rest of test
-/// });
-/// ```
-macro_rules! async_test_with_env {
-    ($test_name:ident, $body:block) => {
-        #[tokio::test]
-        async fn $test_name() {
-            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
-            {
-                $body
-            }
-        }
-    };
-}
 
-/// Create a test with TestEnvironment and custom setup
-///
-/// Combines TestEnvironment creation with a setup closure, useful for tests
-/// that need additional initialization beyond the basic environment.
-///
-/// # Usage
-///
-/// ```rust
-/// test_with_setup!(test_with_config, |_env| {
-///     let config = ShardexConfig::new()
-///         .directory_path(_env.path())
-///         .vector_size(256);
-///     (config,)
-/// }, |(config,)| {
-///     // Test body has access to both _env and config
-///     // ... test implementation
-/// });
-/// ```
-macro_rules! test_with_setup {
-    ($test_name:ident, $setup:expr, $body:expr) => {
-        #[test]
-        fn $test_name() {
-            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
-            let setup_result = $setup(&_env);
-            $body(setup_result);
-        }
-    };
-}
 
-/// Create an async test with TestEnvironment and custom setup
-///
-/// Combines TestEnvironment creation with an async setup closure.
-///
-/// # Usage
-///
-/// ```rust
-/// async_test_with_setup!(test_with_index, |_env| async {
-///     let config = ShardexConfig::new().directory_path(_env.path());
-///     let index = ShardexIndex::create(config.clone()).await?;
-///     Ok((config, index))
-/// }, |result| async {
-///     let (config, index) = result.unwrap();
-///     // ... test implementation
-/// });
-/// ```
-macro_rules! async_test_with_setup {
-    ($test_name:ident, $setup:expr, $body:expr) => {
-        #[tokio::test]
-        async fn $test_name() {
-            let _env = $crate::test_utils::TestEnvironment::new(stringify!($test_name));
-            let setup_result = $setup(&_env).await;
-            $body(setup_result).await;
-        }
-    };
-}
+
+
 
 /// Error handling utilities for tests
 pub mod error {
@@ -559,7 +456,6 @@ impl TestSetupBuilder {
 ///
 /// These builders provide specialized test setup for specific Shardex components,
 /// eliminating duplication while providing type-safe, ergonomic test initialization.
-
 /// Shardex-specific test environment builder
 ///
 /// Provides convenience methods for creating test environments specifically
