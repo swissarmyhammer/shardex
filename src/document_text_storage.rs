@@ -1322,10 +1322,7 @@ impl DocumentTextStorage {
                     }
 
                     // Move to next aligned offset (accounting for length prefix)
-                    let aligned_offset =
-                        (current_offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
-                            & !(TEXT_BLOCK_ALIGNMENT - 1);
-                    current_offset = aligned_offset;
+                    current_offset = self.calculate_next_aligned_offset(current_offset, text_length);
                 }
                 Err(e) => {
                     // Handle corrupted or invalid text block
@@ -1477,27 +1474,63 @@ impl DocumentTextStorage {
         Ok((text_length, text_content))
     }
 
+    /// Calculate the next aligned offset after a text block
+    /// 
+    /// Given an offset and text length, calculates the next 4-byte aligned offset
+    /// accounting for the length prefix and text content.
+    fn calculate_next_aligned_offset(&self, current_offset: u64, text_length: u64) -> u64 {
+        (current_offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
+            & !(TEXT_BLOCK_ALIGNMENT - 1)
+    }
+
+    /// Calculate the aligned end offset of a text block
+    ///
+    /// Given an offset and text length, calculates the aligned end position
+    /// of the text block including length prefix and alignment padding.
+    fn calculate_aligned_block_end(&self, offset: u64, text_length: u64) -> u64 {
+        (offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
+            & !(TEXT_BLOCK_ALIGNMENT - 1)
+    }
+
     /// Truncate to last valid entry (recovery operation)
     ///
-    /// Scans backwards through text entries to find the last valid one,
-    /// truncates corrupted data, and updates file headers. This operation
-    /// preserves valid data while removing corrupted portions.
+    /// Scans through text entries to find the last valid one, truncates corrupted data,
+    /// and updates file headers atomically. This operation preserves valid data while 
+    /// removing corrupted portions. Essential for maintaining data integrity after 
+    /// partial corruption events.
     ///
     /// # Returns
     /// * `Ok((new_offset, entries_lost))` - New file offset and count of corrupted entries removed
     /// * `Err(ShardexError)` - Recovery failed due to I/O error or complete corruption
     ///
-    /// # Implementation
-    /// 1. Scans backwards from current end of data
-    /// 2. Validates each text block using existing validation logic
-    /// 3. Finds last valid entry position
-    /// 4. Truncates file and updates headers atomically
+    /// # Error Conditions
+    /// * `MemoryMapping` - File truncation failed due to I/O errors or permission issues
+    /// * `TextCorruption` - All entries are corrupted and file cannot be recovered
+    /// * File system errors during atomic operations
+    ///
+    /// # Performance Characteristics
+    /// * **Time Complexity**: O(n) where n is the number of text entries before corruption
+    /// * **I/O Operations**: Forward sequential scan + single truncation operation
+    /// * **Large Files**: Scan time increases linearly with file size; memory usage remains constant
+    /// * **Atomic Operations**: File truncation and header updates are performed atomically
+    ///
+    /// # Memory Usage
+    /// * **Constant Memory**: Does not load entire file contents into memory
+    /// * **Memory Mapped I/O**: Uses existing memory-mapped file for efficient access
+    /// * **Header Updates**: Minimal memory overhead for header modification operations
+    ///
+    /// # Implementation Details
+    /// 1. **Forward Scanning**: Validates text entries from beginning until corruption detected
+    /// 2. **Validation Logic**: Uses `try_read_text_block_at_offset()` for robust entry validation
+    /// 3. **Corruption Detection**: Stops at first invalid length prefix, bounds check, or UTF-8 failure
+    /// 4. **File Truncation**: Uses `resize()` method for atomic file size reduction
+    /// 5. **Header Consistency**: Updates `TextDataHeader` fields to reflect new file state
+    /// 6. **Alignment Handling**: Maintains 4-byte alignment for all text blocks
     pub async fn truncate_to_last_valid(&mut self) -> Result<(u64, u32), ShardexError> {
         tracing::info!("Starting truncate to last valid entry recovery operation");
 
         let original_next_offset = self.data_header.next_text_offset;
         let data_start = TextDataHeader::SIZE as u64;
-        println!("DEBUG: data_start={}, TextDataHeader::SIZE={}, original_next_offset={}", data_start, TextDataHeader::SIZE, original_next_offset);
 
         // Handle empty file case
         if original_next_offset <= data_start {
@@ -1520,8 +1553,6 @@ impl DocumentTextStorage {
         // Forward scan to find all valid entries (we'll keep the last one found)
         while current_offset < original_next_offset {
             scanning_entries += 1;
-            
-            println!("DEBUG: Scanning offset {} (original_next_offset: {})", current_offset, original_next_offset);
 
             match self.try_read_text_block_at_offset(current_offset) {
                 Ok((text_length, _text_content)) => {
@@ -1530,21 +1561,11 @@ impl DocumentTextStorage {
                     last_valid_length = text_length;
                     total_valid_entries += 1;
 
-                    println!("DEBUG: Valid entry found at offset {}, length {} bytes", current_offset, text_length);
-
                     // Move to next aligned offset
-                    let next_offset = 
-                        (current_offset + TEXT_LENGTH_PREFIX_SIZE + text_length + (TEXT_BLOCK_ALIGNMENT - 1))
-                            & !(TEXT_BLOCK_ALIGNMENT - 1);
-                    current_offset = next_offset;
-                    
-                    println!("DEBUG: Next offset will be {}", current_offset);
+                    current_offset = self.calculate_next_aligned_offset(current_offset, text_length);
                 }
-                Err(e) => {
-                    // Invalid or corrupted entry found
-                    println!("DEBUG: Corrupted entry found at offset {}: {}", current_offset, e);
-                    
-                    // We've found corruption - truncate at the last valid position
+                Err(_e) => {
+                    // Invalid or corrupted entry found - truncate at the last valid position
                     break;
                 }
             }
@@ -1553,8 +1574,7 @@ impl DocumentTextStorage {
         // Calculate the new file end position
         let truncation_point = if total_valid_entries > 0 {
             // Truncate after the last valid entry (including alignment)
-            (last_valid_offset + TEXT_LENGTH_PREFIX_SIZE + last_valid_length + (TEXT_BLOCK_ALIGNMENT - 1))
-                & !(TEXT_BLOCK_ALIGNMENT - 1)
+            self.calculate_aligned_block_end(last_valid_offset, last_valid_length)
         } else {
             // No valid entries found - truncate to just after header
             data_start
@@ -2624,18 +2644,166 @@ mod tests {
         storage.store_text(doc_id1, text1).unwrap();
 
         let original_offset = storage.data_header.next_text_offset;
-        println!("TEST DEBUG: original_offset = {}", original_offset);
 
         // Call truncate_to_last_valid - should find no corruption
         let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
-        println!("TEST DEBUG: new_offset = {}, entries_lost = {}", new_offset, entries_lost);
 
         // Should report no changes needed
-        println!("ASSERT DEBUG: new_offset={}, original_offset={}", new_offset, original_offset);
         assert_eq!(new_offset, original_offset);
         assert_eq!(entries_lost, 0);
 
         // Verify document is still readable
+        assert_eq!(storage.get_text(doc_id1).unwrap(), text1);
+    }
+
+    #[tokio::test]
+    async fn test_truncate_to_last_valid_with_corruption_at_end() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store several valid text entries
+        let doc_id1 = DocumentId::new();
+        let text1 = "First valid document";
+        storage.store_text(doc_id1, text1).unwrap();
+
+        let doc_id2 = DocumentId::new();
+        let text2 = "Second valid document";
+        storage.store_text(doc_id2, text2).unwrap();
+
+        let valid_offset = storage.data_header.next_text_offset;
+
+        // Manually corrupt the file by writing invalid data at the end
+        let corrupt_data = b"CORRUPTED_DATA_INVALID_LENGTH_PREFIX";
+        storage.text_data_file.write_at(valid_offset, corrupt_data).unwrap();
+        storage.data_header.next_text_offset = valid_offset + corrupt_data.len() as u64;
+
+        // Call truncate_to_last_valid - should truncate the corruption
+        let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
+
+        // Should truncate back to the end of valid data
+        assert_eq!(new_offset, valid_offset);
+        assert_eq!(entries_lost, 1); // One corrupted entry removed
+
+        // Verify both valid documents are still readable
+        assert_eq!(storage.get_text(doc_id1).unwrap(), text1);
+        assert_eq!(storage.get_text(doc_id2).unwrap(), text2);
+    }
+
+    #[tokio::test]
+    async fn test_truncate_to_last_valid_with_mixed_corruption() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store valid text entry
+        let doc_id1 = DocumentId::new();
+        let text1 = "Only valid document";
+        storage.store_text(doc_id1, text1).unwrap();
+
+        let valid_end_offset = storage.data_header.next_text_offset;
+
+        // Simulate corruption by manually writing invalid length prefix
+        // Write a length that exceeds remaining file space
+        let invalid_length = 0xFFFFFFFFu32; // Extremely large length
+        storage.text_data_file.write_at(valid_end_offset, &invalid_length.to_le_bytes()).unwrap();
+        storage.data_header.next_text_offset = valid_end_offset + 4;
+
+        // Call truncate_to_last_valid
+        let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
+
+        // Should truncate at the end of the last valid entry
+        assert_eq!(new_offset, valid_end_offset);
+        assert_eq!(entries_lost, 1);
+
+        // Verify the valid document is still readable
+        assert_eq!(storage.get_text(doc_id1).unwrap(), text1);
+    }
+
+    #[tokio::test]
+    async fn test_truncate_to_last_valid_all_entries_corrupted() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        let header_end = TextDataHeader::SIZE as u64;
+
+        // Write corrupted data starting right after header
+        let corrupt_data = b"COMPLETELY_INVALID_DATA_NO_VALID_LENGTH_PREFIX";
+        storage.text_data_file.write_at(header_end, corrupt_data).unwrap();
+        storage.data_header.next_text_offset = header_end + corrupt_data.len() as u64;
+
+        // Call truncate_to_last_valid
+        let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
+
+        // Should truncate back to header end (no valid entries)
+        assert_eq!(new_offset, header_end);
+        assert_eq!(entries_lost, 1);
+        assert_eq!(storage.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_truncate_to_last_valid_large_file_with_corruption() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store many valid entries to create a larger file
+        let mut doc_ids = Vec::new();
+        let mut texts = Vec::new();
+        for i in 0..50 {
+            let doc_id = DocumentId::new();
+            let text = format!("Valid document number {} with some content to make it larger", i);
+            storage.store_text(doc_id, &text).unwrap();
+            doc_ids.push(doc_id);
+            texts.push(text);
+        }
+
+        let valid_end_offset = storage.data_header.next_text_offset;
+
+        // Add corruption at the end
+        let corrupt_data = vec![0xFF; 100]; // Invalid data
+        storage.text_data_file.write_at(valid_end_offset, &corrupt_data).unwrap();
+        storage.data_header.next_text_offset = valid_end_offset + corrupt_data.len() as u64;
+
+        // Call truncate_to_last_valid
+        let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
+
+        // Should truncate at the end of valid data
+        assert_eq!(new_offset, valid_end_offset);
+        assert_eq!(entries_lost, 1);
+
+        // Verify all valid documents are still readable
+        for (doc_id, expected_text) in doc_ids.iter().zip(texts.iter()) {
+            assert_eq!(storage.get_text(*doc_id).unwrap(), *expected_text);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_truncate_to_last_valid_invalid_utf8_corruption() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store valid text entry
+        let doc_id1 = DocumentId::new();
+        let text1 = "Valid UTF-8 document";
+        storage.store_text(doc_id1, text1).unwrap();
+
+        let valid_end_offset = storage.data_header.next_text_offset;
+
+        // Create corruption with valid length prefix but invalid UTF-8 data
+        let text_length = 10u32;
+        let invalid_utf8_data = vec![0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8, 0xF7, 0xF6]; // Invalid UTF-8
+
+        // Write length prefix and invalid UTF-8 data
+        storage.text_data_file.write_at(valid_end_offset, &text_length.to_le_bytes()).unwrap();
+        storage.text_data_file.write_at(valid_end_offset + 4, &invalid_utf8_data).unwrap();
+        storage.data_header.next_text_offset = valid_end_offset + 4 + invalid_utf8_data.len() as u64;
+
+        // Call truncate_to_last_valid
+        let (new_offset, entries_lost) = storage.truncate_to_last_valid().await.unwrap();
+
+        // Should truncate at the end of the last valid UTF-8 entry
+        assert_eq!(new_offset, valid_end_offset);
+        assert_eq!(entries_lost, 1);
+
+        // Verify the valid document is still readable
         assert_eq!(storage.get_text(doc_id1).unwrap(), text1);
     }
 }

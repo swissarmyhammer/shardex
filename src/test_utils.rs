@@ -16,7 +16,6 @@ use tempfile::TempDir;
 /// These macros provide standardized test setup patterns that automatically
 /// handle TestEnvironment creation, variable naming consistency, and test name
 /// string literal elimination.
-
 /// Error handling utilities for tests
 pub mod error {
     use crate::error::ShardexError;
