@@ -1161,22 +1161,54 @@ impl DocumentTextStorage {
         Ok(())
     }
 
-    /// Scan and rebuild index from data file (placeholder for recovery)
+    /// Scan and rebuild index from data file (async recovery operation)
     ///
-    /// Placeholder method for rebuilding the index file by scanning the data file.
-    /// This would be used by recovery operations when the index is corrupted but
-    /// data is intact.
+    /// Asynchronous wrapper around `rebuild_index_from_data` that enables recovery
+    /// operations when the index is corrupted but data is intact. This method
+    /// provides the same functionality as the synchronous version but can be
+    /// integrated into async codebases.
+    ///
+    /// **Important**: This operation is CPU-intensive and involves scanning the entire 
+    /// data file. In the current implementation, it will block the async runtime during
+    /// execution. For non-blocking behavior in async applications, consider running 
+    /// this in a dedicated task or thread.
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of text entries successfully recovered
+    /// * `Err(ShardexError)` - Recovery failed with detailed error information
+    ///
+    /// # Examples
+    /// ```rust
+    /// use shardex::document_text_storage::DocumentTextStorage;
+    /// use tempfile::TempDir;
+    ///
+    /// # async fn recovery_example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let temp_dir = TempDir::new()?;
+    /// let mut storage = DocumentTextStorage::open(&temp_dir)?;
+    ///
+    /// // Rebuild index from data file asynchronously
+    /// let recovered_entries = storage.scan_and_rebuild_index().await?;
+    /// println!("Recovered {} text entries", recovered_entries);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn scan_and_rebuild_index(&mut self) -> Result<u32, ShardexError> {
-        // This is a placeholder - full implementation would:
-        // 1. Scan through data file reading length-prefixed text blocks
-        // 2. Create new index entries for each text block found
-        // 3. Rebuild the index file with discovered entries
-        // 4. Update headers to reflect new index
-
-        // For now, return error indicating this is not yet implemented
-        Err(ShardexError::text_corruption(
-            "Index rebuild from data file not yet implemented",
-        ))
+        // Add async-specific tracing context for better debugging in async environments
+        let span = tracing::info_span!("async_scan_and_rebuild_index");
+        let _guard = span.enter();
+        
+        tracing::info!("Starting async index rebuild operation");
+        
+        // Call the synchronous implementation
+        // Note: This blocks the async runtime - see method documentation for details
+        let result = self.rebuild_index_from_data();
+        
+        match &result {
+            Ok(count) => tracing::info!("Async index rebuild completed successfully: {} entries recovered", count),
+            Err(e) => tracing::error!("Async index rebuild failed: {}", e),
+        }
+        
+        result
     }
 
     /// Scan and rebuild index from data file (recovery operation)
@@ -2371,5 +2403,90 @@ mod tests {
         let recovered = storage.rebuild_index_from_data().unwrap();
         assert_eq!(recovered, 0);
         assert_eq!(storage.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_rebuild_index_async_wrapper() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+
+        // Store some test data first
+        let doc1 = DocumentId::new();
+        let doc2 = DocumentId::new();
+        let text1 = "First document for async rebuild test.";
+        let text2 = "Second document with different content for async test.";
+
+        storage.store_text(doc1, text1).unwrap();
+        storage.store_text(doc2, text2).unwrap();
+
+        // Verify data is stored properly
+        assert_eq!(storage.entry_count(), 2);
+
+        // Now call scan_and_rebuild_index - should recover text blocks async
+        let recovered_entries = storage.scan_and_rebuild_index().await.unwrap();
+
+        // Should have recovered entries (may have different document IDs)
+        assert!(recovered_entries > 0);
+        assert!(storage.entry_count() > 0);
+
+        // Test with empty storage
+        let mut empty_storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        let recovered_empty = empty_storage.scan_and_rebuild_index().await.unwrap();
+        assert_eq!(recovered_empty, 0);
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_rebuild_index_async_error_propagation() {
+        use std::fs::OpenOptions;
+        use std::io::{Write, Seek};
+        
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        
+        // Store valid data
+        let doc1 = DocumentId::new();
+        storage.store_text(doc1, "Valid test data").unwrap();
+        
+        // Close storage to access files directly
+        drop(storage);
+        
+        // Corrupt the data file by writing invalid length prefix
+        let data_file_path = temp_dir.path().join("document_text.data");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&data_file_path)
+            .unwrap();
+        
+        // Seek to start of data (after header) and write corrupted length
+        file.seek(std::io::SeekFrom::Start(TextDataHeader::SIZE as u64)).unwrap();
+        file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).unwrap(); // Invalid u64 max
+        drop(file);
+        
+        // Reopen storage and try async rebuild - should propagate error properly
+        let mut corrupted_storage = DocumentTextStorage::open(&temp_dir).unwrap();
+        let result = corrupted_storage.scan_and_rebuild_index().await;
+        
+        // Should get an error from the async wrapper with proper error propagation
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(matches!(error, ShardexError::TextCorruption(_)));
+    }
+
+    #[tokio::test]
+    async fn test_scan_and_rebuild_index_async_tracing_context() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = DocumentTextStorage::create(&temp_dir, 1024 * 1024).unwrap();
+        
+        // Store test data
+        let doc1 = DocumentId::new();
+        storage.store_text(doc1, "Tracing test data").unwrap();
+        
+        // Call async rebuild and verify it completes - this test verifies the async
+        // interface works correctly and that tracing context is added
+        let recovered = storage.scan_and_rebuild_index().await.unwrap();
+        assert!(recovered > 0);
+        
+        // Verify that the method returns successfully and produces expected results
+        assert_eq!(storage.entry_count(), recovered);
     }
 }

@@ -17,12 +17,6 @@ use tempfile::TempDir;
 /// handle TestEnvironment creation, variable naming consistency, and test name
 /// string literal elimination.
 
-
-
-
-
-
-
 /// Error handling utilities for tests
 pub mod error {
     use crate::error::ShardexError;
@@ -650,7 +644,7 @@ impl WalTestEnv {
             .ensure_wal_dir()
             .map_err(|e| ShardexError::Wal(format!("Failed to create WAL directory: {}", e)))?;
 
-        let layout = crate::layout::DirectoryLayout::new(self.env.path().to_path_buf());
+        let layout = crate::layout::DirectoryLayout::new(self.env.path());
         let wal_manager = crate::wal::WalManager::new(layout, Self::DEFAULT_WAL_SEGMENT_SIZE);
 
         Ok((self.env, self.config, wal_manager))
