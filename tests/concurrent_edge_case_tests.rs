@@ -4,10 +4,10 @@
 //! in production environments, including memory pressure, crashes, and
 //! concurrent reader/writer failures.
 
-use shardex::ShardexConfig;
 use shardex::concurrent::ConcurrentShardex;
 use shardex::cow_index::CowShardexIndex;
 use shardex::shardex_index::ShardexIndex;
+use shardex::ShardexConfig;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

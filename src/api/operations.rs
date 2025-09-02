@@ -40,7 +40,7 @@ use std::sync::OnceLock;
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Execute an async operation synchronously using a shared runtime
-/// 
+///
 /// NOTE: This function cannot be called from within a tokio runtime context
 /// as it will cause a "Cannot start a runtime from within a runtime" panic.
 /// All API operations are synchronous and should be called from synchronous contexts.
@@ -917,24 +917,23 @@ impl ApiOperation<ShardexContext, GetPerformanceStatsParams> for GetPerformanceS
             // Fallback to basic metrics when tracking is not active
             (0, Duration::default(), 0.0)
         };
-        
+
         // Use actual performance metrics from context when available, otherwise fall back to index stats
         let final_total_operations = if total_operations > 0 {
             total_operations
         } else {
             u64::try_from(index_stats.total_postings).unwrap_or(u64::MAX)
         };
-        
-        let memory_usage = u64::try_from(index_stats.memory_usage)
-            .unwrap_or(u64::MAX); // Handle potential overflow on 32-bit systems
-        
+
+        let memory_usage = u64::try_from(index_stats.memory_usage).unwrap_or(u64::MAX); // Handle potential overflow on 32-bit systems
+
         // Use context performance data if available, otherwise fall back to index stats
         let final_average_latency = if overall_latency > Duration::default() {
             overall_latency
         } else {
             index_stats.search_latency_p50 // Use 50th percentile as fallback
         };
-        
+
         // Use context throughput if available, otherwise calculate from index stats
         let final_throughput = if throughput > 0.0 {
             throughput
@@ -948,9 +947,20 @@ impl ApiOperation<ShardexContext, GetPerformanceStatsParams> for GetPerformanceS
         let stats = if parameters.include_detailed {
             // Create detailed metrics (placeholder implementation)
             let detailed = DetailedPerformanceMetrics::new();
-            PerformanceStats::with_details(final_total_operations, final_average_latency, final_throughput, memory_usage, detailed)
+            PerformanceStats::with_details(
+                final_total_operations,
+                final_average_latency,
+                final_throughput,
+                memory_usage,
+                detailed,
+            )
         } else {
-            PerformanceStats::basic(final_total_operations, final_average_latency, final_throughput, memory_usage)
+            PerformanceStats::basic(
+                final_total_operations,
+                final_average_latency,
+                final_throughput,
+                memory_usage,
+            )
         };
 
         Ok(stats)
@@ -1043,7 +1053,7 @@ impl ApiOperation<ShardexContext, IncrementalAddParams> for IncrementalAdd {
 /// Documents are queued for removal and processed asynchronously during the next flush cycle.
 ///
 /// # Important Notes
-/// 
+///
 /// - Documents are queued for removal via Write-Ahead Log (WAL) and processed asynchronously
 /// - The operation succeeds if documents are successfully queued, regardless of whether
 ///   the documents actually exist in the index

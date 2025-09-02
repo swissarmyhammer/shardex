@@ -10,8 +10,7 @@
 use apithing::ApiOperation;
 use shardex::{
     api::{
-        CreateIndex, CreateIndexParams,
-        ExtractSnippet, ExtractSnippetParams, GetDocumentText, GetDocumentTextParams,
+        CreateIndex, CreateIndexParams, ExtractSnippet, ExtractSnippetParams, GetDocumentText, GetDocumentTextParams,
         ShardexContext, StoreDocumentText, StoreDocumentTextParams,
     },
     DocumentId, Posting, ShardexConfig, ShardexError,
@@ -60,12 +59,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Run different advanced scenarios - simplified for demo performance
     println!("\\n=== Advanced Document Operations Demo ===");
     println!("Running lightweight versions of advanced operations...");
-    
+
     // Simplified batch processing demo
     simple_batch_demo(&mut context)?;
     document_updates_example(&mut context)?;
     error_handling_examples(&mut context)?;
-    
+
     println!("\\n=== Note ===");
     println!("Full batch operations, performance tests, and large document");
     println!("processing are available but disabled for demo performance.");
@@ -76,8 +75,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-
-
 
 /// Simple demonstration of batch-like processing without heavy operations.
 fn simple_batch_demo(context: &mut ShardexContext) -> Result<(), Box<dyn Error>> {
@@ -94,7 +91,7 @@ fn simple_batch_demo(context: &mut ShardexContext) -> Result<(), Box<dyn Error>>
 
     for (i, (text, keywords)) in documents.iter().enumerate() {
         let doc_id = DocumentId::from_raw((i as u128) + DEMO_DOCUMENT_BASE_ID);
-        
+
         // Create simple postings
         let mut postings = Vec::new();
         for keyword in keywords {
@@ -111,7 +108,7 @@ fn simple_batch_demo(context: &mut ShardexContext) -> Result<(), Box<dyn Error>>
         let store_params = StoreDocumentTextParams::new(doc_id, text.to_string(), postings)?;
         StoreDocumentText::execute(context, &store_params)?;
         docs_processed += 1;
-        
+
         println!("  Processed: {}", text);
     }
 
@@ -383,10 +380,6 @@ fn error_handling_examples(context: &mut ShardexContext) -> Result<(), Box<dyn E
     Ok(())
 }
 
-
-
-
-
 /// Generate a keyword-based vector representation using multi-layered hashing.
 ///
 /// This function creates dense vector embeddings for keywords and phrases using:
@@ -440,8 +433,6 @@ fn generate_keyword_vector(keyword: &str, dimension: usize) -> Vec<f32> {
 
     vector
 }
-
-
 
 /// Simple hash function for demonstration purposes using FNV-like algorithm.
 ///

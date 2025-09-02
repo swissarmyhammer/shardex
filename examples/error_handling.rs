@@ -6,15 +6,15 @@
 //! - Input validation and error prevention
 //! - Robust application patterns
 
-use shardex::{
-    DocumentId, Posting, ShardexError,
-    api::{
-        ShardexContext,
-        operations::{CreateIndex, OpenIndex, AddPostings, Search, Flush},
-        parameters::{CreateIndexParams, OpenIndexParams, AddPostingsParams, SearchParams, FlushParams},
-    }
-};
 use apithing::ApiOperation;
+use shardex::{
+    api::{
+        operations::{AddPostings, CreateIndex, Flush, OpenIndex, Search},
+        parameters::{AddPostingsParams, CreateIndexParams, FlushParams, OpenIndexParams, SearchParams},
+        ShardexContext,
+    },
+    DocumentId, Posting, ShardexError,
+};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -38,7 +38,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let create_params = match CreateIndexParams::builder()
         .directory_path(temp_dir.clone())
         .vector_size(128)
-        .build() {
+        .build()
+    {
         Ok(params) => params,
         Err(e) => {
             eprintln!("✗ Failed to build create params: {}", e);
@@ -99,13 +100,12 @@ fn demonstrate_config_errors(temp_dir: &std::path::Path) {
     match CreateIndexParams::builder()
         .directory_path(temp_dir.join("invalid1"))
         .vector_size(0)
-        .build() {
-        Ok(params) => {
-            match CreateIndex::execute(&mut context1, &params) {
-                Ok(_) => println!("✗ Unexpected success with invalid vector size"),
-                Err(e) => println!("✓ Caught configuration error: {}", e),
-            }
-        }
+        .build()
+    {
+        Ok(params) => match CreateIndex::execute(&mut context1, &params) {
+            Ok(_) => println!("✗ Unexpected success with invalid vector size"),
+            Err(e) => println!("✓ Caught configuration error: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught configuration validation error: {}", e);
         }
@@ -116,13 +116,12 @@ fn demonstrate_config_errors(temp_dir: &std::path::Path) {
     match CreateIndexParams::builder()
         .directory_path(temp_dir.join("invalid2"))
         .shard_size(0)
-        .build() {
-        Ok(params) => {
-            match CreateIndex::execute(&mut context2, &params) {
-                Ok(_) => println!("✗ Unexpected success with invalid shard size"),
-                Err(e) => println!("✓ Caught configuration error: {}", e),
-            }
-        }
+        .build()
+    {
+        Ok(params) => match CreateIndex::execute(&mut context2, &params) {
+            Ok(_) => println!("✗ Unexpected success with invalid shard size"),
+            Err(e) => println!("✓ Caught configuration error: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught configuration validation error: {}", e);
         }
@@ -132,13 +131,12 @@ fn demonstrate_config_errors(temp_dir: &std::path::Path) {
     let mut context3 = ShardexContext::new();
     match CreateIndexParams::builder()
         .directory_path("".into())
-        .build() {
-        Ok(params) => {
-            match CreateIndex::execute(&mut context3, &params) {
-                Ok(_) => println!("✗ Unexpected success with empty directory path"),
-                Err(e) => println!("✓ Caught error for empty path: {}", e),
-            }
-        }
+        .build()
+    {
+        Ok(params) => match CreateIndex::execute(&mut context3, &params) {
+            Ok(_) => println!("✗ Unexpected success with empty directory path"),
+            Err(e) => println!("✓ Caught error for empty path: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught configuration validation error: {}", e);
         }
@@ -155,15 +153,13 @@ fn demonstrate_input_validation(context: &mut ShardexContext) {
     };
 
     match AddPostingsParams::new(vec![posting_wrong_dim]) {
-        Ok(params) => {
-            match AddPostings::execute(context, &params) {
-                Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
-                Err(ShardexError::InvalidDimension { expected, actual }) => {
-                    println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
-                }
-                Err(e) => println!("✗ Unexpected error type: {}", e),
+        Ok(params) => match AddPostings::execute(context, &params) {
+            Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
+            Err(ShardexError::InvalidDimension { expected, actual }) => {
+                println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
             }
-        }
+            Err(e) => println!("✗ Unexpected error type: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error: {}", e);
         }
@@ -178,14 +174,12 @@ fn demonstrate_input_validation(context: &mut ShardexContext) {
     };
 
     match AddPostingsParams::new(vec![posting_empty_vector]) {
-        Ok(params) => {
-            match AddPostings::execute(context, &params) {
-                Ok(_) => println!("✗ Unexpected success with empty vector"),
-                Err(e) => {
-                    println!("✓ Caught error for empty vector: {}", e);
-                }
+        Ok(params) => match AddPostings::execute(context, &params) {
+            Ok(_) => println!("✗ Unexpected success with empty vector"),
+            Err(e) => {
+                println!("✓ Caught error for empty vector: {}", e);
             }
-        }
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error: {}", e);
         }
@@ -193,12 +187,10 @@ fn demonstrate_input_validation(context: &mut ShardexContext) {
 
     // Empty postings list using ApiThing pattern
     match AddPostingsParams::new(vec![]) {
-        Ok(params) => {
-            match AddPostings::execute(context, &params) {
-                Ok(_) => println!("✓ Empty postings list handled gracefully"),
-                Err(e) => println!("✗ Unexpected error for empty postings: {}", e),
-            }
-        }
+        Ok(params) => match AddPostings::execute(context, &params) {
+            Ok(_) => println!("✓ Empty postings list handled gracefully"),
+            Err(e) => println!("✗ Unexpected error for empty postings: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error for empty postings: {}", e);
         }
@@ -214,14 +206,12 @@ fn demonstrate_input_validation(context: &mut ShardexContext) {
     };
 
     match AddPostingsParams::new(vec![valid_posting]) {
-        Ok(params) => {
-            match AddPostings::execute(&mut uninitialized_context, &params) {
-                Ok(_) => println!("✗ Unexpected success with uninitialized context"),
-                Err(e) => {
-                    println!("✓ Caught context error: {}", e);
-                }
+        Ok(params) => match AddPostings::execute(&mut uninitialized_context, &params) {
+            Ok(_) => println!("✗ Unexpected success with uninitialized context"),
+            Err(e) => {
+                println!("✓ Caught context error: {}", e);
             }
-        }
+        },
         Err(e) => println!("✗ Unexpected parameter validation error: {}", e),
     }
 }
@@ -231,7 +221,7 @@ fn demonstrate_io_errors(temp_dir: &std::path::Path) {
     let non_existent = temp_dir.join("does_not_exist");
     let mut context1 = ShardexContext::new();
     let open_params = OpenIndexParams::new(non_existent);
-    
+
     match OpenIndex::execute(&mut context1, &open_params) {
         Ok(_) => println!("✗ Unexpected success opening non-existent index"),
         Err(e) => {
@@ -247,15 +237,14 @@ fn demonstrate_io_errors(temp_dir: &std::path::Path) {
     match CreateIndexParams::builder()
         .directory_path(file_path)
         .vector_size(128)
-        .build() {
-        Ok(params) => {
-            match CreateIndex::execute(&mut context2, &params) {
-                Ok(_) => println!("✗ Unexpected success with file instead of directory"),
-                Err(e) => {
-                    println!("✓ Caught error when directory path is a file: {}", e);
-                }
+        .build()
+    {
+        Ok(params) => match CreateIndex::execute(&mut context2, &params) {
+            Ok(_) => println!("✗ Unexpected success with file instead of directory"),
+            Err(e) => {
+                println!("✓ Caught error when directory path is a file: {}", e);
             }
-        }
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error: {}", e);
         }
@@ -268,16 +257,15 @@ fn demonstrate_search_errors(context: &mut ShardexContext) {
     match SearchParams::builder()
         .query_vector(wrong_query)
         .k(5)
-        .build() {
-        Ok(params) => {
-            match Search::execute(context, &params) {
-                Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
-                Err(ShardexError::InvalidDimension { expected, actual }) => {
-                    println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
-                }
-                Err(e) => println!("✗ Unexpected error type: {}", e),
+        .build()
+    {
+        Ok(params) => match Search::execute(context, &params) {
+            Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
+            Err(ShardexError::InvalidDimension { expected, actual }) => {
+                println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
             }
-        }
+            Err(e) => println!("✗ Unexpected error type: {}", e),
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error: {}", e);
         }
@@ -288,15 +276,14 @@ fn demonstrate_search_errors(context: &mut ShardexContext) {
     match SearchParams::builder()
         .query_vector(empty_query)
         .k(5)
-        .build() {
-        Ok(params) => {
-            match Search::execute(context, &params) {
-                Ok(_) => println!("✗ Unexpected success with empty query"),
-                Err(e) => {
-                    println!("✓ Caught error for empty query: {}", e);
-                }
+        .build()
+    {
+        Ok(params) => match Search::execute(context, &params) {
+            Ok(_) => println!("✗ Unexpected success with empty query"),
+            Err(e) => {
+                println!("✓ Caught error for empty query: {}", e);
             }
-        }
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error for empty query: {}", e);
         }
@@ -307,15 +294,14 @@ fn demonstrate_search_errors(context: &mut ShardexContext) {
     match SearchParams::builder()
         .query_vector(valid_query)
         .k(0)
-        .build() {
-        Ok(params) => {
-            match Search::execute(context, &params) {
-                Ok(_) => println!("✗ Unexpected success with k=0"),
-                Err(e) => {
-                    println!("✓ Caught error for k=0: {}", e);
-                }
+        .build()
+    {
+        Ok(params) => match Search::execute(context, &params) {
+            Ok(_) => println!("✗ Unexpected success with k=0"),
+            Err(e) => {
+                println!("✓ Caught error for k=0: {}", e);
             }
-        }
+        },
         Err(e) => {
             println!("✓ Caught parameter validation error for k=0: {}", e);
         }
@@ -326,15 +312,14 @@ fn demonstrate_search_errors(context: &mut ShardexContext) {
     match SearchParams::builder()
         .query_vector(vec![0.1; 128])
         .k(5)
-        .build() {
-        Ok(params) => {
-            match Search::execute(&mut uninitialized_context, &params) {
-                Ok(_) => println!("✗ Unexpected success with uninitialized context"),
-                Err(e) => {
-                    println!("✓ Caught context error for search: {}", e);
-                }
+        .build()
+    {
+        Ok(params) => match Search::execute(&mut uninitialized_context, &params) {
+            Ok(_) => println!("✗ Unexpected success with uninitialized context"),
+            Err(e) => {
+                println!("✓ Caught context error for search: {}", e);
             }
-        }
+        },
         Err(e) => println!("✗ Unexpected parameter validation error: {}", e),
     }
 }
@@ -351,7 +336,8 @@ fn demonstrate_robust_patterns(temp_dir: &std::path::Path) -> Result<(), Box<dyn
             match CreateIndexParams::builder()
                 .directory_path(temp_dir.join("robust_index"))
                 .vector_size(128)
-                .build() {
+                .build()
+            {
                 Ok(params) => CreateIndex::execute(&mut context, &params),
                 Err(e) => Err(e),
             }
@@ -411,28 +397,27 @@ fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(), Box
     let _context = loop {
         attempts += 1;
         let mut context = ShardexContext::new();
-        
+
         match CreateIndexParams::builder()
             .directory_path(index_path.clone())
             .vector_size(128)
-            .build() {
-            Ok(params) => {
-                match CreateIndex::execute(&mut context, &params) {
-                    Ok(_) => {
-                        println!("    ✓ Index created successfully on attempt {}", attempts);
-                        break context;
-                    }
-                    Err(e) if attempts < 3 => {
-                        println!("    ⚠ Error on attempt {}, retrying: {}", attempts, e);
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        continue;
-                    }
-                    Err(e) => {
-                        println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
-                        return Err(e.into());
-                    }
+            .build()
+        {
+            Ok(params) => match CreateIndex::execute(&mut context, &params) {
+                Ok(_) => {
+                    println!("    ✓ Index created successfully on attempt {}", attempts);
+                    break context;
                 }
-            }
+                Err(e) if attempts < 3 => {
+                    println!("    ⚠ Error on attempt {}, retrying: {}", attempts, e);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => {
+                    println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
+                    return Err(e.into());
+                }
+            },
             Err(e) => {
                 println!("    ✗ Failed to build parameters: {}", e);
                 return Err(e.into());
@@ -473,30 +458,27 @@ fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(), Box
 
     // Strategy 3: Context state validation
     println!("\n  Strategy 3: Context state validation");
-    
+
     let mut uninitialized_context = ShardexContext::new();
     if !uninitialized_context.is_initialized() {
         println!("    ✓ Detected uninitialized context before operation");
-        
+
         // Initialize context first
         match CreateIndexParams::builder()
             .directory_path(temp_dir.join("strategy3_index"))
             .vector_size(128)
-            .build() {
-            Ok(params) => {
-                match CreateIndex::execute(&mut uninitialized_context, &params) {
-                    Ok(_) => println!("    ✓ Context initialized successfully"),
-                    Err(e) => println!("    ✗ Failed to initialize context: {}", e),
-                }
-            }
+            .build()
+        {
+            Ok(params) => match CreateIndex::execute(&mut uninitialized_context, &params) {
+                Ok(_) => println!("    ✓ Context initialized successfully"),
+                Err(e) => println!("    ✗ Failed to initialize context: {}", e),
+            },
             Err(e) => println!("    ✗ Failed to build parameters: {}", e),
         }
     }
 
     Ok(())
 }
-
-
 
 fn retry_with_backoff<F, T, E>(mut operation: F, max_retries: usize) -> Result<T, E>
 where
@@ -519,13 +501,12 @@ where
     unreachable!()
 }
 
-
-
-
-
-fn create_or_recover_index_apithing_with_vector_size(path: std::path::PathBuf, vector_size: usize) -> Result<ShardexContext, ShardexError> {
+fn create_or_recover_index_apithing_with_vector_size(
+    path: std::path::PathBuf,
+    vector_size: usize,
+) -> Result<ShardexContext, ShardexError> {
     let mut context = ShardexContext::new();
-    
+
     // Try to open existing index first using ApiThing pattern
     let open_params = OpenIndexParams::new(path.clone());
     match OpenIndex::execute(&mut context, &open_params) {
@@ -539,7 +520,8 @@ fn create_or_recover_index_apithing_with_vector_size(path: std::path::PathBuf, v
             match CreateIndexParams::builder()
                 .directory_path(path)
                 .vector_size(vector_size)
-                .build() {
+                .build()
+            {
                 Ok(create_params) => {
                     CreateIndex::execute(&mut new_context, &create_params)?;
                     println!("    ✓ Created new index using ApiThing pattern");

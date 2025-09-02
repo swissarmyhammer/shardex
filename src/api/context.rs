@@ -716,30 +716,6 @@ impl ShardexContext {
         self.index.as_mut()
     }
 
-    /// Internal method to set the current statistics.
-    ///
-    /// This is used by operations to update the cached statistics after
-    /// performing operations that affect index state.
-    pub(crate) fn set_stats(&mut self, stats: DetailedIndexStats) {
-        self.stats = Some(stats);
-    }
-
-    /// Internal method to set the performance monitor.
-    ///
-    /// This is used by operations that enable performance monitoring.
-    pub(crate) fn set_monitor(&mut self, monitor: MonitoringPerformanceMonitor) {
-        self.monitor = Some(monitor);
-    }
-
-    /// Internal method to clear the index and associated state.
-    ///
-    /// This is used when the index is closed or when operations fail
-    /// in a way that invalidates the current index state.
-    pub(crate) fn clear_index(&mut self) {
-        self.index = None;
-        self.stats = None;
-        // Keep monitor as it can be reused
-    }
 }
 
 #[cfg(test)]

@@ -9,9 +9,9 @@
 use apithing::ApiOperation;
 use shardex::{
     api::{
-        AddPostings, AddPostingsParams, CreateIndex, CreateIndexParams,
-        ExtractSnippet, ExtractSnippetParams, Flush, FlushParams, GetDocumentText, GetDocumentTextParams, GetStats, GetStatsParams,
-        Search, SearchParams, ShardexContext, StoreDocumentText, StoreDocumentTextParams,
+        AddPostings, AddPostingsParams, CreateIndex, CreateIndexParams, ExtractSnippet, ExtractSnippetParams, Flush,
+        FlushParams, GetDocumentText, GetDocumentTextParams, GetStats, GetStatsParams, Search, SearchParams,
+        ShardexContext, StoreDocumentText, StoreDocumentTextParams,
     },
     DocumentId, Posting, ShardexConfig,
 };
@@ -65,7 +65,7 @@ fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box<dyn E
 
     // Create index using CreateIndexParams from the config
     let create_params = CreateIndexParams::from_shardex_config(config.clone());
-    
+
     println!("Configuration for memory-constrained environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -160,7 +160,7 @@ fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>
 
     // Create index using CreateIndexParams from the config
     let create_params = CreateIndexParams::from_shardex_config(config.clone());
-    
+
     println!("Configuration for high-capacity environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -293,7 +293,7 @@ fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), Box<dy
 
     let mut context = ShardexContext::with_config(config.clone());
     let create_params = CreateIndexParams::from_shardex_config(config.clone());
-    
+
     println!("Configuration optimized for balanced performance:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -334,7 +334,7 @@ fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), Box<dy
     }
     let insert_time = insert_start.elapsed();
 
-    // Force flush and measure  
+    // Force flush and measure
     let flush_start = Instant::now();
     let flush_params = FlushParams::with_stats();
     let flush_stats = Flush::execute(&mut context, &flush_params)?;
@@ -671,8 +671,7 @@ fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), Box<dyn
                 result.start,
                 std::cmp::min(result.length, 100), // First 100 chars
             )?;
-            if let Ok(code_snippet) = ExtractSnippet::execute(&mut context, &extract_params)
-            {
+            if let Ok(code_snippet) = ExtractSnippet::execute(&mut context, &extract_params) {
                 println!("      Match: '{}'", code_snippet.replace('\n', " "));
             }
         }

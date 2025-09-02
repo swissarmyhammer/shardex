@@ -3,10 +3,10 @@
 //! This test suite verifies the concurrent read/write coordination system provides
 //! safe, deadlock-free access patterns under high contention scenarios.
 
-use shardex::ShardexConfig;
 use shardex::concurrent::{ConcurrencyConfig, ConcurrentShardex};
 use shardex::cow_index::CowShardexIndex;
 use shardex::shardex_index::ShardexIndex;
+use shardex::ShardexConfig;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

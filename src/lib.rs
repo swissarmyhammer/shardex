@@ -37,7 +37,7 @@
 //!
 //! ```rust
 //! use apithing::ApiOperation;
-//! 
+//!
 //! let result = OperationType::execute(&mut context, &parameters)?;
 //! ```
 //!
@@ -278,19 +278,46 @@ pub use structures::{IndexStats, Posting, SearchResult};
 
 // Primary API - ApiThing pattern (recommended approach)
 pub use api::{
+    // Operations
+    AddPostings,
+    // Parameter types
+    AddPostingsParams,
+    BatchAddPostings,
+    BatchAddPostingsParams,
+    BatchDocumentTextStats,
+    // Output types
+    BatchStats,
+    BatchStoreDocumentText,
+    BatchStoreDocumentTextParams,
+    CreateIndex,
+    CreateIndexParams,
+    DetailedIndexStats,
+    DetailedPerformanceMetrics,
+    DocumentTextEntry,
+    ExtractSnippet,
+    ExtractSnippetParams,
+    Flush,
+    FlushParams,
+    GetDocumentText,
+    GetDocumentTextParams,
+    GetPerformanceStats,
+    GetPerformanceStatsParams,
+    GetStats,
+    GetStatsParams,
+    IncrementalAdd,
+    IncrementalAddParams,
+    IncrementalStats,
+    PerformanceStats,
+    RemovalStats,
+    RemoveDocuments,
+    RemoveDocumentsParams,
+    Search,
+    SearchParams,
+    SearchResultWithText,
     // Context
     ShardexContext,
-    // Operations
-    AddPostings, BatchAddPostings, BatchStoreDocumentText, CreateIndex, ExtractSnippet,
-    Flush, GetDocumentText, GetPerformanceStats, GetStats, IncrementalAdd, RemoveDocuments,
-    Search, StoreDocumentText,
-    // Parameter types
-    AddPostingsParams, BatchAddPostingsParams, BatchStoreDocumentTextParams, CreateIndexParams,
-    ExtractSnippetParams, FlushParams, GetDocumentTextParams, GetPerformanceStatsParams,
-    GetStatsParams, IncrementalAddParams, RemoveDocumentsParams, SearchParams, StoreDocumentTextParams,
-    // Output types
-    BatchStats, BatchDocumentTextStats, DetailedIndexStats, DetailedPerformanceMetrics, IncrementalStats,
-    PerformanceStats, RemovalStats, SearchResultWithText, DocumentTextEntry,
+    StoreDocumentText,
+    StoreDocumentTextParams,
 };
 
 // Legacy API (deprecated - use api module instead)
@@ -302,33 +329,33 @@ pub use config::ShardexConfig;
 
 // Internal re-exports for testing (not part of public API - subject to change)
 #[doc(hidden)]
+pub use async_document_text_storage::{AsyncDocumentTextStorage, AsyncStorageConfig};
+#[doc(hidden)]
+pub use concurrent_document_text_storage::{ConcurrentDocumentTextStorage, ConcurrentStorageConfig};
+#[doc(hidden)]
+pub use cow_index::CowShardexIndex;
+#[doc(hidden)]
 pub use crash_recovery::CrashRecovery;
 #[doc(hidden)]
+pub use document_text_storage::DocumentTextStorage;
+#[doc(hidden)]
 pub use layout::DirectoryLayout;
+#[doc(hidden)]
+pub use monitoring::PerformanceMonitor as MonitoringPerformanceMonitor;
+#[doc(hidden)]
+pub use posting_storage::PostingStorage;
 #[doc(hidden)]
 pub use shard::Shard;
 #[doc(hidden)]
 pub use shardex_index::ShardexIndex;
 #[doc(hidden)]
-pub use wal::WalSegment;
-#[doc(hidden)]  
+pub use text_memory_pool::{MemoryPoolConfig, TextMemoryPool};
+#[doc(hidden)]
 pub use transactions::{WalOperation, WalTransaction};
-#[doc(hidden)]
-pub use cow_index::CowShardexIndex;
-#[doc(hidden)]
-pub use posting_storage::PostingStorage;
 #[doc(hidden)]
 pub use vector_storage::VectorStorage;
 #[doc(hidden)]
-pub use document_text_storage::DocumentTextStorage;
-#[doc(hidden)]
-pub use async_document_text_storage::{AsyncDocumentTextStorage, AsyncStorageConfig};
-#[doc(hidden)]
-pub use concurrent_document_text_storage::{ConcurrentDocumentTextStorage, ConcurrentStorageConfig};
-#[doc(hidden)]
-pub use text_memory_pool::{MemoryPoolConfig, TextMemoryPool};
-#[doc(hidden)]
-pub use monitoring::PerformanceMonitor as MonitoringPerformanceMonitor;
+pub use wal::WalSegment;
 
 /// Type alias for Results using ShardexError
 pub type Result<T> = std::result::Result<T, ShardexError>;

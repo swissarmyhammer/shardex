@@ -6,14 +6,13 @@
 //! - Index health monitoring through structured operations
 //! - Resource usage tracking with standardized APIs
 
-use shardex::{IndexStats, DocumentId, Posting, DetailedIndexStats};
-use shardex::api::{
-    ShardexContext,
-    CreateIndex, AddPostings, BatchAddPostings, Search, Flush, GetStats, GetPerformanceStats,
-    CreateIndexParams, AddPostingsParams, BatchAddPostingsParams, SearchParams,
-    FlushParams, GetStatsParams, GetPerformanceStatsParams,
-};
 use apithing::ApiOperation;
+use shardex::api::{
+    AddPostings, AddPostingsParams, BatchAddPostings, BatchAddPostingsParams, CreateIndex, CreateIndexParams, Flush,
+    FlushParams, GetPerformanceStats, GetPerformanceStatsParams, GetStats, GetStatsParams, Search, SearchParams,
+    ShardexContext,
+};
+use shardex::{DetailedIndexStats, DocumentId, IndexStats, Posting};
 use std::error::Error;
 use std::time::Duration;
 
@@ -108,7 +107,7 @@ fn monitor_basic_stats(context: &mut ShardexContext) -> Result<(), Box<dyn Error
     // Flush and check again
     let flush_params = FlushParams::new();
     Flush::execute(context, &flush_params)?;
-    
+
     let after_flush_stats = GetStats::execute(context, &stats_params)?;
     print_basic_stats("After flush", &after_flush_stats);
 
@@ -116,7 +115,7 @@ fn monitor_basic_stats(context: &mut ShardexContext) -> Result<(), Box<dyn Error
 }
 
 /// Collects and analyzes performance metrics including search latency and indexing throughput.
-/// 
+///
 /// This function demonstrates how to measure performance characteristics using the ApiThing pattern:
 /// - Search latency measurements across different k values
 /// - Indexing throughput analysis with various batch sizes
@@ -136,11 +135,11 @@ fn collect_performance_metrics(context: &mut ShardexContext) -> Result<(), Box<d
             .build()?;
 
         let results = Search::execute(context, &search_params)?;
-        
+
         // Get performance stats to see search timing
         let perf_params = GetPerformanceStatsParams::detailed();
         let perf_stats = GetPerformanceStats::execute(context, &perf_params)?;
-        
+
         if let Some(detailed) = &perf_stats.detailed_metrics {
             println!(
                 "  k={:2}: search_time={:6.2}ms ({} results)",
@@ -162,9 +161,10 @@ fn collect_performance_metrics(context: &mut ShardexContext) -> Result<(), Box<d
         let batch_params = BatchAddPostingsParams::with_flush_and_tracking(postings)?;
         let batch_stats = BatchAddPostings::execute(context, &batch_params)?;
 
-        println!("  batch_size={:4}: {:8.0} docs/sec", 
-                batch_size, 
-                batch_stats.throughput_docs_per_sec);
+        println!(
+            "  batch_size={:4}: {:8.0} docs/sec",
+            batch_size, batch_stats.throughput_docs_per_sec
+        );
     }
 
     // Get overall performance statistics
@@ -173,7 +173,10 @@ fn collect_performance_metrics(context: &mut ShardexContext) -> Result<(), Box<d
 
     println!("\nPerformance summary:");
     println!("  Total operations: {}", perf_stats.total_operations);
-    println!("  Average latency: {:6.2}ms", perf_stats.average_latency.as_secs_f64() * 1000.0);
+    println!(
+        "  Average latency: {:6.2}ms",
+        perf_stats.average_latency.as_secs_f64() * 1000.0
+    );
     println!("  Overall throughput: {:.0} ops/sec", perf_stats.throughput);
 
     Ok(())
@@ -202,7 +205,7 @@ fn monitor_resource_usage(context: &mut ShardexContext) -> Result<(), Box<dyn Er
             let postings = generate_test_postings(LARGE_BATCH_SIZE, VECTOR_SIZE);
             let add_params = AddPostingsParams::new(postings)?;
             AddPostings::execute(context, &add_params)?;
-            
+
             if i % 2 == 0 {
                 let flush_params = FlushParams::new();
                 Flush::execute(context, &flush_params)?;
@@ -236,7 +239,7 @@ fn monitor_resource_usage(context: &mut ShardexContext) -> Result<(), Box<dyn Er
         println!("\nResource efficiency:");
         println!("  Memory per posting: {:.0} bytes", memory_per_posting);
         println!("  Disk per posting: {:.0} bytes", disk_per_posting);
-        
+
         // Compression ratio indicates how much memory overhead exists vs persistent storage
         // Higher ratio = more memory overhead (indexes, caches, etc.)
         // Lower ratio = more efficient memory usage
@@ -261,11 +264,11 @@ fn analyze_detailed_statistics(context: &mut ShardexContext) -> Result<(), Box<d
     // Get basic stats and performance stats to build detailed view
     let stats_params = GetStatsParams::new();
     let basic_stats = GetStats::execute(context, &stats_params)?;
-    
+
     let perf_params = GetPerformanceStatsParams::detailed();
     let perf_stats = GetPerformanceStats::execute(context, &perf_params)?;
 
-    // Print comprehensive statistics 
+    // Print comprehensive statistics
     print_combined_detailed_stats(&basic_stats, &perf_stats);
 
     // Analyze shard distribution
@@ -273,7 +276,7 @@ fn analyze_detailed_statistics(context: &mut ShardexContext) -> Result<(), Box<d
         let avg_postings_per_shard = basic_stats.total_postings as f64 / basic_stats.total_shards as f64;
         println!("\nShard analysis:");
         println!("  Average postings per shard: {:.1}", avg_postings_per_shard);
-        
+
         // Note: average_shard_utilization not directly available in basic IndexStats
         // This would need to be added to the API if detailed shard metrics are needed
         println!("  Total shards: {}", basic_stats.total_shards);
@@ -283,29 +286,39 @@ fn analyze_detailed_statistics(context: &mut ShardexContext) -> Result<(), Box<d
         }
     }
 
-    // Analyze posting distribution 
+    // Analyze posting distribution
     if basic_stats.total_postings > 0 {
         println!("\nPosting analysis:");
         println!("  Total postings: {}", basic_stats.total_postings);
-        println!("  Memory per posting: {:.0} bytes", 
-                basic_stats.memory_usage as f64 / basic_stats.total_postings as f64);
-        
+        println!(
+            "  Memory per posting: {:.0} bytes",
+            basic_stats.memory_usage as f64 / basic_stats.total_postings as f64
+        );
+
         if basic_stats.disk_usage > 0 {
-            println!("  Disk per posting: {:.0} bytes", 
-                    basic_stats.disk_usage as f64 / basic_stats.total_postings as f64);
+            println!(
+                "  Disk per posting: {:.0} bytes",
+                basic_stats.disk_usage as f64 / basic_stats.total_postings as f64
+            );
         }
     }
 
     // Performance analysis
     if let Some(detailed) = &perf_stats.detailed_metrics {
         println!("\nPerformance analysis:");
-        println!("  Index operations: {} total", 
-                detailed.operations_breakdown.get("index").unwrap_or(&0));
-        println!("  Search operations: {} total", 
-                detailed.operations_breakdown.get("search").unwrap_or(&0));
-        println!("  Flush operations: {} total", 
-                detailed.operations_breakdown.get("flush").unwrap_or(&0));
-        
+        println!(
+            "  Index operations: {} total",
+            detailed.operations_breakdown.get("index").unwrap_or(&0)
+        );
+        println!(
+            "  Search operations: {} total",
+            detailed.operations_breakdown.get("search").unwrap_or(&0)
+        );
+        println!(
+            "  Flush operations: {} total",
+            detailed.operations_breakdown.get("flush").unwrap_or(&0)
+        );
+
         if detailed.index_time > Duration::from_millis(1000) {
             println!("  ⚠ Warning: High cumulative index time detected");
         }
@@ -326,7 +339,7 @@ fn demonstrate_health_monitoring(context: &mut ShardexContext) -> Result<(), Box
 
     let stats_params = GetStatsParams::new();
     let stats = GetStats::execute(context, &stats_params)?;
-    
+
     let perf_params = GetPerformanceStatsParams::detailed();
     let perf_stats = GetPerformanceStats::execute(context, &perf_params)?;
 
@@ -399,7 +412,7 @@ fn demonstrate_health_monitoring(context: &mut ShardexContext) -> Result<(), Box
         .build()?;
 
     let _results = Search::execute(context, &search_params)?;
-    
+
     // Get updated performance stats after the search
     let updated_perf_stats = GetPerformanceStats::execute(context, &perf_params)?;
     let current_latency_ms = updated_perf_stats.average_latency.as_secs_f64() * 1000.0;
@@ -487,8 +500,9 @@ fn track_historical_data(context: &mut ShardexContext) -> Result<(), Box<dyn Err
             let first_memory_per_posting = first.memory_usage as f64 / first.total_postings as f64;
             let last_memory_per_posting = last.memory_usage as f64 / last.total_postings as f64;
             // Positive percentage = memory usage per posting increased (worse efficiency)
-            // Negative percentage = memory usage per posting decreased (better efficiency)  
-            let memory_efficiency_change = ((last_memory_per_posting - first_memory_per_posting) / first_memory_per_posting) * 100.0;
+            // Negative percentage = memory usage per posting decreased (better efficiency)
+            let memory_efficiency_change =
+                ((last_memory_per_posting - first_memory_per_posting) / first_memory_per_posting) * 100.0;
 
             println!("  Memory efficiency change: {:+.1}%", memory_efficiency_change);
         }
@@ -539,22 +553,22 @@ fn print_detailed_stats(stats: &DetailedIndexStats) {
 /// # Parameters
 /// * `stats` - Basic IndexStats containing core index metrics
 /// * `perf_stats` - PerformanceStats containing timing and operation metrics
-fn print_combined_detailed_stats(
-    stats: &IndexStats, 
-    perf_stats: &shardex::api::PerformanceStats
-) {
+fn print_combined_detailed_stats(stats: &IndexStats, perf_stats: &shardex::api::PerformanceStats) {
     println!("Combined detailed statistics:");
     println!("  Shards: {}", stats.total_shards);
     println!("  Total postings: {}", stats.total_postings);
     println!("  Vector dimension: {}", stats.vector_dimension);
     println!("  Memory usage: {:.2} MB", stats.memory_usage as f64 / 1024.0 / 1024.0);
     println!("  Disk usage: {:.2} MB", stats.disk_usage as f64 / 1024.0 / 1024.0);
-    
+
     // Performance metrics
     println!("  Total operations: {}", perf_stats.total_operations);
-    println!("  Average latency: {:.2}ms", perf_stats.average_latency.as_secs_f64() * 1000.0);
+    println!(
+        "  Average latency: {:.2}ms",
+        perf_stats.average_latency.as_secs_f64() * 1000.0
+    );
     println!("  Throughput: {:.0} ops/sec", perf_stats.throughput);
-    
+
     if let Some(detailed) = &perf_stats.detailed_metrics {
         println!("  Index time: {:.2}ms", detailed.index_time.as_secs_f64() * 1000.0);
         println!("  Flush time: {:.2}ms", detailed.flush_time.as_secs_f64() * 1000.0);
@@ -599,7 +613,7 @@ fn generate_test_vector(size: usize) -> Vec<f32> {
 
     let mut vector = Vec::with_capacity(size);
     let mut hasher = DefaultHasher::new();
-    
+
     // Hash the size once to get a base seed, then use arithmetic progression
     // This avoids creating a new hasher for each element
     size.hash(&mut hasher);
