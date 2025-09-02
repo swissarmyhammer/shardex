@@ -275,13 +275,15 @@ fn test_memory_usage_batch_processing() {
 
     // Memory should grow with each batch (allow for some tolerance due to memory management)
     let growth_1_to_2 = memory_growth[1] >= memory_growth[0];
-    let growth_2_to_3 = memory_growth[2] >= memory_growth[1]; 
-    
+    let growth_2_to_3 = memory_growth[2] >= memory_growth[1];
+
     // At least one should show growth, or final should be higher than first
     assert!(
         growth_1_to_2 || growth_2_to_3 || memory_growth[2] > memory_growth[0],
-        "Memory should generally increase with more postings. Growth: {} -> {} -> {}", 
-        memory_growth[0], memory_growth[1], memory_growth[2]
+        "Memory should generally increase with more postings. Growth: {} -> {} -> {}",
+        memory_growth[0],
+        memory_growth[1],
+        memory_growth[2]
     );
 }
 

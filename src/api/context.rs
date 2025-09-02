@@ -715,7 +715,6 @@ impl ShardexContext {
     pub(crate) fn get_index_mut(&mut self) -> Option<&mut ShardexImpl> {
         self.index.as_mut()
     }
-
 }
 
 #[cfg(test)]
