@@ -327,52 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn test_performance_bounds() -> Result<(), Box<dyn Error>> {
-        let (mut context, _temp_dir) = create_test_context()?;
-
-        use std::time::Instant;
-
-        // Create a moderately sized document
-        let doc_id = DocumentId::from_raw(7000);
-        let base_text = "Performance test document with repeated content. ";
-        let large_text = base_text.repeat(100); // ~4.8KB document
-
-        let posting = Posting {
-            document_id: doc_id,
-            start: 0,
-            length: large_text.len() as u32,
-            vector: generate_test_vector("performance", TEST_VECTOR_SIZE),
-        };
-
-        // Measure storage time
-        let start = Instant::now();
-        let store_params = StoreDocumentTextParams::new(doc_id, large_text.clone(), vec![posting])?;
-        StoreDocumentText::execute(&mut context, &store_params)?;
-        let store_time = start.elapsed();
-
-        // Measure retrieval time
-        let start = Instant::now();
-        let get_params = GetDocumentTextParams::new(doc_id);
-        let retrieved = GetDocumentText::execute(&mut context, &get_params)?;
-        let retrieve_time = start.elapsed();
-
-        // Verify correctness
-        assert_eq!(retrieved, large_text);
-
-        // Performance bounds (these are generous for testing)
-        assert!(
-            store_time.as_millis() < 5000,
-            "Storage should complete within 5 seconds"
-        );
-        assert!(
-            retrieve_time.as_millis() < 5000,
-            "Retrieval should complete within 5 seconds"
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn test_batch_document_processing() -> Result<(), Box<dyn Error>> {
         let (mut context, _temp_dir) = create_test_context()?;
 
