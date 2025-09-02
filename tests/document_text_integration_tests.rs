@@ -7,10 +7,10 @@
 //! - Crash recovery scenarios
 //! - Realistic usage patterns
 
-use shardex::document_text_storage::DocumentTextStorage;
 use shardex::error::ShardexError;
 use shardex::identifiers::DocumentId;
 use shardex::structures::Posting;
+use shardex::DocumentTextStorage;
 use tempfile::TempDir;
 
 /// Create a test embedding vector with the specified dimension

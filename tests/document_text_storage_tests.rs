@@ -8,9 +8,9 @@
 //! - File growth and memory mapping
 //! - Size limits and validation
 
-use shardex::document_text_storage::DocumentTextStorage;
 use shardex::error::ShardexError;
 use shardex::identifiers::DocumentId;
+use shardex::DocumentTextStorage;
 mod common;
 use common::{create_temp_dir_for_test, test_constants};
 

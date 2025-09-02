@@ -200,15 +200,26 @@ impl BatchProcessor {
     pub async fn flush_now(&mut self) -> Result<(), ShardexError> {
         if let Some(ref command_sender) = self.command_sender {
             let (response_tx, response_rx) = oneshot::channel();
-            command_sender
+
+            // Try to send flush command, but handle closed channel gracefully
+            match command_sender
                 .send(BatchProcessorCommand::FlushNow(response_tx))
                 .await
-                .map_err(|_| ShardexError::Wal("Failed to send flush command".to_string()))?;
-
-            // Wait for the flush to complete
-            response_rx
-                .await
-                .map_err(|_| ShardexError::Wal("Failed to receive flush response".to_string()))?
+            {
+                Ok(_) => {
+                    // Wait for the flush to complete
+                    let _ = response_rx
+                        .await
+                        .map_err(|_| ShardexError::Wal("Failed to receive flush response".to_string()))?;
+                    Ok(())
+                }
+                Err(_) => {
+                    // Channel is closed, processor is likely shutting down or already shut down
+                    // In this case, there's nothing to flush, so we can return Ok
+                    debug!("Batch processor channel closed during flush_now - assuming shutdown");
+                    Ok(())
+                }
+            }
         } else {
             Ok(()) // Not started yet, nothing to flush
         }
@@ -241,23 +252,57 @@ impl BatchProcessor {
     /// Add an operation to be processed in the next batch
     pub async fn add_operation(&mut self, _operation: WalOperation) -> Result<(), ShardexError> {
         if let Some(ref command_sender) = self.command_sender {
-            command_sender
-                .send(BatchProcessorCommand::AddOperation(_operation))
+            match command_sender
+                .send(BatchProcessorCommand::AddOperation(_operation.clone()))
                 .await
-                .map_err(|_| ShardexError::Wal("Failed to send add operation command".to_string()))?;
+            {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    // Channel is closed, background task likely died. Restart the processor.
+                    warn!("Batch processor channel closed, restarting background task");
+                    self.restart().await?;
+
+                    // Try sending again after restart
+                    if let Some(ref command_sender) = self.command_sender {
+                        command_sender
+                            .send(BatchProcessorCommand::AddOperation(_operation))
+                            .await
+                            .map_err(|_| {
+                                ShardexError::Wal("Failed to send add operation command after restart".to_string())
+                            })?;
+                    }
+                    Ok(())
+                }
+            }
         } else {
             // If not started, add to pending operations
             self.pending_operations.push(_operation);
+            Ok(())
         }
-        Ok(())
     }
 
-    /// Check if the processor is currently running
+    /// Restart the batch processor after a failure
+    async fn restart(&mut self) -> Result<(), ShardexError> {
+        warn!("Restarting batch processor due to background task failure");
+
+        // Clean up any existing state
+        self.command_sender = None;
+        if let Some(handle) = self.timer_handle.take() {
+            handle.abort();
+        }
+
+        // Restart the processor
+        self.start().await
+    }
+
+    /// Check if the processor is currently running (for tests)
+    #[cfg(test)]
     pub fn is_running(&self) -> bool {
         self.timer_handle.is_some() && !self.shutdown_signal.load(Ordering::SeqCst)
     }
 
-    /// Get the current batch interval
+    /// Get the current batch interval (for tests)
+    #[cfg(test)]
     pub fn batch_interval(&self) -> Duration {
         self.batch_interval
     }

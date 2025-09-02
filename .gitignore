@@ -1,5 +1,6 @@
 semantic.db
 mcp.log
+.swissarmyhammer/search.db
 .swissarmyhammer/tmp
 .swissarmyhammer/workflow-runs
 .swissarmyhammer/todo
@@ -11,7 +12,10 @@ ideas/
 
 # Test artifacts
 test_index/
+my_index/
 TEST_FAILURES.md
+temp_*.rs
+debug_*.rs
 
 # Editor files
 .vscode/

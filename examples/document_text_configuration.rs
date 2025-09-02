@@ -6,12 +6,19 @@
 //! - Performance-optimized setups
 //! - Different use case scenarios
 
-use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
+use apithing::ApiOperation;
+use shardex::{
+    api::{
+        AddPostings, AddPostingsParams, CreateIndex, CreateIndexParams,
+        ExtractSnippet, ExtractSnippetParams, Flush, FlushParams, GetDocumentText, GetDocumentTextParams, GetStats, GetStatsParams,
+        Search, SearchParams, ShardexContext, StoreDocumentText, StoreDocumentTextParams,
+    },
+    DocumentId, Posting, ShardexConfig,
+};
 use std::error::Error;
 use std::time::Instant;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Shardex Document Text Storage - Configuration Examples");
     println!("======================================================");
 
@@ -23,11 +30,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     std::fs::create_dir_all(&base_temp_dir)?;
 
     // Run different configuration scenarios
-    memory_constrained_config(&base_temp_dir).await?;
-    high_capacity_config(&base_temp_dir).await?;
-    performance_optimized_config(&base_temp_dir).await?;
-    use_case_specific_configs(&base_temp_dir).await?;
-    migration_scenarios(&base_temp_dir).await?;
+    memory_constrained_config(&base_temp_dir)?;
+    high_capacity_config(&base_temp_dir)?;
+    performance_optimized_config(&base_temp_dir)?;
+    use_case_specific_configs(&base_temp_dir)?;
+    migration_scenarios(&base_temp_dir)?;
 
     // Clean up
     std::fs::remove_dir_all(&base_temp_dir)?;
@@ -36,13 +43,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Memory-Constrained Configuration ===");
 
     let index_dir = base_dir.join("memory_constrained");
     std::fs::create_dir_all(&index_dir)?;
 
-    // Optimized for minimal memory usage
+    // Create context with memory-optimized configuration
     let config = ShardexConfig::new()
         .directory_path(&index_dir)
         .vector_size(64)  // Smaller vectors
@@ -54,6 +61,11 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
         .default_slop_factor(2)       // More focused search
         .bloom_filter_size(1024); // Smaller bloom filters
 
+    let mut context = ShardexContext::with_config(config.clone());
+
+    // Create index using CreateIndexParams from the config
+    let create_params = CreateIndexParams::from_shardex_config(config.clone());
+    
     println!("Configuration for memory-constrained environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -64,7 +76,7 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
     println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
     println!("  Bloom filter size: {}", config.bloom_filter_size);
 
-    let mut index = ShardexImpl::create(config).await?;
+    CreateIndex::execute(&mut context, &create_params)?;
 
     // Test with small documents
     let small_documents = &[
@@ -85,13 +97,12 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
             vector: generate_simple_vector(&text.to_lowercase(), 64),
         };
 
-        index
-            .replace_document_with_postings(doc_id, text.to_string(), vec![posting])
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, text.to_string(), vec![posting])?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
     }
     let processing_time = start.elapsed();
 
-    let stats = index.stats().await?;
+    let stats = GetStats::execute(&mut context, &GetStatsParams::new())?;
     println!("\\nResults:");
     println!("  Processing time: {:?}", processing_time);
     println!("  Memory usage: {:.2} KB", stats.memory_usage as f64 / 1024.0);
@@ -101,7 +112,8 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
     // Test search performance
     let query_vector = generate_simple_vector("cats pets", 64);
     let search_start = Instant::now();
-    let results = index.search(&query_vector, 3, None).await?;
+    let search_params = SearchParams::new(query_vector, 3)?;
+    let results = Search::execute(&mut context, &search_params)?;
     let search_time = search_start.elapsed();
 
     println!("  Search time: {:?}", search_time);
@@ -117,10 +129,8 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
         vector: generate_simple_vector("large", 64),
     };
 
-    match index
-        .replace_document_with_postings(doc_id, large_text, vec![posting])
-        .await
-    {
+    let store_params = StoreDocumentTextParams::new(doc_id, large_text, vec![posting]);
+    match store_params.and_then(|params| StoreDocumentText::execute(&mut context, &params)) {
         Ok(()) => println!("  ✗ Large document was accepted unexpectedly"),
         Err(e) => println!("  ✓ Large document correctly rejected: {}", e),
     }
@@ -128,7 +138,7 @@ async fn memory_constrained_config(base_dir: &std::path::Path) -> Result<(), Box
     Ok(())
 }
 
-async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== High-Capacity Configuration ===");
 
     let index_dir = base_dir.join("high_capacity");
@@ -146,6 +156,11 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
         .default_slop_factor(5)       // Broad search for accuracy
         .bloom_filter_size(65_536); // Large bloom filters
 
+    let mut context = ShardexContext::with_config(config.clone());
+
+    // Create index using CreateIndexParams from the config
+    let create_params = CreateIndexParams::from_shardex_config(config.clone());
+    
     println!("Configuration for high-capacity environment:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -159,7 +174,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
     println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
     println!("  Bloom filter size: {}", config.bloom_filter_size);
 
-    let mut index = ShardexImpl::create(config).await?;
+    CreateIndex::execute(&mut context, &create_params)?;
 
     // Test with larger documents
     let base_content = "This is a comprehensive research document covering advanced topics in artificial intelligence, machine learning, deep neural networks, natural language processing, computer vision, robotics, autonomous systems, and their applications in healthcare, finance, transportation, education, and scientific research. ";
@@ -204,9 +219,8 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
             vector: generate_simple_vector(&format!("document {}", i + 1), 768),
         });
 
-        index
-            .replace_document_with_postings(doc_id, text.clone(), postings)
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, text.clone(), postings)?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
 
         if (i + 1) % 3 == 0 {
             println!(
@@ -223,7 +237,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
     }
 
     let processing_time = start.elapsed();
-    let stats = index.stats().await?;
+    let stats = GetStats::execute(&mut context, &GetStatsParams::new())?;
 
     println!("\\nResults:");
     println!("  Processing time: {:?}", processing_time);
@@ -249,7 +263,8 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
     for (desc, query_terms) in complex_queries {
         let query_vector = generate_simple_vector(query_terms, 768);
         let search_start = Instant::now();
-        let results = index.search(&query_vector, 10, Some(5)).await?;
+        let search_params = SearchParams::with_slop_factor(query_vector, 10, 5)?;
+        let results = Search::execute(&mut context, &search_params)?;
         let search_time = search_start.elapsed();
 
         println!("  '{}': {} results in {:?}", desc, results.len(), search_time);
@@ -258,7 +273,7 @@ async fn high_capacity_config(base_dir: &std::path::Path) -> Result<(), Box<dyn 
     Ok(())
 }
 
-async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Performance-Optimized Configuration ===");
 
     let index_dir = base_dir.join("performance_optimized");
@@ -276,6 +291,9 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         .default_slop_factor(3)       // Good accuracy/speed tradeoff
         .bloom_filter_size(8_192); // Optimal bloom filter size
 
+    let mut context = ShardexContext::with_config(config.clone());
+    let create_params = CreateIndexParams::from_shardex_config(config.clone());
+    
     println!("Configuration optimized for balanced performance:");
     println!("  Vector size: {} dimensions", config.vector_size);
     println!("  Shard size: {}", config.shard_size);
@@ -284,7 +302,7 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         config.max_document_text_size / (1024 * 1024)
     );
 
-    let mut index = ShardexImpl::create(config).await?;
+    CreateIndex::execute(&mut context, &create_params)?;
 
     // Performance test with realistic workload
     let test_documents = create_realistic_documents(50); // 50 realistic documents
@@ -311,18 +329,18 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
             }
         }
 
-        index
-            .replace_document_with_postings(doc_id, text.clone(), postings)
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, text.clone(), postings)?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
     }
     let insert_time = insert_start.elapsed();
 
-    // Force flush and measure
+    // Force flush and measure  
     let flush_start = Instant::now();
-    let flush_stats = index.flush_with_stats().await?;
+    let flush_params = FlushParams::with_stats();
+    let flush_stats = Flush::execute(&mut context, &flush_params)?;
     let flush_time = flush_start.elapsed();
 
-    let stats = index.stats().await?;
+    let stats = GetStats::execute(&mut context, &GetStatsParams::new())?;
 
     println!("\\nInsert Performance:");
     println!(
@@ -331,7 +349,11 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         test_documents.len() as f64 / insert_time.as_secs_f64()
     );
     println!("  Flush time: {:?}", flush_time);
-    println!("  Operations flushed: {}", flush_stats.operations_applied);
+    if let Some(stats) = flush_stats {
+        println!("  Operations flushed: {}", stats.operations_applied);
+    } else {
+        println!("  Flush completed (no stats available)");
+    }
 
     // Search performance testing
     let search_queries = vec![
@@ -350,7 +372,8 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         let query_vector = generate_simple_vector(query, 256);
 
         let search_start = Instant::now();
-        let results = index.search(&query_vector, 20, None).await?;
+        let search_params = SearchParams::new(query_vector, 20)?;
+        let results = Search::execute(&mut context, &search_params)?;
         let search_time = search_start.elapsed();
 
         total_search_time += search_time;
@@ -377,19 +400,14 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
         let doc_id = DocumentId::from_raw(i as u128);
 
         // Test full document extraction
-        if let Ok(_text) = index.get_document_text(doc_id).await {
+        let get_params = GetDocumentTextParams::new(doc_id);
+        if GetDocumentText::execute(&mut context, &get_params).is_ok() {
             extracted_count += 1;
         }
 
         // Test partial extraction
-        let partial_posting = Posting {
-            document_id: doc_id,
-            start: 0,
-            length: 50,
-            vector: generate_simple_vector("test", 256),
-        };
-
-        if index.extract_text(&partial_posting).await.is_ok() {
+        let extract_params = ExtractSnippetParams::new(doc_id, 0, 50)?;
+        if ExtractSnippet::execute(&mut context, &extract_params).is_ok() {
             extracted_count += 1;
         }
     }
@@ -414,7 +432,7 @@ async fn performance_optimized_config(base_dir: &std::path::Path) -> Result<(), 
     Ok(())
 }
 
-async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Use Case Specific Configurations ===");
 
     // Chat/Conversation History
@@ -427,7 +445,7 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .batch_write_interval_ms(25)  // Fast response for real-time
         .default_slop_factor(2); // Focus on recent/relevant
 
-    demonstrate_chat_use_case(chat_config).await?;
+    demonstrate_chat_use_case(chat_config)?;
 
     // Academic Papers/Research
     println!("\\n--- Academic Papers Use Case ---");
@@ -439,7 +457,7 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .batch_write_interval_ms(100) // Can tolerate some latency
         .default_slop_factor(4); // Broad search for comprehensive results
 
-    demonstrate_academic_use_case(academic_config).await?;
+    demonstrate_academic_use_case(academic_config)?;
 
     // Code Search
     println!("\\n--- Code Search Use Case ---");
@@ -451,13 +469,15 @@ async fn use_case_specific_configs(base_dir: &std::path::Path) -> Result<(), Box
         .batch_write_interval_ms(50)  // Balance responsiveness and efficiency
         .default_slop_factor(2); // Precise matching for code
 
-    demonstrate_code_search_use_case(code_config).await?;
+    demonstrate_code_search_use_case(code_config)?;
 
     Ok(())
 }
 
-async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
-    let mut index = ShardexImpl::create(config).await?;
+fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
+    let mut context = ShardexContext::with_config(config.clone());
+    let create_params = CreateIndexParams::from_shardex_config(config);
+    CreateIndex::execute(&mut context, &create_params)?;
 
     let chat_messages = &[
         "Hi there! How can I help you today?",
@@ -481,9 +501,8 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
             vector: generate_simple_vector(message, 384),
         };
 
-        index
-            .replace_document_with_postings(doc_id, message.to_string(), vec![posting])
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, message.to_string(), vec![posting])?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
     }
 
     let storage_time = start.elapsed();
@@ -492,7 +511,8 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
     // Search for relevant conversation context
     let query = "machine learning classification";
     let query_vector = generate_simple_vector(query, 384);
-    let search_results = index.search(&query_vector, 5, None).await?;
+    let search_params = SearchParams::new(query_vector, 5)?;
+    let search_results = Search::execute(&mut context, &search_params)?;
 
     println!(
         "  Search for '{}' found {} relevant messages",
@@ -500,7 +520,8 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
         search_results.len()
     );
     for result in search_results.iter().take(3) {
-        if let Ok(message) = index.get_document_text(result.document_id).await {
+        let get_params = GetDocumentTextParams::new(result.document_id);
+        if let Ok(message) = GetDocumentText::execute(&mut context, &get_params) {
             println!(
                 "    '{}' (score: {:.3})",
                 if message.len() > 50 {
@@ -516,8 +537,10 @@ async fn demonstrate_chat_use_case(config: ShardexConfig) -> Result<(), Box<dyn 
     Ok(())
 }
 
-async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
-    let mut index = ShardexImpl::create(config).await?;
+fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
+    let mut context = ShardexContext::with_config(config.clone());
+    let create_params = CreateIndexParams::from_shardex_config(config);
+    CreateIndex::execute(&mut context, &create_params)?;
 
     let academic_abstracts = &[
         "This paper presents a novel deep learning approach for natural language understanding in conversational AI systems. We propose a transformer-based architecture that achieves state-of-the-art performance on multiple dialogue benchmarks.",
@@ -553,9 +576,8 @@ async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<
             vector: generate_simple_vector(abstract_text, 768),
         });
 
-        index
-            .replace_document_with_postings(doc_id, abstract_text.to_string(), postings)
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, abstract_text.to_string(), postings)?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
     }
 
     // Search for research topics
@@ -568,15 +590,18 @@ async fn demonstrate_academic_use_case(config: ShardexConfig) -> Result<(), Box<
     println!("  Testing academic search:");
     for query in research_queries {
         let query_vector = generate_simple_vector(query, 768);
-        let results = index.search(&query_vector, 2, None).await?;
+        let search_params = SearchParams::new(query_vector, 2)?;
+        let results = Search::execute(&mut context, &search_params)?;
         println!("    '{}': {} relevant papers found", query, results.len());
     }
 
     Ok(())
 }
 
-async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
-    let mut index = ShardexImpl::create(config).await?;
+fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), Box<dyn Error>> {
+    let mut context = ShardexContext::with_config(config.clone());
+    let create_params = CreateIndexParams::from_shardex_config(config);
+    CreateIndex::execute(&mut context, &create_params)?;
 
     let code_snippets = &[
         (
@@ -621,9 +646,8 @@ async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), B
             vector: generate_simple_vector(&format!("file:{}", filename), 512),
         });
 
-        index
-            .replace_document_with_postings(doc_id, code.to_string(), postings)
-            .await?;
+        let store_params = StoreDocumentTextParams::new(doc_id, code.to_string(), postings)?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
         println!("    Indexed {} with {} code elements", filename, code_elements.len());
     }
 
@@ -637,18 +661,17 @@ async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), B
     println!("  Testing code search:");
     for query in code_queries {
         let query_vector = generate_simple_vector(&format!("code:{}", query), 512);
-        let results = index.search(&query_vector, 2, None).await?;
+        let search_params = SearchParams::new(query_vector, 2)?;
+        let results = Search::execute(&mut context, &search_params)?;
 
         println!("    '{}': {} matches found", query, results.len());
         if let Some(result) = results.first() {
-            if let Ok(code_snippet) = index
-                .extract_text(&Posting {
-                    document_id: result.document_id,
-                    start: result.start,
-                    length: std::cmp::min(result.length, 100), // First 100 chars
-                    vector: result.vector.clone(),
-                })
-                .await
+            let extract_params = ExtractSnippetParams::new(
+                result.document_id,
+                result.start,
+                std::cmp::min(result.length, 100), // First 100 chars
+            )?;
+            if let Ok(code_snippet) = ExtractSnippet::execute(&mut context, &extract_params)
             {
                 println!("      Match: '{}'", code_snippet.replace('\n', " "));
             }
@@ -658,7 +681,7 @@ async fn demonstrate_code_search_use_case(config: ShardexConfig) -> Result<(), B
     Ok(())
 }
 
-async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("\\n=== Migration Scenarios ===");
 
     // Scenario 1: Upgrading existing index to include text storage
@@ -673,7 +696,9 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         .vector_size(128)
         .max_document_text_size(0); // Text storage disabled
 
-    let mut initial_index = ShardexImpl::create(initial_config).await?;
+    let mut initial_context = ShardexContext::with_config(initial_config.clone());
+    let initial_create_params = CreateIndexParams::from_shardex_config(initial_config);
+    CreateIndex::execute(&mut initial_context, &initial_create_params)?;
 
     // Add some postings without text
     let doc_id = DocumentId::from_raw(1);
@@ -684,17 +709,19 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         vector: generate_simple_vector("sample text", 128),
     };
 
-    initial_index.add_postings(vec![posting]).await?;
+    let add_params = AddPostingsParams::new(vec![posting])?;
+    AddPostings::execute(&mut initial_context, &add_params)?;
     println!("  Created initial index without text storage");
 
     // Try to access text (should fail)
-    match initial_index.get_document_text(doc_id).await {
+    let get_params = GetDocumentTextParams::new(doc_id);
+    match GetDocumentText::execute(&mut initial_context, &get_params) {
         Ok(_) => println!("  ✗ Unexpected success accessing text"),
         Err(e) => println!("  ✓ Text access correctly failed: {}", e),
     }
 
     // Simulate index closure and reopening with text storage enabled
-    drop(initial_index);
+    drop(initial_context);
 
     // Reopen with text storage enabled
     let upgraded_config = ShardexConfig::new()
@@ -702,9 +729,11 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         .vector_size(128)
         .max_document_text_size(1024 * 1024); // Enable text storage
 
-    // Note: In a real scenario, you'd use ShardexImpl::open(),
+    // Note: In a real scenario, you'd use OpenIndex operation,
     // but for this demo we'll create a new index
-    let mut upgraded_index = ShardexImpl::create(upgraded_config).await?;
+    let mut upgraded_context = ShardexContext::with_config(upgraded_config.clone());
+    let upgraded_create_params = CreateIndexParams::from_shardex_config(upgraded_config);
+    CreateIndex::execute(&mut upgraded_context, &upgraded_create_params)?;
 
     // Now we can add documents with text
     let doc_with_text = "This is a document with text storage enabled.";
@@ -716,12 +745,12 @@ async fn migration_scenarios(base_dir: &std::path::Path) -> Result<(), Box<dyn E
         vector: generate_simple_vector(doc_with_text, 128),
     };
 
-    upgraded_index
-        .replace_document_with_postings(new_doc_id, doc_with_text.to_string(), vec![new_posting])
-        .await?;
+    let store_params = StoreDocumentTextParams::new(new_doc_id, doc_with_text.to_string(), vec![new_posting])?;
+    StoreDocumentText::execute(&mut upgraded_context, &store_params)?;
 
     // Verify text storage is working
-    match upgraded_index.get_document_text(new_doc_id).await {
+    let get_params = GetDocumentTextParams::new(new_doc_id);
+    match GetDocumentText::execute(&mut upgraded_context, &get_params) {
         Ok(text) => println!("  ✓ Text storage working: '{}'", text),
         Err(e) => println!("  ✗ Text storage failed: {}", e),
     }

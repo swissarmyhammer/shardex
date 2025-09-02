@@ -7,8 +7,8 @@
 //! - File growth and memory mapping scalability
 //! - Concurrent access patterns
 
+use shardex::DocumentId;
 use shardex::document_text_storage::DocumentTextStorage;
-use shardex::identifiers::DocumentId;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 

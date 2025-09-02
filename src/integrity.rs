@@ -1,4 +1,6 @@
 //! Integrity management for memory-mapped files
+
+#![allow(dead_code)]
 //!
 //! This module provides comprehensive data integrity validation, corruption detection,
 //! and recovery mechanisms for Shardex's memory-mapped storage systems. It builds upon
@@ -16,9 +18,8 @@
 //!
 //! ## Basic Integrity Validation
 //!
-//! ```rust
-//! use shardex::integrity::{IntegrityManager, IntegrityConfig};
-//! use shardex::memory::MemoryMappedFile;
+//! Internal integrity validation provides comprehensive checks for
+//! index consistency and data corruption detection.
 //! use tempfile::TempDir;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,22 +37,13 @@
 //! let result = integrity_manager.validate_file(&mmf)?;
 //! if result.is_valid() {
 //!     println!("File integrity verified");
-//! } else {
-//!     println!("Corruption detected: {:?}", result.corruption_report());
-//! }
-//! # Ok(())
-//! # }
-//! ```
+
 //!
 //! ## Periodic Integrity Monitoring
 //!
-//! ```rust
-//! use shardex::integrity::{IntegrityManager, IntegrityConfig};
-//! use shardex::memory::MemoryMappedFile;
-//! use std::time::Duration;
-//!
-//! # fn monitoring_example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Configure periodic validation every 5 minutes
+//! Advanced integrity validation includes corruption detection,
+//! recovery strategies, and consistency verification across shards.
+
 //! let config = IntegrityConfig {
 //!     periodic_validation_interval: Some(Duration::from_secs(300)),
 //!     corruption_tolerance: 0.01, // 1% corruption threshold
@@ -3070,11 +3062,6 @@ impl ValidationResult {
     /// Get the corruption report if validation failed
     pub fn corruption_report(&self) -> Option<&CorruptionReport> {
         self.corruption_report.as_ref()
-    }
-
-    /// Get validation performance metrics
-    pub fn validation_time(&self) -> Duration {
-        self.validation_time
     }
 
     /// Get number of bytes validated

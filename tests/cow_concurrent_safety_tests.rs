@@ -5,7 +5,8 @@
 
 mod common;
 use common::TestSetupBuilder;
-use shardex::{CowShardexIndex, Shard};
+use shardex::cow_index::CowShardexIndex;
+use shardex::shard::Shard;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
@@ -25,7 +26,7 @@ fn test_concurrent_readers_non_blocking() {
     let mut handles = vec![];
 
     for reader_id in 0..NUM_READERS {
-        let cow_index_clone = Arc::clone(&cow_index);
+        let cow_index_clone: Arc<CowShardexIndex> = Arc::clone(&cow_index);
         let barrier_clone = Arc::clone(&barrier);
 
         let handle = thread::spawn(move || {
@@ -94,7 +95,7 @@ async fn test_reader_consistency_during_writes() {
     let cow_index = Arc::new(CowShardexIndex::new(initial_index));
 
     // Start long-running readers
-    let reader_cow_index = Arc::clone(&cow_index);
+    let reader_cow_index: Arc<CowShardexIndex> = Arc::clone(&cow_index);
     let reader_handle = thread::spawn(move || {
         let mut consistent_snapshots = vec![];
 
@@ -204,7 +205,7 @@ async fn test_memory_cleanup_old_versions() {
     let mut reader_handles = vec![];
 
     for i in 0..10 {
-        let cow_index_clone = Arc::clone(&cow_index);
+        let cow_index_clone: Arc<CowShardexIndex> = Arc::clone(&cow_index);
         let handle = thread::spawn(move || {
             let reader = cow_index_clone.read();
 
@@ -257,7 +258,7 @@ fn test_atomic_update_integrity() {
     let mut handles = vec![];
 
     for i in 0..NUM_CONCURRENT_OPERATIONS {
-        let cow_index_clone = Arc::clone(&cow_index);
+        let cow_index_clone: Arc<CowShardexIndex> = Arc::clone(&cow_index);
 
         let handle = std::thread::spawn(move || {
             if i % 2 == 0 {

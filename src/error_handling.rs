@@ -7,6 +7,8 @@
 //! - Backup and restore functionality for disaster recovery
 //! - Integration with the monitoring system for error tracking
 
+#![allow(dead_code)]
+
 use crate::document_text_storage::DocumentTextStorage;
 use crate::error::ShardexError;
 use crate::monitoring::PerformanceMonitor;
@@ -279,8 +281,6 @@ pub struct RecoveryConfig {
     pub backup_before_recovery: bool,
     /// Recovery strategy preference
     pub recovery_strategy: RecoveryStrategy,
-    /// Timeout for recovery operations
-    pub recovery_timeout: Duration,
 }
 
 impl Default for RecoveryConfig {
@@ -289,7 +289,6 @@ impl Default for RecoveryConfig {
             max_recovery_attempts: 3,
             backup_before_recovery: true,
             recovery_strategy: RecoveryStrategy::Conservative,
-            recovery_timeout: Duration::from_secs(300), // 5 minutes
         }
     }
 }
@@ -300,12 +299,6 @@ pub enum RecoveryResult {
     /// Recovery completed successfully
     Successful {
         actions_taken: Vec<String>,
-        data_lost: bool,
-    },
-    /// Recovery partially completed with remaining issues
-    PartialRecovery {
-        actions_taken: Vec<String>,
-        remaining_issues: Vec<String>,
         data_lost: bool,
     },
     /// Recovery requires manual intervention

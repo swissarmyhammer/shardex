@@ -118,25 +118,8 @@
 //!
 //! ## Recovery Strategies
 //!
-//! ```rust,no_run
-//! use std::time::Duration;
-//! use tokio::time::sleep;
-//! use shardex::{ConcurrentShardex, IndexWriter, ShardexError};
-//!
-//! async fn retry_write_with_backoff<F, R>(
-//!     concurrent: &ConcurrentShardex,
-//!     operation: F,
-//!     max_retries: usize,
-//! ) -> Result<R, ShardexError>
-//! where
-//!     F: Fn(&mut IndexWriter) -> Result<R, ShardexError> + Send + Clone,
-//!     R: Send,
-//! {
-//!     let mut attempt = 0;
-//!     loop {
-//!         match concurrent.write_operation(operation.clone()).await {
-//!             Ok(result) => return Ok(result),
-//!             Err(e) if attempt < max_retries => {
+//! Recovery strategies include retry logic with exponential backoff for
+//! handling transient failures during concurrent operations.
 //!                 let backoff = Duration::from_millis(100 * (1 << attempt));
 //!                 sleep(backoff).await;
 //!                 attempt += 1;

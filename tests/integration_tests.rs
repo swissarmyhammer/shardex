@@ -6,7 +6,9 @@
 
 mod common;
 use common::{create_temp_dir_for_test, test_constants};
-use shardex::{DocumentId, PostingStorage, ShardexError, VectorStorage};
+use shardex::posting_storage::PostingStorage;
+use shardex::vector_storage::VectorStorage;
+use shardex::{DocumentId, ShardexError};
 
 /// Test that PostingStorage and VectorStorage can be used together with aligned indices
 #[test]

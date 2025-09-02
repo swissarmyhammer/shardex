@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 
 /// Configuration for memory pool behavior
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MemoryPoolConfig {
     /// Maximum number of buffers to keep in each pool
     pub max_pool_size: usize,
@@ -33,6 +34,7 @@ impl Default for MemoryPoolConfig {
 
 /// Buffer entry with metadata for pool management
 #[derive(Debug)]
+#[allow(dead_code)]
 struct BufferEntry<T> {
     buffer: T,
     last_used: SystemTime,
@@ -60,6 +62,7 @@ impl<T> BufferEntry<T> {
 
 /// Statistics for memory pool performance
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct MemoryPoolStats {
     /// Total buffer requests
     pub total_requests: u64,
@@ -128,6 +131,7 @@ impl MemoryPoolStats {
 }
 
 /// Memory pool for text operations to reduce allocation overhead
+#[allow(dead_code)]
 pub struct TextMemoryPool {
     /// Pool of reusable string buffers
     string_pool: Arc<Mutex<Vec<BufferEntry<String>>>>,
@@ -419,6 +423,7 @@ impl TextMemoryPool {
 }
 
 /// RAII wrapper for pooled strings
+#[allow(dead_code)]
 pub struct PooledString {
     buffer: Option<String>,
     pool: Arc<Mutex<Vec<BufferEntry<String>>>>,
@@ -505,6 +510,7 @@ impl Drop for PooledString {
 }
 
 /// RAII wrapper for pooled byte vectors
+#[allow(dead_code)]
 pub struct PooledBytes {
     buffer: Option<Vec<u8>>,
     pool: Arc<Mutex<Vec<BufferEntry<Vec<u8>>>>>,

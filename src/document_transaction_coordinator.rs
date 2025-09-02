@@ -3,6 +3,8 @@
 //! This module provides comprehensive transaction coordination for document text operations,
 //! ensuring ACID properties across text storage and posting operations.
 
+#![allow(dead_code)]
+
 use crate::error::ShardexError;
 use crate::identifiers::{DocumentId, TransactionId};
 use crate::shardex_index::ShardexIndex;

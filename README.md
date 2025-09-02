@@ -1,194 +1,212 @@
-# Shardex
+# Shardex - Vector Search Engine
 
-A high-performance memory-mapped vector search engine written in Rust that supports incremental updating and ACID transactions.
+A high-performance memory-mapped vector search engine using the ApiThing pattern for consistent, type-safe operations.
 
-[![Crates.io](https://img.shields.io/crates/v/shardex.svg)](https://crates.io/crates/shardex)
-[![Documentation](https://docs.rs/shardex/badge.svg)](https://docs.rs/shardex)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-## Features
-
-- **Memory-mapped storage** for zero-copy operations and fast startup
-- **ACID transactions** via write-ahead logging (WAL)
-- **Incremental updates** without full index rebuilds
-- **Dynamic shard management** with automatic splitting
-- **Concurrent reads** during write operations
-- **Configurable vector dimensions** and index parameters
-- **Bloom filter optimization** for efficient document deletion
-- **Crash recovery** from unexpected shutdowns
-- **Comprehensive monitoring** and statistics
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 ## Quick Start
 
-Add Shardex to your `Cargo.toml`:
-
-```toml
-[dependencies]
-shardex = "0.1"
-tokio = { version = "1.0", features = ["rt", "macros"] }
-```
-
-### Basic Usage
-
 ```rust
-use shardex::{Shardex, ShardexConfig, Posting};
+use shardex::api::{
+    ShardexContext, CreateIndex, AddPostings, Search,
+    CreateIndexParams, AddPostingsParams, SearchParams
+};
+use shardex::{DocumentId, Posting};
+use apithing::ApiOperation;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new index
-    let config = ShardexConfig::new()
-        .directory_path("./my_index")
-        .vector_size(384);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create context
+    let mut context = ShardexContext::new();
     
-    let mut index = Shardex::create(config).await?;
+    // Configure and create index
+    let create_params = CreateIndexParams::builder()
+        .directory_path("./my_index".into())
+        .vector_size(128)
+        .shard_size(10000)
+        .batch_write_interval_ms(100)
+        .build()?;
     
-    // Add some vectors
-    let postings = vec![
-        Posting {
-            document_id: 1,
-            start: 0,
-            length: 100,
-            vector: vec![0.1, 0.2, 0.3, /* ... 384 dimensions */],
-        },
-        Posting {
-            document_id: 2,
-            start: 0,
-            length: 150,
-            vector: vec![0.4, 0.5, 0.6, /* ... 384 dimensions */],
-        },
-    ];
+    CreateIndex::execute(&mut context, &create_params)?;
     
-    index.add_postings(postings).await?;
-    index.flush().await?;
+    // Add documents
+    let postings = vec![Posting {
+        document_id: DocumentId::from_raw(1),
+        start: 0,
+        length: 100,
+        vector: vec![0.1; 128],
+    }];
     
-    // Search for similar vectors
-    let query = vec![0.1, 0.25, 0.35, /* ... 384 dimensions */];
-    let results = index.search(&query, 5, None).await?;
+    AddPostings::execute(&mut context, &AddPostingsParams::new(postings)?)?;
     
-    for result in results {
-        println!("Document {}: similarity {:.3}", 
-                 result.document_id, result.similarity_score);
-    }
+    // Search
+    let results = Search::execute(&mut context, &SearchParams::builder()
+        .query_vector(vec![0.1; 128])
+        .k(10)
+        .build()?
+    )?;
     
+    println!("Found {} results", results.len());
     Ok(())
 }
 ```
 
-### Opening an Existing Index
+## Features
+
+- **Consistent API**: All operations use the ApiThing pattern for predictable, composable interactions
+- **Type Safety**: Parameter objects with validation prevent common errors and provide clear interfaces
+- **Shared Context**: Efficient resource management through centralized state
+- **Memory-mapped storage** for zero-copy operations and fast startup
+- **ACID transactions** via write-ahead logging
+- **Incremental updates** without full index rebuilds
+- **Document text storage** with snippet extraction
+- **Performance monitoring** and detailed statistics
+- **Crash recovery** from unexpected shutdowns
+- **Dynamic shard management** with automatic splitting
+
+## Architecture
+
+Shardex is built around three core concepts:
+
+- **ShardexContext**: Shared state and resource management
+- **Operations**: Types implementing ApiOperation trait
+- **Parameters**: Type-safe input objects for each operation
+
+All operations follow the same pattern:
 
 ```rust
-use shardex::Shardex;
+use apithing::ApiOperation;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open existing index (configuration is read from metadata)
-    let index = Shardex::open("./my_index").await?;
-    
-    let query = vec![0.1, 0.2, 0.3 /* ... */];
-    let results = index.search(&query, 10, Some(5)).await?;
-    
-    Ok(())
-}
+let result = OperationType::execute(&mut context, &parameters)?;
 ```
+
+## Core Operations
+
+### Index Management
+- **CreateIndex** - Create new index
+
+### Document Operations  
+- **AddPostings** - Add vector postings
+- **StoreDocumentText** - Store document text
+- **BatchStoreDocumentText** - Batch text storage
+
+### Search Operations
+- **Search** - Vector similarity search  
+- **GetDocumentText** - Retrieve document text
+- **ExtractSnippet** - Extract text snippets
+
+### Maintenance Operations
+- **Flush** - Flush pending operations
+- **GetStats** - Index statistics  
+- **GetPerformanceStats** - Performance metrics
+
+## Migration Guide
+
+### From Previous API
+
+**Old pattern:**
+```rust
+let config = ShardexConfig::new().directory_path("./index");
+let mut index = ShardexImpl::create(config).await?;
+index.add_postings(postings).await?;
+let results = index.search(&query, 10, None).await?;
+```
+
+**New pattern:**
+```rust
+let mut context = ShardexContext::new();
+let params = CreateIndexParams::builder()
+    .directory_path("./index".into())
+    .build()?;
+CreateIndex::execute(&mut context, &params)?;
+AddPostings::execute(&mut context, &AddPostingsParams::new(postings)?)?;
+let results = Search::execute(&mut context, &SearchParams::builder()
+    .query_vector(query)
+    .k(10)
+    .build()?
+)?;
+```
+
+**Benefits of the new API:**
+- **Type Safety**: Parameter objects catch errors at compile time
+- **Consistency**: All operations follow the same execute pattern
+- **Composability**: Operations can be easily chained and tested
+- **Resource Efficiency**: Single context manages all resources
+
+For a complete migration guide, see [MIGRATION.md](MIGRATION.md).
 
 ## Configuration
 
-Shardex provides extensive configuration options for optimization:
+Extensive configuration options for optimization:
 
 ```rust
-use shardex::ShardexConfig;
+use shardex::api::{CreateIndexParams, ShardexContext, CreateIndex};
 
-let config = ShardexConfig::new()
-    .directory_path("./optimized_index")
+let params = CreateIndexParams::builder()
+    .directory_path("./optimized_index".into())
     .vector_size(768)                    // Vector dimensions
     .shard_size(50000)                   // Max vectors per shard
     .batch_write_interval_ms(50)         // WAL batch frequency
     .default_slop_factor(5)              // Search breadth
-    .bloom_filter_size(2048);            // Bloom filter size
+    .bloom_filter_size(2048)             // Bloom filter size
+    .build()?;
+
+let mut context = ShardexContext::new();
+CreateIndex::execute(&mut context, &params)?;
 ```
 
-## Architecture
+## Examples
 
-Shardex uses a sharded architecture where each shard contains:
+The repository includes comprehensive examples demonstrating the ApiThing pattern:
 
-- **Vector storage**: Memory-mapped embedding vectors
-- **Posting storage**: Document metadata and positions  
-- **Centroids**: Shard representatives for efficient search
-- **Bloom filters**: Fast document existence checks
+- **[basic_usage.rs](examples/basic_usage.rs)** - Core operations and patterns
+- **[configuration.rs](examples/configuration.rs)** - Advanced configuration options  
+- **[batch_operations.rs](examples/batch_operations.rs)** - High-throughput processing
+- **[document_text_basic.rs](examples/document_text_basic.rs)** - Text storage and retrieval
+- **[document_text_advanced.rs](examples/document_text_advanced.rs)** - Advanced text operations
+- **[monitoring.rs](examples/monitoring.rs)** - Statistics and performance monitoring
+- **[error_handling.rs](examples/error_handling.rs)** - Robust error handling strategies
 
-The system ensures ACID properties through:
+Run examples with:
 
-- **Write-Ahead Log (WAL)**: All operations logged before execution
-- **Batch processing**: Periodic WAL replay for consistency
-- **Crash recovery**: Automatic replay on restart
-- **Copy-on-write**: Concurrent reads during updates
+```bash
+cargo run --example basic_usage
+cargo run --example configuration  
+cargo run --example monitoring
+```
 
 ## Performance
 
-Shardex is designed for high-performance vector search:
+Shardex delivers high performance through:
 
 - **Zero-copy operations** via memory mapping
-- **Parallel shard search** for multi-core utilization
+- **Parallel shard search** for multi-core utilization  
 - **Configurable search breadth** (slop factor) for speed vs. accuracy
 - **Bloom filter acceleration** for document operations
 - **SIMD-optimized** distance calculations
 
-### Benchmarks
-
-On a typical workload (1M vectors, 384 dimensions):
+**Benchmarks** (1M vectors, 384 dimensions, Intel i7, 32GB RAM):
 - **Search latency**: <5ms p95 for k=10
-- **Indexing throughput**: >10,000 vectors/second  
-- **Memory usage**: ~2-3GB for 1M vectors
+- **Indexing throughput**: >10,000 vectors/second
+- **Memory usage**: ~2-3GB for 1M vectors  
 - **Startup time**: <100ms (memory-mapped loading)
 
-## Examples
-
-See the [`examples/`](examples/) directory for comprehensive examples:
-
-- [`basic_usage.rs`](examples/basic_usage.rs) - Simple indexing and search
-- [`configuration.rs`](examples/configuration.rs) - Advanced configuration
-- [`batch_operations.rs`](examples/batch_operations.rs) - High-throughput patterns
-- [`error_handling.rs`](examples/error_handling.rs) - Robust error handling
-- [`monitoring.rs`](examples/monitoring.rs) - Statistics and monitoring
-
-## Documentation
-
-- [API Reference](https://docs.rs/shardex) - Complete API documentation
-- [Getting Started Guide](docs/getting-started.md) - Step-by-step tutorial
-- [Architecture Overview](docs/architecture.md) - Internal design details
-- [Performance Tuning](docs/performance.md) - Optimization guide
-- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+*Performance varies based on hardware, data characteristics, and configuration. Run your own benchmarks for accurate measurements.*
 
 ## Requirements
 
 - Rust 1.70+
-- Tokio runtime for async operations
+- [ApiThing](https://github.com/swissarmyhammer/apithing) for operation pattern
 - Sufficient disk space for index files
 - Memory mapping support (Linux, macOS, Windows)
 
-## Installation
+## Documentation
 
-```bash
-cargo add shardex
-```
-
-Or add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-shardex = "0.1"
-```
+- [Migration Guide](MIGRATION.md) - Converting from previous API versions
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome!
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Inspired by Faiss and other high-performance vector libraries
-- Uses Arrow for efficient columnar data structures
-- Built on Tokio for async/await support

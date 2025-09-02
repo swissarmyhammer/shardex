@@ -3,6 +3,7 @@
 //! This test demonstrates that the concurrent coordination system provides
 //! the expected performance characteristics and deadlock-free operation.
 
+use shardex::concurrent::ConcurrentShardex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -42,7 +43,7 @@ async fn test_concurrent_throughput_demonstration() {
 
     // Spawn readers
     for reader_id in 0..NUM_READERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
 
         tasks.spawn(async move {
@@ -65,7 +66,7 @@ async fn test_concurrent_throughput_demonstration() {
 
     // Spawn writers
     for writer_id in 0..NUM_WRITERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
 
         tasks.spawn(async move {
@@ -224,7 +225,7 @@ async fn test_concurrent_readers_non_blocking() {
 
     // Start multiple concurrent readers
     for reader_id in 0..NUM_CONCURRENT_READERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
 
         tasks.spawn(async move {
             let reader_start = Instant::now();
@@ -314,7 +315,7 @@ async fn test_realistic_document_workload_performance() {
 
     // Spawn document writers
     for writer_id in 0..num_writers {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
         let latencies = Arc::clone(&write_latencies);
 
@@ -368,7 +369,7 @@ async fn test_realistic_document_workload_performance() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     for reader_id in 0..num_readers {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
         let latencies = Arc::clone(&read_latencies);
 
@@ -517,7 +518,7 @@ async fn test_high_concurrency_stress() {
 
     // Spawn high number of readers
     for reader_id in 0..HIGH_READER_COUNT {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
 
         tasks.spawn(async move {
@@ -544,7 +545,7 @@ async fn test_high_concurrency_stress() {
 
     // Spawn high number of writers
     for writer_id in 0..HIGH_WRITER_COUNT {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
         let contention_counter_clone = Arc::clone(&contention_counter);
 

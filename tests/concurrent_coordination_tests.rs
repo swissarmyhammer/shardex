@@ -3,7 +3,10 @@
 //! This test suite verifies the concurrent read/write coordination system provides
 //! safe, deadlock-free access patterns under high contention scenarios.
 
-use shardex::{ConcurrencyConfig, ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexIndex};
+use shardex::ShardexConfig;
+use shardex::concurrent::{ConcurrencyConfig, ConcurrentShardex};
+use shardex::cow_index::CowShardexIndex;
+use shardex::shardex_index::ShardexIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -41,7 +44,7 @@ async fn test_high_contention_reader_performance() {
 
     // Spawn many concurrent readers
     for reader_id in 0..NUM_READERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         tasks.spawn(async move {
             let mut successful_reads = 0;
             let reader_start = Instant::now();
@@ -137,7 +140,7 @@ async fn test_mixed_read_write_operations_no_deadlock() {
 
     // Spawn concurrent readers
     for reader_id in 0..NUM_READERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
 
         tasks.spawn(async move {
@@ -158,7 +161,7 @@ async fn test_mixed_read_write_operations_no_deadlock() {
 
     // Spawn concurrent writers
     for writer_id in 0..NUM_WRITERS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let success_counter = Arc::clone(&successful_operations);
 
         tasks.spawn(async move {
@@ -368,7 +371,7 @@ async fn test_reader_writer_isolation() {
     let concurrent = Arc::new(create_test_concurrent_shardex(&_test_env));
 
     // Start a reader that takes a snapshot
-    let concurrent_clone = Arc::clone(&concurrent);
+    let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
     let reader_snapshot = Arc::new(std::sync::Mutex::new(None));
     let reader_snapshot_clone = Arc::clone(&reader_snapshot);
 
@@ -391,7 +394,7 @@ async fn test_reader_writer_isolation() {
     tokio::time::sleep(Duration::from_millis(25)).await;
 
     // Perform a write operation that would change the index
-    let concurrent_clone = Arc::clone(&concurrent);
+    let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
     let writer_task = tokio::spawn(async move {
         concurrent_clone
             .write_operation(|writer| {
@@ -533,7 +536,7 @@ async fn test_stress_concurrent_operations() {
 
     // Spawn stress reader tasks
     for reader_id in 0..NUM_READER_TASKS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let counter_clone = Arc::clone(&operation_counter);
 
         tasks.spawn(async move {
@@ -560,7 +563,7 @@ async fn test_stress_concurrent_operations() {
 
     // Spawn stress writer tasks
     for writer_id in 0..NUM_WRITER_TASKS {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let counter_clone = Arc::clone(&operation_counter);
 
         tasks.spawn(async move {

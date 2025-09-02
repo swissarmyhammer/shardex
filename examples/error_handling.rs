@@ -6,11 +6,18 @@
 //! - Input validation and error prevention
 //! - Robust application patterns
 
-use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexError, ShardexImpl};
+use shardex::{
+    DocumentId, Posting, ShardexError,
+    api::{
+        ShardexContext,
+        operations::{CreateIndex, OpenIndex, AddPostings, Search, Flush},
+        parameters::{CreateIndexParams, OpenIndexParams, AddPostingsParams, SearchParams, FlushParams},
+    }
+};
+use apithing::ApiOperation;
 use std::error::Error;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Shardex Error Handling Example");
     println!("===============================");
 
@@ -24,53 +31,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n1. Configuration Validation");
     println!("===========================");
 
-    demonstrate_config_errors(&temp_dir).await;
+    demonstrate_config_errors(&temp_dir);
 
-    // Example 2: Create a valid index for further tests
-    let config = ShardexConfig::new()
-        .directory_path(&temp_dir)
-        .vector_size(128);
+    // Example 2: Create a valid index for further tests using ApiThing pattern
+    let mut context = ShardexContext::new();
+    let create_params = match CreateIndexParams::builder()
+        .directory_path(temp_dir.clone())
+        .vector_size(128)
+        .build() {
+        Ok(params) => params,
+        Err(e) => {
+            eprintln!("✗ Failed to build create params: {}", e);
+            return Err(e.into());
+        }
+    };
 
-    let mut index = match ShardexImpl::create(config.clone()).await {
-        Ok(index) => {
-            println!("✓ Successfully created index");
-            index
+    match CreateIndex::execute(&mut context, &create_params) {
+        Ok(_) => {
+            println!("✓ Successfully created index using ApiThing pattern");
         }
         Err(e) => {
             eprintln!("✗ Failed to create index: {}", e);
             return Err(e.into());
         }
-    };
+    }
 
     // Example 3: Input validation errors
     println!("\n2. Input Validation");
     println!("===================");
 
-    demonstrate_input_validation(&mut index).await;
+    demonstrate_input_validation(&mut context);
 
     // Example 4: File system and I/O errors
     println!("\n3. File System and I/O Errors");
     println!("==============================");
 
-    demonstrate_io_errors(&temp_dir).await;
+    demonstrate_io_errors(&temp_dir);
 
     // Example 5: Search parameter errors
     println!("\n4. Search Parameter Validation");
     println!("===============================");
 
-    demonstrate_search_errors(&index).await;
+    demonstrate_search_errors(&mut context);
 
     // Example 6: Robust error handling patterns
     println!("\n5. Robust Error Handling Patterns");
     println!("==================================");
 
-    demonstrate_robust_patterns(&temp_dir).await?;
+    demonstrate_robust_patterns(&temp_dir)?;
 
     // Example 7: Error recovery strategies
     println!("\n6. Error Recovery Strategies");
     println!("============================");
 
-    demonstrate_recovery_strategies(&temp_dir).await?;
+    demonstrate_recovery_strategies(&temp_dir)?;
 
     // Clean up
     std::fs::remove_dir_all(&temp_dir)?;
@@ -79,46 +93,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn demonstrate_config_errors(temp_dir: &std::path::Path) {
-    // Invalid vector size
-    let invalid_config = ShardexConfig::new()
+fn demonstrate_config_errors(temp_dir: &std::path::Path) {
+    // Invalid vector size using ApiThing pattern
+    let mut context1 = ShardexContext::new();
+    match CreateIndexParams::builder()
         .directory_path(temp_dir.join("invalid1"))
-        .vector_size(0);
-
-    match ShardexImpl::create(invalid_config).await {
-        Ok(_) => println!("✗ Unexpected success with invalid vector size"),
-        Err(ShardexError::Config(msg)) => {
-            println!("✓ Caught configuration error: {}", msg);
+        .vector_size(0)
+        .build() {
+        Ok(params) => {
+            match CreateIndex::execute(&mut context1, &params) {
+                Ok(_) => println!("✗ Unexpected success with invalid vector size"),
+                Err(e) => println!("✓ Caught configuration error: {}", e),
+            }
         }
-        Err(e) => println!("✗ Unexpected error type: {}", e),
-    }
-
-    // Invalid shard size
-    let invalid_config = ShardexConfig::new()
-        .directory_path(temp_dir.join("invalid2"))
-        .shard_size(0);
-
-    match ShardexImpl::create(invalid_config).await {
-        Ok(_) => println!("✗ Unexpected success with invalid shard size"),
-        Err(ShardexError::Config(msg)) => {
-            println!("✓ Caught configuration error: {}", msg);
-        }
-        Err(e) => println!("✗ Unexpected error type: {}", e),
-    }
-
-    // Invalid directory path (empty)
-    let invalid_config = ShardexConfig::new().directory_path("");
-
-    match ShardexImpl::create(invalid_config).await {
-        Ok(_) => println!("✗ Unexpected success with empty directory path"),
         Err(e) => {
-            println!("✓ Caught error for empty path: {}", e);
+            println!("✓ Caught configuration validation error: {}", e);
+        }
+    }
+
+    // Invalid shard size using ApiThing pattern
+    let mut context2 = ShardexContext::new();
+    match CreateIndexParams::builder()
+        .directory_path(temp_dir.join("invalid2"))
+        .shard_size(0)
+        .build() {
+        Ok(params) => {
+            match CreateIndex::execute(&mut context2, &params) {
+                Ok(_) => println!("✗ Unexpected success with invalid shard size"),
+                Err(e) => println!("✓ Caught configuration error: {}", e),
+            }
+        }
+        Err(e) => {
+            println!("✓ Caught configuration validation error: {}", e);
+        }
+    }
+
+    // Invalid directory path (empty) using ApiThing pattern
+    let mut context3 = ShardexContext::new();
+    match CreateIndexParams::builder()
+        .directory_path("".into())
+        .build() {
+        Ok(params) => {
+            match CreateIndex::execute(&mut context3, &params) {
+                Ok(_) => println!("✗ Unexpected success with empty directory path"),
+                Err(e) => println!("✓ Caught error for empty path: {}", e),
+            }
+        }
+        Err(e) => {
+            println!("✓ Caught configuration validation error: {}", e);
         }
     }
 }
 
-async fn demonstrate_input_validation(index: &mut ShardexImpl) {
-    // Wrong vector dimension
+fn demonstrate_input_validation(context: &mut ShardexContext) {
+    // Wrong vector dimension using ApiThing pattern
     let posting_wrong_dim = Posting {
         document_id: DocumentId::from_raw(1),
         start: 0,
@@ -126,15 +154,22 @@ async fn demonstrate_input_validation(index: &mut ShardexImpl) {
         vector: vec![0.1, 0.2], // Wrong size: expected 128, got 2
     };
 
-    match index.add_postings(vec![posting_wrong_dim]).await {
-        Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
-        Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
+    match AddPostingsParams::new(vec![posting_wrong_dim]) {
+        Ok(params) => {
+            match AddPostings::execute(context, &params) {
+                Ok(_) => println!("✗ Unexpected success with wrong vector dimension"),
+                Err(ShardexError::InvalidDimension { expected, actual }) => {
+                    println!("✓ Caught dimension error: expected {}, got {}", expected, actual);
+                }
+                Err(e) => println!("✗ Unexpected error type: {}", e),
+            }
         }
-        Err(e) => println!("✗ Unexpected error type: {}", e),
+        Err(e) => {
+            println!("✓ Caught parameter validation error: {}", e);
+        }
     }
 
-    // Empty vector
+    // Empty vector using ApiThing pattern
     let posting_empty_vector = Posting {
         document_id: DocumentId::from_raw(2),
         start: 0,
@@ -142,178 +177,284 @@ async fn demonstrate_input_validation(index: &mut ShardexImpl) {
         vector: vec![], // Empty vector
     };
 
-    match index.add_postings(vec![posting_empty_vector]).await {
-        Ok(_) => println!("✗ Unexpected success with empty vector"),
+    match AddPostingsParams::new(vec![posting_empty_vector]) {
+        Ok(params) => {
+            match AddPostings::execute(context, &params) {
+                Ok(_) => println!("✗ Unexpected success with empty vector"),
+                Err(e) => {
+                    println!("✓ Caught error for empty vector: {}", e);
+                }
+            }
+        }
         Err(e) => {
-            println!("✓ Caught error for empty vector: {}", e);
+            println!("✓ Caught parameter validation error: {}", e);
         }
     }
 
-    // Empty postings list
-    match index.add_postings(vec![]).await {
-        Ok(_) => println!("✓ Empty postings list handled gracefully"),
-        Err(e) => println!("✗ Unexpected error for empty postings: {}", e),
+    // Empty postings list using ApiThing pattern
+    match AddPostingsParams::new(vec![]) {
+        Ok(params) => {
+            match AddPostings::execute(context, &params) {
+                Ok(_) => println!("✓ Empty postings list handled gracefully"),
+                Err(e) => println!("✗ Unexpected error for empty postings: {}", e),
+            }
+        }
+        Err(e) => {
+            println!("✓ Caught parameter validation error for empty postings: {}", e);
+        }
     }
 
-    // Invalid document IDs for removal
-    match index.remove_documents(vec![]).await {
-        Ok(_) => println!("✓ Empty document list handled gracefully"),
-        Err(e) => println!("✗ Unexpected error for empty documents: {}", e),
+    // Context state error - try to add postings without initialized index
+    let mut uninitialized_context = ShardexContext::new();
+    let valid_posting = Posting {
+        document_id: DocumentId::from_raw(3),
+        start: 0,
+        length: 100,
+        vector: vec![0.1; 128],
+    };
+
+    match AddPostingsParams::new(vec![valid_posting]) {
+        Ok(params) => {
+            match AddPostings::execute(&mut uninitialized_context, &params) {
+                Ok(_) => println!("✗ Unexpected success with uninitialized context"),
+                Err(e) => {
+                    println!("✓ Caught context error: {}", e);
+                }
+            }
+        }
+        Err(e) => println!("✗ Unexpected parameter validation error: {}", e),
     }
 }
 
-async fn demonstrate_io_errors(temp_dir: &std::path::Path) {
-    // Try to open non-existent index
+fn demonstrate_io_errors(temp_dir: &std::path::Path) {
+    // Try to open non-existent index using ApiThing pattern
     let non_existent = temp_dir.join("does_not_exist");
-    match ShardexImpl::open(&non_existent).await {
+    let mut context1 = ShardexContext::new();
+    let open_params = OpenIndexParams::new(non_existent);
+    
+    match OpenIndex::execute(&mut context1, &open_params) {
         Ok(_) => println!("✗ Unexpected success opening non-existent index"),
-        Err(ShardexError::Io(io_err)) => {
-            println!("✓ Caught I/O error for non-existent index: {}", io_err);
+        Err(e) => {
+            println!("✓ Caught error for non-existent index: {}", e);
         }
-        Err(e) => println!("✗ Unexpected error type: {}", e),
     }
 
     // Create a file where directory should be
     let file_path = temp_dir.join("file_not_dir");
     std::fs::write(&file_path, "not a directory").unwrap();
 
-    let config = ShardexConfig::new().directory_path(&file_path);
-    match ShardexImpl::create(config).await {
-        Ok(_) => println!("✗ Unexpected success with file instead of directory"),
+    let mut context2 = ShardexContext::new();
+    match CreateIndexParams::builder()
+        .directory_path(file_path)
+        .vector_size(128)
+        .build() {
+        Ok(params) => {
+            match CreateIndex::execute(&mut context2, &params) {
+                Ok(_) => println!("✗ Unexpected success with file instead of directory"),
+                Err(e) => {
+                    println!("✓ Caught error when directory path is a file: {}", e);
+                }
+            }
+        }
         Err(e) => {
-            println!("✓ Caught error when directory path is a file: {}", e);
+            println!("✓ Caught parameter validation error: {}", e);
         }
     }
 }
 
-async fn demonstrate_search_errors(index: &ShardexImpl) {
-    // Wrong query vector dimension
+fn demonstrate_search_errors(context: &mut ShardexContext) {
+    // Wrong query vector dimension using ApiThing pattern
     let wrong_query = vec![0.1, 0.2]; // Wrong size: expected 128, got 2
-    match index.search(&wrong_query, 5, None).await {
-        Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
-        Err(ShardexError::InvalidDimension { expected, actual }) => {
-            println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
+    match SearchParams::builder()
+        .query_vector(wrong_query)
+        .k(5)
+        .build() {
+        Ok(params) => {
+            match Search::execute(context, &params) {
+                Ok(_) => println!("✗ Unexpected success with wrong query dimension"),
+                Err(ShardexError::InvalidDimension { expected, actual }) => {
+                    println!("✓ Caught search dimension error: expected {}, got {}", expected, actual);
+                }
+                Err(e) => println!("✗ Unexpected error type: {}", e),
+            }
         }
-        Err(e) => println!("✗ Unexpected error type: {}", e),
+        Err(e) => {
+            println!("✓ Caught parameter validation error: {}", e);
+        }
     }
 
-    // Empty query vector
+    // Empty query vector using ApiThing pattern
     let empty_query = vec![];
-    match index.search(&empty_query, 5, None).await {
-        Ok(_) => println!("✗ Unexpected success with empty query"),
+    match SearchParams::builder()
+        .query_vector(empty_query)
+        .k(5)
+        .build() {
+        Ok(params) => {
+            match Search::execute(context, &params) {
+                Ok(_) => println!("✗ Unexpected success with empty query"),
+                Err(e) => {
+                    println!("✓ Caught error for empty query: {}", e);
+                }
+            }
+        }
         Err(e) => {
-            println!("✓ Caught error for empty query: {}", e);
+            println!("✓ Caught parameter validation error for empty query: {}", e);
         }
     }
 
-    // Invalid k value
+    // Invalid k value using ApiThing pattern
     let valid_query = vec![0.0; 128];
-    match index.search(&valid_query, 0, None).await {
-        Ok(_) => println!("✗ Unexpected success with k=0"),
-        Err(e) => {
-            println!("✓ Caught error for k=0: {}", e);
+    match SearchParams::builder()
+        .query_vector(valid_query)
+        .k(0)
+        .build() {
+        Ok(params) => {
+            match Search::execute(context, &params) {
+                Ok(_) => println!("✗ Unexpected success with k=0"),
+                Err(e) => {
+                    println!("✓ Caught error for k=0: {}", e);
+                }
+            }
         }
+        Err(e) => {
+            println!("✓ Caught parameter validation error for k=0: {}", e);
+        }
+    }
+
+    // Search on uninitialized context
+    let mut uninitialized_context = ShardexContext::new();
+    match SearchParams::builder()
+        .query_vector(vec![0.1; 128])
+        .k(5)
+        .build() {
+        Ok(params) => {
+            match Search::execute(&mut uninitialized_context, &params) {
+                Ok(_) => println!("✗ Unexpected success with uninitialized context"),
+                Err(e) => {
+                    println!("✓ Caught context error for search: {}", e);
+                }
+            }
+        }
+        Err(e) => println!("✗ Unexpected parameter validation error: {}", e),
     }
 }
 
-async fn demonstrate_robust_patterns(temp_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn demonstrate_robust_patterns(temp_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("Demonstrating robust error handling patterns...");
 
-    // Pattern 1: Retry with backoff
+    // Pattern 1: Retry with backoff using ApiThing pattern
     println!("\n  Pattern 1: Retry with backoff");
     let result = retry_with_backoff(
-        || async {
-            // Simulate operation that might fail
-            let config = ShardexConfig::new().directory_path(temp_dir.join("robust_index"));
-            ShardexImpl::create(config).await
+        || {
+            // Simulate operation that might fail using ApiThing pattern
+            let mut context = ShardexContext::new();
+            match CreateIndexParams::builder()
+                .directory_path(temp_dir.join("robust_index"))
+                .vector_size(128)
+                .build() {
+                Ok(params) => CreateIndex::execute(&mut context, &params),
+                Err(e) => Err(e),
+            }
         },
         3, // max retries
-    )
-    .await;
+    );
 
     match result {
         Ok(_) => println!("    ✓ Operation succeeded"),
         Err(e) => println!("    ✗ Operation failed after retries: {}", e),
     }
 
-    // Pattern 2: Graceful degradation
+    // Pattern 2: Graceful degradation using ApiThing pattern
     println!("\n  Pattern 2: Graceful degradation");
-    let mut index = create_or_recover_index(temp_dir.join("graceful_index")).await?;
+    let mut context = create_or_recover_index_apithing_with_vector_size(temp_dir.join("graceful_index_128"), 128)?;
 
-    // Try to add some data
+    // Try to add some data - ensure vector dimension matches index
     let postings = vec![Posting {
         document_id: DocumentId::from_raw(1),
         start: 0,
         length: 100,
-        vector: vec![0.1; 128],
+        vector: vec![0.1; 128], // This will be 128 dimensions to match the created index
     }];
 
-    match index.add_postings(postings).await {
-        Ok(_) => {
-            println!("    ✓ Successfully added postings");
-            match index.flush().await {
-                Ok(_) => println!("    ✓ Successfully flushed data"),
-                Err(e) => {
-                    println!("    ⚠ Flush failed, but data is still in WAL: {}", e);
-                    // Continue operation - data will be recovered on restart
+    match AddPostingsParams::new(postings) {
+        Ok(add_params) => {
+            match AddPostings::execute(&mut context, &add_params) {
+                Ok(_) => {
+                    println!("    ✓ Successfully added postings");
+                    let flush_params = FlushParams::new();
+                    match Flush::execute(&mut context, &flush_params) {
+                        Ok(_) => println!("    ✓ Successfully flushed data"),
+                        Err(e) => {
+                            println!("    ⚠ Flush failed, but data is still in WAL: {}", e);
+                            // Continue operation - data will be recovered on restart
+                        }
+                    }
                 }
+                Err(e) => println!("    ✗ Failed to add postings: {}", e),
             }
         }
-        Err(e) => println!("    ✗ Failed to add postings: {}", e),
+        Err(e) => println!("    ✗ Failed to create posting parameters: {}", e),
     }
 
     Ok(())
 }
 
-async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
+fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(), Box<dyn Error>> {
     println!("Demonstrating error recovery strategies...");
 
-    // Strategy 1: Automatic retry for transient errors
+    // Strategy 1: Automatic retry for transient errors using ApiThing pattern
     println!("\n  Strategy 1: Automatic retry for transient errors");
 
     let index_path = temp_dir.join("recovery_index");
     let mut attempts = 0;
 
-    let _index = loop {
+    let _context = loop {
         attempts += 1;
-        let config = ShardexConfig::new().directory_path(&index_path);
-
-        match ShardexImpl::create(config).await {
-            Ok(index) => {
-                println!("    ✓ Index created successfully on attempt {}", attempts);
-                break index;
-            }
-            Err(ShardexError::Io(_)) if attempts < 3 => {
-                println!("    ⚠ I/O error on attempt {}, retrying...", attempts);
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                continue;
+        let mut context = ShardexContext::new();
+        
+        match CreateIndexParams::builder()
+            .directory_path(index_path.clone())
+            .vector_size(128)
+            .build() {
+            Ok(params) => {
+                match CreateIndex::execute(&mut context, &params) {
+                    Ok(_) => {
+                        println!("    ✓ Index created successfully on attempt {}", attempts);
+                        break context;
+                    }
+                    Err(e) if attempts < 3 => {
+                        println!("    ⚠ Error on attempt {}, retrying: {}", attempts, e);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(e) => {
+                        println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
+                        return Err(e.into());
+                    }
+                }
             }
             Err(e) => {
-                println!("    ✗ Failed to create index after {} attempts: {}", attempts, e);
+                println!("    ✗ Failed to build parameters: {}", e);
                 return Err(e.into());
             }
         }
     };
 
-    // Strategy 2: Validate before operations
+    // Strategy 2: Input validation before operations using ApiThing pattern
     println!("\n  Strategy 2: Input validation before operations");
 
-    let validate_and_add = |postings: Vec<Posting>| async {
-        // Pre-validate postings
-        for (i, posting) in postings.iter().enumerate() {
-            if posting.vector.is_empty() {
-                return Err(format!("Posting {} has empty vector", i));
+    let validate_and_add_apithing = |postings: Vec<Posting>| {
+        // Create parameters and let ApiThing validation handle the checks
+        match AddPostingsParams::new(postings.clone()) {
+            Ok(_) => {
+                println!("    ✓ ApiThing parameter validation succeeded");
+                Ok(postings)
             }
-            if posting.vector.len() != 128 {
-                return Err(format!(
-                    "Posting {} has wrong vector dimension: {}",
-                    i,
-                    posting.vector.len()
-                ));
+            Err(e) => {
+                println!("    ✗ ApiThing parameter validation failed: {}", e);
+                Err(format!("Parameter validation error: {}", e))
             }
         }
-
-        Ok(postings)
     };
 
     let test_postings = vec![Posting {
@@ -323,24 +464,46 @@ async fn demonstrate_recovery_strategies(temp_dir: &std::path::Path) -> Result<(
         vector: vec![0.1; 128],
     }];
 
-    match validate_and_add(test_postings).await {
+    match validate_and_add_apithing(test_postings) {
         Ok(_validated_postings) => {
-            println!("    ✓ Postings validated successfully");
-            // Would proceed with index.add_postings(validated_postings)
+            println!("    ✓ Postings validated successfully using ApiThing pattern");
         }
         Err(e) => println!("    ✗ Validation failed: {}", e),
+    }
+
+    // Strategy 3: Context state validation
+    println!("\n  Strategy 3: Context state validation");
+    
+    let mut uninitialized_context = ShardexContext::new();
+    if !uninitialized_context.is_initialized() {
+        println!("    ✓ Detected uninitialized context before operation");
+        
+        // Initialize context first
+        match CreateIndexParams::builder()
+            .directory_path(temp_dir.join("strategy3_index"))
+            .vector_size(128)
+            .build() {
+            Ok(params) => {
+                match CreateIndex::execute(&mut uninitialized_context, &params) {
+                    Ok(_) => println!("    ✓ Context initialized successfully"),
+                    Err(e) => println!("    ✗ Failed to initialize context: {}", e),
+                }
+            }
+            Err(e) => println!("    ✗ Failed to build parameters: {}", e),
+        }
     }
 
     Ok(())
 }
 
-async fn retry_with_backoff<F, Fut, T, E>(mut operation: F, max_retries: usize) -> Result<T, E>
+
+
+fn retry_with_backoff<F, T, E>(mut operation: F, max_retries: usize) -> Result<T, E>
 where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, E>>,
+    F: FnMut() -> Result<T, E>,
 {
     for attempt in 0..max_retries {
-        match operation().await {
+        match operation() {
             Ok(result) => return Ok(result),
             Err(e) => {
                 if attempt == max_retries - 1 {
@@ -348,7 +511,7 @@ where
                 }
                 // Exponential backoff
                 let delay = std::time::Duration::from_millis(100 * (2_u64.pow(attempt as u32)));
-                tokio::time::sleep(delay).await;
+                std::thread::sleep(delay);
             }
         }
     }
@@ -356,19 +519,37 @@ where
     unreachable!()
 }
 
-async fn create_or_recover_index(path: std::path::PathBuf) -> Result<ShardexImpl, ShardexError> {
-    // Try to open existing index first
-    match ShardexImpl::open(&path).await {
-        Ok(index) => {
-            println!("    ✓ Recovered existing index");
-            Ok(index)
+
+
+
+
+fn create_or_recover_index_apithing_with_vector_size(path: std::path::PathBuf, vector_size: usize) -> Result<ShardexContext, ShardexError> {
+    let mut context = ShardexContext::new();
+    
+    // Try to open existing index first using ApiThing pattern
+    let open_params = OpenIndexParams::new(path.clone());
+    match OpenIndex::execute(&mut context, &open_params) {
+        Ok(_) => {
+            println!("    ✓ Recovered existing index using ApiThing pattern");
+            Ok(context)
         }
         Err(_) => {
             // Create new index if opening failed
-            let config = ShardexConfig::new().directory_path(path);
-            let index = ShardexImpl::create(config).await?;
-            println!("    ✓ Created new index");
-            Ok(index)
+            let mut new_context = ShardexContext::new();
+            match CreateIndexParams::builder()
+                .directory_path(path)
+                .vector_size(vector_size)
+                .build() {
+                Ok(create_params) => {
+                    CreateIndex::execute(&mut new_context, &create_params)?;
+                    println!("    ✓ Created new index using ApiThing pattern");
+                    Ok(new_context)
+                }
+                Err(e) => {
+                    println!("    ✗ Failed to build create parameters: {}", e);
+                    Err(e)
+                }
+            }
         }
     }
 }

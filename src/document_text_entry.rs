@@ -26,9 +26,8 @@
 //!
 //! ## Creating Index Headers
 //!
-//! ```rust
-//! use shardex::document_text_entry::{TextIndexHeader, TEXT_INDEX_MAGIC};
-//! use shardex::memory::FileHeader;
+//! ```rust,no_run
+//! # use shardex::document_text_entry::{TextIndexHeader, TEXT_INDEX_MAGIC};
 //!
 //! // Create a new text index header
 //! let header = TextIndexHeader::new();

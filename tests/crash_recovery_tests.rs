@@ -4,8 +4,8 @@
 //! crash detection, WAL replay, consistency validation, and various crash scenarios.
 
 use shardex::{
-    CrashRecovery, DirectoryLayout, DocumentId, Posting, Shard, ShardId, ShardexConfig, ShardexIndex, TransactionId,
-    WalOperation, WalSegment, WalTransaction,
+    CrashRecovery, DirectoryLayout, DocumentId, Posting, Shard, ShardId, ShardexConfig, ShardexError, ShardexIndex,
+    TransactionId, WalOperation, WalSegment, WalTransaction,
 };
 use std::time::Duration;
 use tempfile::TempDir;
@@ -261,11 +261,14 @@ async fn test_concurrent_crash_detection() {
     let mut recovery3 = CrashRecovery::new(config);
 
     // Run crash detection concurrently
-    let (result1, result2, result3) = tokio::join!(
-        recovery1.detect_crash(),
-        recovery2.detect_crash(),
-        recovery3.detect_crash()
-    );
+    let result1 = recovery1.detect_crash();
+    let result2 = recovery2.detect_crash();
+    let result3 = recovery3.detect_crash();
+    let (result1, result2, result3): (
+        Result<bool, ShardexError>,
+        Result<bool, ShardexError>,
+        Result<bool, ShardexError>,
+    ) = tokio::join!(result1, result2, result3);
 
     // All should succeed and return consistent results
     assert!(result1.is_ok());

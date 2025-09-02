@@ -4,7 +4,10 @@
 //! in production environments, including memory pressure, crashes, and
 //! concurrent reader/writer failures.
 
-use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexIndex};
+use shardex::ShardexConfig;
+use shardex::concurrent::ConcurrentShardex;
+use shardex::cow_index::CowShardexIndex;
+use shardex::shardex_index::ShardexIndex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,7 +29,7 @@ async fn test_concurrent_reader_writer_failures() {
 
     // Spawn readers that may encounter failures
     for reader_id in 0..5 {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let failure_counter = Arc::clone(&failure_count);
         let success_counter = Arc::clone(&success_count);
 
@@ -57,7 +60,7 @@ async fn test_concurrent_reader_writer_failures() {
 
     // Spawn writers that may encounter failures
     for writer_id in 0..3 {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let failure_counter = Arc::clone(&failure_count);
         let success_counter = Arc::clone(&success_count);
 
@@ -123,7 +126,7 @@ async fn test_memory_pressure_behavior() {
     // Create memory pressure by spawning many concurrent writers
     // This simulates the scenario where COW operations consume significant memory
     for writer_id in 0..20 {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let ops_counter = Arc::clone(&memory_pressure_operations);
 
         tasks.spawn(async move {
@@ -159,7 +162,7 @@ async fn test_memory_pressure_behavior() {
     }
 
     // Monitor memory pressure indicators while operations run
-    let concurrent_monitor = Arc::clone(&concurrent);
+    let concurrent_monitor: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
     let monitor_task = tokio::spawn(async move {
         let mut high_contention_count = 0;
 
@@ -273,7 +276,7 @@ async fn test_extreme_read_concurrency() {
 
     // Spawn many concurrent readers (simulate high read load)
     for reader_id in 0..100 {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
         let counter = Arc::clone(&read_count);
 
         tasks.spawn(async move {
@@ -297,7 +300,7 @@ async fn test_extreme_read_concurrency() {
 
     // Also run some writers concurrently to test mixed workload
     for writer_id in 0..5 {
-        let concurrent_clone = Arc::clone(&concurrent);
+        let concurrent_clone: Arc<ConcurrentShardex> = Arc::clone(&concurrent);
 
         tasks.spawn(async move {
             for _op_id in 0..3 {

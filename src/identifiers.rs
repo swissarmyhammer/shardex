@@ -84,6 +84,11 @@ impl ShardId {
     pub fn raw(self) -> u128 {
         self.0
     }
+
+    /// Create a ShardId from a raw u128 value
+    pub fn from_raw(raw: u128) -> Self {
+        Self(raw)
+    }
 }
 
 impl DocumentId {
@@ -202,6 +207,11 @@ impl TransactionId {
     /// Get the raw u128 value (mainly for testing)
     pub fn raw(self) -> u128 {
         self.0
+    }
+
+    /// Create a TransactionId from a raw u128 value
+    pub fn from_raw(raw: u128) -> Self {
+        Self(raw)
     }
 }
 

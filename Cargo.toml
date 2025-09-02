@@ -18,6 +18,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+apithing = { git = "https://github.com/swissarmyhammer/apithing" }
 arrow = "53"
 arrow-array = "53"
 arrow-buffer = "53"

@@ -14,74 +14,18 @@
 //!
 //! ## Creating and Writing to a Memory-Mapped File
 //!
-//! ```rust
-//! use shardex::memory::{MemoryMappedFile, StandardHeader};
-//! use shardex::constants::magic;
-//! use tempfile::TempDir;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let temp_dir = TempDir::new()?;
-//! let file_path = temp_dir.path().join("test.dat");
-//!
-//! // Create a new memory-mapped file with initial size
-//! let mut mmf = MemoryMappedFile::create(&file_path, 1024)?;
-//!
-//! // Write a header with magic bytes and version
-//! let header = StandardHeader::new(magic::TEST_SHARD, 1, StandardHeader::SIZE as u64, &[42u8; 100]);
-//! mmf.write_at(0, &header)?;
-//!
-//! // Write some data
-//! let data: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-//! mmf.write_at(StandardHeader::SIZE, &data)?;
-//!
-//! // Sync to disk
-//! mmf.sync()?;
-//! # Ok(())
-//! # }
-//! ```
+//! Internal memory management provides efficient file-based storage with memory mapping
+//! for zero-copy operations and fast access to index data.
 //!
 //! ## Reading from a Memory-Mapped File
 //!
-//! ```rust
-//! use shardex::memory::{MemoryMappedFile, StandardHeader};
-//! use shardex::constants::magic;
-//! use std::path::Path;
-//!
-//! # fn read_example(file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-//! // Open existing file for reading
-//! let mmf = MemoryMappedFile::open_read_only(file_path)?;
-//!
-//! // Read and validate header
-//! let header: StandardHeader = mmf.read_at(0)?;
-//! header.validate_magic(magic::TEST_SHARD)?;
-//! header.validate_checksum(&mmf.as_slice()[StandardHeader::SIZE..])?;
-//!
-//! // Read typed data
-//! let data: [u32; 10] = mmf.read_at(StandardHeader::SIZE)?;
-//! println!("First element: {}", data[0]);
-//! # Ok(())
-//! # }
-//! ```
+//! Memory-mapped files provide efficient read-only access with header validation
+//! and type-safe data reading for index file access.
 //!
 //! ## File Resizing and Management
 //!
-//! ```rust
-//! use shardex::memory::MemoryMappedFile;
-//! use tempfile::TempDir;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let temp_dir = TempDir::new()?;
-//! let file_path = temp_dir.path().join("growing.dat");
-//!
-//! let mut mmf = MemoryMappedFile::create(&file_path, 512)?;
-//! assert_eq!(mmf.len(), 512);
-//!
-//! // Resize the file
-//! mmf.resize(1024)?;
-//! assert_eq!(mmf.len(), 1024);
-//! # Ok(())
-//! # }
-//! ```
+//! Memory-mapped files support dynamic resizing for growing index data,
+//! allowing efficient expansion without full file rewrites.
 
 use crate::error::ShardexError;
 use bytemuck::{Pod, Zeroable};

@@ -56,7 +56,6 @@ async fn test_error_handling_system_integration() {
         max_recovery_attempts: 2,
         backup_before_recovery: true,
         recovery_strategy: RecoveryStrategy::Conservative,
-        recovery_timeout: Duration::from_secs(30),
     };
 
     // Create a new storage instance for the mutex since we can't move from Arc

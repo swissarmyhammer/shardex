@@ -2,6 +2,10 @@
 //!
 //! This module provides async wrappers around document text storage with
 //! read-ahead buffering, batch operations, and non-blocking I/O patterns.
+//!
+//! Note: This module contains future API implementations and is not yet fully integrated.
+
+#![allow(dead_code)]
 
 use crate::concurrent_document_text_storage::{ConcurrentDocumentTextStorage, ConcurrentStorageConfig};
 use crate::document_text_storage::DocumentTextStorage;
@@ -16,6 +20,7 @@ use tokio::time::timeout;
 
 /// Access pattern entry for tracking document access sequences
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct AccessEntry {
     document_id: DocumentId,
     timestamp: SystemTime,
@@ -24,6 +29,7 @@ struct AccessEntry {
 }
 
 impl AccessEntry {
+    #[allow(dead_code)]
     fn new(document_id: DocumentId, sequence_position: usize) -> Self {
         Self {
             document_id,
@@ -32,6 +38,7 @@ impl AccessEntry {
         }
     }
 
+    #[allow(dead_code)]
     fn age(&self) -> Duration {
         self.timestamp.elapsed().unwrap_or(Duration::ZERO)
     }
@@ -39,6 +46,7 @@ impl AccessEntry {
 
 /// Tracks co-occurrence patterns between documents
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 struct CooccurrenceMap {
     /// Map from document_id to documents that are frequently accessed together
     patterns: HashMap<DocumentId, HashMap<DocumentId, f64>>,
@@ -46,6 +54,7 @@ struct CooccurrenceMap {
 }
 
 impl CooccurrenceMap {
+    #[allow(dead_code)]
     fn new(max_patterns_per_document: usize) -> Self {
         Self {
             patterns: HashMap::new(),
@@ -54,6 +63,7 @@ impl CooccurrenceMap {
     }
 
     /// Record that two documents were accessed together
+    #[allow(dead_code)]
     fn record_cooccurrence(&mut self, doc1: DocumentId, doc2: DocumentId, weight: f64) {
         if doc1 == doc2 {
             return;
@@ -71,6 +81,7 @@ impl CooccurrenceMap {
     }
 
     /// Get documents likely to be accessed with the given document
+    #[allow(dead_code)]
     fn get_predicted_documents(&self, document_id: DocumentId, limit: usize) -> Vec<(DocumentId, f64)> {
         self.patterns
             .get(&document_id)
@@ -84,6 +95,7 @@ impl CooccurrenceMap {
     }
 
     /// Clean up old or weak patterns
+    #[allow(dead_code)]
     fn cleanup(&mut self, min_strength: f64) {
         self.patterns.retain(|_, patterns| {
             patterns.retain(|_, &mut strength| strength >= min_strength);
@@ -94,6 +106,7 @@ impl CooccurrenceMap {
 
 /// Access pattern tracker for read-ahead prediction
 #[derive(Debug)]
+#[allow(dead_code)]
 struct AccessPatternTracker {
     /// Recent access history (sliding window)
     access_history: VecDeque<AccessEntry>,
@@ -108,6 +121,7 @@ struct AccessPatternTracker {
 }
 
 impl AccessPatternTracker {
+    #[allow(dead_code)]
     fn new(max_history_size: usize, temporal_window: Duration, max_cooccurrence_patterns: usize) -> Self {
         Self {
             access_history: VecDeque::with_capacity(max_history_size),
@@ -119,6 +133,7 @@ impl AccessPatternTracker {
     }
 
     /// Record a document access
+    #[allow(dead_code)]
     fn record_access(&mut self, document_id: DocumentId) {
         // Add to history
         let entry = AccessEntry::new(document_id, self.sequence_counter);
@@ -158,6 +173,7 @@ impl AccessPatternTracker {
     }
 
     /// Predict likely next documents based on access patterns
+    #[allow(dead_code)]
     fn predict_next_documents(&self, current_document: DocumentId, limit: usize) -> Vec<DocumentId> {
         let mut predictions = Vec::new();
 
@@ -206,6 +222,7 @@ impl AccessPatternTracker {
     }
 
     /// Clean up old entries and weak patterns
+    #[allow(dead_code)]
     fn cleanup(&mut self) {
         // Remove old entries from history
         let cutoff_time = SystemTime::now() - self.temporal_window;
@@ -222,6 +239,7 @@ impl AccessPatternTracker {
     }
 
     /// Get current access pattern statistics
+    #[allow(dead_code)]
     fn get_stats(&self) -> (usize, usize) {
         (self.access_history.len(), self.cooccurrence.patterns.len())
     }
@@ -229,6 +247,7 @@ impl AccessPatternTracker {
 
 /// Configuration for async document text storage
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AsyncStorageConfig {
     /// Configuration for underlying concurrent storage
     pub concurrent_config: ConcurrentStorageConfig,
@@ -274,6 +293,7 @@ impl Default for AsyncStorageConfig {
 
 /// Read-ahead buffer entry
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ReadAheadEntry {
     #[allow(dead_code)] // Used as map key, not read directly
     document_id: DocumentId,
@@ -283,6 +303,7 @@ struct ReadAheadEntry {
 }
 
 impl ReadAheadEntry {
+    #[allow(dead_code)]
     fn new(document_id: DocumentId, text: String) -> Self {
         Self {
             document_id,
@@ -292,10 +313,12 @@ impl ReadAheadEntry {
         }
     }
 
+    #[allow(dead_code)]
     fn is_expired(&self, ttl: Duration) -> bool {
         self.created_at.elapsed().unwrap_or(Duration::ZERO) > ttl
     }
 
+    #[allow(dead_code)]
     fn touch(&mut self) {
         self.access_count += 1;
     }
@@ -303,6 +326,7 @@ impl ReadAheadEntry {
 
 /// Read-ahead buffer for predictive caching
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ReadAheadBuffer {
     entries: HashMap<DocumentId, ReadAheadEntry>,
     access_order: Vec<DocumentId>,

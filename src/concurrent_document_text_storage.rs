@@ -85,6 +85,7 @@ pub struct ConcurrentStorageMetrics {
     /// Successful write operations
     pub successful_writes: u64,
     /// Failed write operations
+    #[allow(dead_code)]
     pub failed_writes: u64,
     /// Metadata cache hits
     pub metadata_cache_hits: u64,
@@ -100,6 +101,7 @@ pub struct ConcurrentStorageMetrics {
 
 impl ConcurrentStorageMetrics {
     /// Calculate read success ratio
+    #[allow(dead_code)]
     pub fn read_success_ratio(&self) -> f64 {
         if self.read_operations == 0 {
             0.0
@@ -109,6 +111,7 @@ impl ConcurrentStorageMetrics {
     }
 
     /// Calculate write success ratio
+    #[allow(dead_code)]
     pub fn write_success_ratio(&self) -> f64 {
         if self.write_operations == 0 {
             0.0
@@ -118,6 +121,7 @@ impl ConcurrentStorageMetrics {
     }
 
     /// Calculate metadata cache hit ratio
+    #[allow(dead_code)]
     pub fn metadata_cache_hit_ratio(&self) -> f64 {
         let total = self.metadata_cache_hits + self.metadata_cache_misses;
         if total == 0 {
@@ -310,6 +314,7 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Store text immediately without batching (for urgent operations)
+    #[allow(dead_code)]
     pub async fn store_text_immediate(&self, document_id: DocumentId, text: &str) -> Result<(), ShardexError> {
         let _permit = self
             .concurrency_limiter
@@ -531,6 +536,7 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Update metadata cache
+    #[allow(dead_code)]
     fn update_metadata_cache(&self, document_id: DocumentId, text_length: u64) {
         let mut cache = self.metadata_cache.lock();
         let metadata = DocumentMetadata {
@@ -564,6 +570,7 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Update write operation metrics  
+    #[allow(dead_code)]
     fn update_write_metrics(&self, success: bool, latency_ms: f64) {
         let mut metrics = self.metrics.lock();
         metrics.write_operations += 1;
@@ -585,24 +592,28 @@ impl ConcurrentDocumentTextStorage {
     }
 
     /// Get current performance metrics
+    #[allow(dead_code)]
     pub fn get_metrics(&self) -> ConcurrentStorageMetrics {
         let metrics = self.metrics.lock();
         metrics.clone()
     }
 
     /// Reset performance metrics
+    #[allow(dead_code)]
     pub fn reset_metrics(&self) {
         let mut metrics = self.metrics.lock();
         *metrics = ConcurrentStorageMetrics::default();
     }
 
     /// Get metadata cache information
+    #[allow(dead_code)]
     pub fn cache_info(&self) -> (usize, usize) {
         let cache = self.metadata_cache.lock();
         (cache.len(), self.config.metadata_cache_size)
     }
 
     /// Clear metadata cache
+    #[allow(dead_code)]
     pub fn clear_metadata_cache(&self) {
         let mut cache = self.metadata_cache.lock();
         cache.clear();

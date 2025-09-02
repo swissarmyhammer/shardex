@@ -6,11 +6,21 @@
 //! - Extracting text snippets from search results
 //! - Error handling for text storage operations
 
-use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
+use apithing::ApiOperation;
+use shardex::{
+    api::{
+        CreateIndex, CreateIndexParams, ExtractSnippet, ExtractSnippetParams, Flush, FlushParams, GetDocumentText,
+        GetDocumentTextParams, GetStats, GetStatsParams, Search, SearchParams, ShardexContext, StoreDocumentText,
+        StoreDocumentTextParams,
+    },
+    DocumentId, Posting, ShardexConfig,
+};
 use std::error::Error;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+/// Vector size used for text embeddings
+const VECTOR_SIZE: usize = 128;
+
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Shardex Document Text Storage - Basic Example");
     println!("==============================================");
 
@@ -21,19 +31,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     std::fs::create_dir_all(&temp_dir)?;
 
-    // Configure Shardex with text storage enabled
+    // Create context with text storage enabled
     let config = ShardexConfig::new()
         .directory_path(&temp_dir)
-        .vector_size(128)
-        .max_document_text_size(1024 * 1024) // 1MB per document
+        .max_document_text_size(1024 * 1024); // 1MB per document
+    let mut context = ShardexContext::with_config(config);
+
+    let create_params = CreateIndexParams::builder()
+        .directory_path(temp_dir.clone())
+        .vector_size(VECTOR_SIZE)
         .shard_size(10000)
-        .batch_write_interval_ms(100);
+        .batch_write_interval_ms(100)
+        .build()?;
 
     println!("Creating index with text storage enabled");
-    println!("Max document text size: {} bytes", config.max_document_text_size);
+    println!(
+        "Max document text size: {} bytes",
+        context.get_max_document_text_size().unwrap_or(0)
+    );
 
-    // Create the index
-    let mut index = ShardexImpl::create(config).await?;
+    // Create the index using ApiThing pattern
+    CreateIndex::execute(&mut context, &create_params)?;
 
     // Sample documents with text and corresponding embeddings
     let documents = &[
@@ -90,10 +108,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             postings.push(posting);
         }
 
-        // Store document text and postings atomically
-        index
-            .replace_document_with_postings(doc_id, document_text.to_string(), postings)
-            .await?;
+        // Store document text and postings using new API
+        let store_params = StoreDocumentTextParams::new(doc_id, document_text.to_string(), postings)?;
+        StoreDocumentText::execute(&mut context, &store_params)?;
 
         println!(
             "  Document {}: {} characters, {} segments",
@@ -104,17 +121,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Flush to ensure all data is written
-    let flush_stats = index.flush_with_stats().await?;
-    println!("\\nFlushed to disk - Operations: {}", flush_stats.operations_applied);
+    let flush_params = FlushParams::with_stats();
+    let flush_stats = Flush::execute(&mut context, &flush_params)?;
+    if let Some(stats) = flush_stats {
+        println!("\nFlushed to disk - Operations: {}", stats.operations_applied);
+    } else {
+        println!("\nFlushed to disk");
+    }
 
     // Demonstrate full document text retrieval
-    println!("\\nRetrieving full document text:");
+    println!("\nRetrieving full document text:");
     println!("==============================");
 
     for i in 1..=documents.len() {
         let doc_id = DocumentId::from_raw(i as u128);
 
-        match index.get_document_text(doc_id).await {
+        let get_params = GetDocumentTextParams::new(doc_id);
+        match GetDocumentText::execute(&mut context, &get_params) {
             Ok(text) => {
                 println!(
                     "Document {}: \"{}\"",
@@ -131,7 +154,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Demonstrate text extraction from postings
-    println!("\\nExtracting text from individual postings:");
+    println!("\nExtracting text from individual postings:");
     println!("=========================================");
 
     let doc_id = DocumentId::from_raw(1);
@@ -157,7 +180,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     for (i, posting) in sample_postings.iter().enumerate() {
-        match index.extract_text(posting).await {
+        let extract_params = ExtractSnippetParams::from_posting(posting);
+        match ExtractSnippet::execute(&mut context, &extract_params) {
             Ok(extracted_text) => {
                 println!(
                     "  Posting {}: '{}' ({}:{}+{})",
@@ -173,7 +197,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Demonstrate search integration with text extraction
-    println!("\\nSearching and extracting text from results:");
+    println!("\nSearching and extracting text from results:");
     println!("===========================================");
 
     let search_queries = vec![
@@ -183,11 +207,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     for (query_desc, query_terms) in search_queries {
-        println!("\\nSearching for: {}", query_desc);
+        println!("\nSearching for: {}", query_desc);
         let query_vector = generate_segment_vector(query_terms);
 
         // Search for top 3 most similar postings
-        let results = index.search(&query_vector, 3, None).await?;
+        let search_params = SearchParams::builder()
+            .query_vector(query_vector)
+            .k(3)
+            .slop_factor(None)
+            .build()?;
+        let results = Search::execute(&mut context, &search_params)?;
 
         if results.is_empty() {
             println!("  No results found");
@@ -203,7 +232,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 vector: result.vector.clone(),
             };
 
-            match index.extract_text(&result_posting).await {
+            let extract_params = ExtractSnippetParams::from_posting(&result_posting);
+            match ExtractSnippet::execute(&mut context, &extract_params) {
                 Ok(result_text) => {
                     println!(
                         "  {}. '{}' (score: {:.4}, doc: {})",
@@ -226,12 +256,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Demonstrate error handling
-    println!("\\nDemonstrating error handling:");
+    println!("\nDemonstrating error handling:");
     println!("=============================");
 
     // Test with nonexistent document
     let nonexistent_doc = DocumentId::from_raw(999);
-    match index.get_document_text(nonexistent_doc).await {
+    let get_params = GetDocumentTextParams::new(nonexistent_doc);
+    match GetDocumentText::execute(&mut context, &get_params) {
         Ok(_) => println!("  Unexpected success for nonexistent document"),
         Err(e) => println!("  ✓ Correctly handled missing document: {}", e),
     }
@@ -244,15 +275,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         vector: generate_segment_vector("invalid"),
     };
 
-    match index.extract_text(&invalid_posting).await {
+    let extract_params = ExtractSnippetParams::from_posting(&invalid_posting);
+    match ExtractSnippet::execute(&mut context, &extract_params) {
         Ok(_) => println!("  Unexpected success for invalid range"),
         Err(e) => println!("  ✓ Correctly handled invalid range: {}", e),
     }
 
     // Get final statistics
-    println!("\\nFinal Index Statistics:");
+    println!("\nFinal Index Statistics:");
     println!("======================");
-    let stats = index.stats().await?;
+    let stats_params = GetStatsParams::new();
+    let stats = GetStats::execute(&mut context, &stats_params)?;
     println!("- Total documents: {}", documents.len());
     println!("- Total postings: {}", stats.total_postings);
     println!("- Active postings: {}", stats.active_postings);
@@ -260,7 +293,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Clean up temporary directory
     std::fs::remove_dir_all(&temp_dir)?;
-    println!("\\nExample completed successfully!");
+    println!("\nExample completed successfully!");
 
     Ok(())
 }
@@ -268,19 +301,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 /// Generate a simple text-based vector representation for a text segment
 /// In a real application, you would use a proper text embedding model
 fn generate_segment_vector(text: &str) -> Vec<f32> {
-    let mut vector = vec![0.0; 128];
+    let mut vector = vec![0.0; VECTOR_SIZE];
     let lowercase_text = text.to_lowercase();
     let words: Vec<&str> = lowercase_text.split_whitespace().collect();
 
     // Simple hash-based vector generation (for demonstration only)
     for (i, word) in words.iter().enumerate() {
         let hash = simple_hash(word);
-        let index = (hash % 128) as usize;
+        let index = (hash % VECTOR_SIZE as u32) as usize;
         vector[index] += 1.0 / (i + 1) as f32;
 
         // Add some character-based features for variety
         for (j, ch) in word.chars().enumerate() {
-            let char_index = ((ch as u32 + j as u32) % 128) as usize;
+            let char_index = ((ch as u32 + j as u32) % VECTOR_SIZE as u32) as usize;
             vector[char_index] += 0.1 / (j + 1) as f32;
         }
     }

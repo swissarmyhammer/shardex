@@ -102,7 +102,7 @@ async fn test_concurrent_storage_integration() {
     let storage_arc = std::sync::Arc::new(concurrent_storage);
     let mut write_tasks = Vec::new();
     for (doc_id, text) in &documents[0..25] {
-        let storage = std::sync::Arc::clone(&storage_arc);
+        let storage: std::sync::Arc<ConcurrentDocumentTextStorage> = std::sync::Arc::clone(&storage_arc);
         let doc_id = *doc_id;
         let text = text.clone();
         write_tasks.push(tokio::spawn(async move {
@@ -120,7 +120,7 @@ async fn test_concurrent_storage_integration() {
 
     let mut read_tasks = Vec::new();
     for (doc_id, expected_text) in &documents[25..35] {
-        let storage = std::sync::Arc::clone(&storage_arc);
+        let storage: std::sync::Arc<ConcurrentDocumentTextStorage> = std::sync::Arc::clone(&storage_arc);
         let doc_id = *doc_id;
         let expected_text = expected_text.clone();
         read_tasks.push(tokio::spawn(async move {
@@ -145,7 +145,7 @@ async fn test_concurrent_storage_integration() {
     let mut batch_tasks = Vec::new();
 
     for (doc_id, text) in batch_docs {
-        let storage = std::sync::Arc::clone(&storage_arc);
+        let storage: std::sync::Arc<ConcurrentDocumentTextStorage> = std::sync::Arc::clone(&storage_arc);
         batch_tasks.push(tokio::spawn(async move {
             storage.store_text_batched(doc_id, text).await.unwrap();
         }));
@@ -416,7 +416,7 @@ async fn test_full_integration_stack() {
         let batch_end = (batch_start + batch_size).min(documents.len());
         let batch = &documents[batch_start..batch_end];
 
-        let storage = std::sync::Arc::clone(&concurrent_storage_arc);
+        let storage: std::sync::Arc<ConcurrentDocumentTextStorage> = std::sync::Arc::clone(&concurrent_storage_arc);
         let batch = batch.to_vec();
 
         batch_tasks.push(tokio::spawn(async move {
@@ -452,7 +452,7 @@ async fn test_full_integration_stack() {
 
     let mut read_tasks = Vec::new();
     for (doc_id, expected_text) in &documents {
-        let storage = std::sync::Arc::clone(&concurrent_storage_arc);
+        let storage: std::sync::Arc<ConcurrentDocumentTextStorage> = std::sync::Arc::clone(&concurrent_storage_arc);
         let doc_id = *doc_id;
         let expected_text = expected_text.clone();
 

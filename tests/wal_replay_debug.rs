@@ -1,10 +1,7 @@
 //! Debug tests for WAL replay functionality
 
-use shardex::{
-    identifiers::DocumentId,
-    transactions::{WalOperation, WalTransaction},
-    wal::WalSegment,
-};
+use shardex::wal::{initial_write_position, WalRecordHeader, WalSegment};
+use shardex::{DocumentId, WalOperation, WalTransaction};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -34,13 +31,13 @@ async fn test_wal_segment_transaction_roundtrip() {
 
     // Check segment state
     println!("Segment write pointer: {}", segment.write_pointer());
-    println!("Initial write position: {}", shardex::wal::initial_write_position());
+    println!("Initial write position: {}", initial_write_position());
 
     // Now read back the segment data and try to parse
     let segment_data = segment.read_segment_data().unwrap();
     println!("Total segment data length: {}", segment_data.len());
 
-    let current_pos = shardex::wal::initial_write_position();
+    let current_pos = initial_write_position();
     println!("Starting parse at position: {}", current_pos);
 
     let write_pointer = segment.write_pointer();
@@ -52,7 +49,7 @@ async fn test_wal_segment_transaction_roundtrip() {
     }
 
     // Read the record header
-    let header_size = shardex::wal::WalRecordHeader::SIZE;
+    let header_size = WalRecordHeader::SIZE;
     println!("WAL record header size: {}", header_size);
 
     if current_pos + header_size > segment_data.len() {

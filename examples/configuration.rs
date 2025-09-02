@@ -6,12 +6,20 @@
 //! - Creating and opening indexes with custom configurations
 //! - Configuration validation and error handling
 
-use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
+use apithing::ApiOperation;
+use shardex::{
+    api::{
+        operations::{OpenIndex, ValidateConfig},
+        parameters::{OpenIndexParams, ValidateConfigParams},
+        AddPostings, AddPostingsParams, CreateIndex, CreateIndexParams, Flush, FlushParams, GetStats, GetStatsParams,
+        Search, SearchParams, ShardexContext,
+    },
+    DocumentId, Posting, ShardexConfig,
+};
 use std::error::Error;
 use std::time::Instant;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Shardex Configuration Example");
     println!("=============================");
 
@@ -25,46 +33,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Example 1: Default configuration
     println!("\n1. Default Configuration");
     println!("------------------------");
-    let default_config = ShardexConfig::new().directory_path(base_dir.join("default_index"));
+    let default_params = CreateIndexParams::builder()
+        .directory_path(base_dir.join("default_index"))
+        .build()
+        .expect("Default configuration should be valid");
 
-    print_config(&default_config);
+    print_config(&default_params);
 
     // Example 2: Conservative high-performance configuration (avoids hang issues)
     println!("\n2. High-Performance Configuration");
     println!("---------------------------------");
-    let high_perf_config = ShardexConfig::new()
-        .directory_path(base_dir.join("high_perf_index"))
-        .vector_size(256) // Conservative vector size
-        .shard_size(15000) // Moderate shards
-        .shardex_segment_size(1000) // Standard centroids per segment
-        .wal_segment_size(2 * 1024 * 1024) // 2MB WAL segments
-        .batch_write_interval_ms(75) // Faster batching
-        .default_slop_factor(4) // Broader search for accuracy
-        .bloom_filter_size(2048); // Moderate bloom filters
+    let high_perf_params = CreateIndexParams::high_performance(base_dir.join("high_perf_index"));
 
-    print_config(&high_perf_config);
+    print_config(&high_perf_params);
 
     // Example 3: Memory-optimized configuration for resource-constrained environments
     println!("\n3. Memory-Optimized Configuration");
     println!("----------------------------------");
-    let memory_opt_config = ShardexConfig::new()
-        .directory_path(base_dir.join("memory_opt_index"))
-        .vector_size(128) // Smaller vectors
-        .shard_size(5000) // Smaller shards
-        .shardex_segment_size(500) // Fewer centroids per segment
-        .wal_segment_size(256 * 1024) // 256KB WAL segments
-        .batch_write_interval_ms(200) // Less frequent batching
-        .default_slop_factor(2) // Narrower search for speed
-        .bloom_filter_size(512); // Smaller bloom filters
+    let memory_opt_params = CreateIndexParams::memory_optimized(base_dir.join("memory_opt_index"));
 
-    print_config(&memory_opt_config);
+    print_config(&memory_opt_params);
 
     // Create and test the high-performance configuration
     println!("\n4. Testing High-Performance Configuration");
     println!("=========================================");
 
     println!("Creating index with high-performance config...");
-    let mut index = ShardexImpl::create(high_perf_config.clone()).await?;
+    let mut context = ShardexContext::new();
+    CreateIndex::execute(&mut context, &high_perf_params)?;
 
     // Generate conservative test data (reduced to avoid hang)
     let test_data = generate_test_data(20, 256); // 20 documents, 256 dimensions
@@ -76,14 +72,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Measure indexing performance
     let start_time = Instant::now();
-    index.add_postings(test_data).await?;
-    index.flush().await?;
+    let add_params = AddPostingsParams::new(test_data)?;
+    AddPostings::execute(&mut context, &add_params)?;
+    let flush_params = FlushParams::new();
+    Flush::execute(&mut context, &flush_params)?;
     let indexing_time = start_time.elapsed();
 
     println!("Indexing completed in {:?}", indexing_time);
 
+    // Small delay to ensure statistics are updated after flush
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
     // Get detailed statistics
-    let stats = index.stats().await?;
+    let stats_params = GetStatsParams::new();
+    let stats = GetStats::execute(&mut context, &stats_params)?;
     println!("Final index statistics:");
     println!("  - Shards: {}", stats.total_shards);
     println!("  - Postings: {}", stats.total_postings);
@@ -103,7 +105,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let query_vector = generate_random_vector(256);
     let search_start = Instant::now();
-    let results = index.search(&query_vector, 10, None).await?;
+    let search_params = SearchParams::new(query_vector, 10)?;
+    let results = Search::execute(&mut context, &search_params)?;
     let search_time = search_start.elapsed();
 
     println!("Search for k=10 completed in {:?}", search_time);
@@ -117,12 +120,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n6. Reopening Existing Index");
     println!("===========================");
 
-    // Close the current index by dropping it
-    drop(index);
+    // Close the current index by dropping the context
+    drop(context);
 
     // Reopen the index (configuration will be read from metadata)
-    let reopened_index = ShardexImpl::open(high_perf_config.directory_path).await?;
-    let reopened_stats = reopened_index.stats().await?;
+    let mut reopen_context = ShardexContext::new();
+    let open_params = OpenIndexParams::new(high_perf_params.directory_path.clone());
+    OpenIndex::execute(&mut reopen_context, &open_params)?;
+    let stats_params = GetStatsParams::new();
+    let reopened_stats = GetStats::execute(&mut reopen_context, &stats_params)?;
 
     println!("Reopened index statistics:");
     println!("  - Postings: {}", reopened_stats.total_postings);
@@ -141,9 +147,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .directory_path(base_dir.join("invalid_index"))
         .vector_size(0); // Invalid!
 
-    match ShardexImpl::create(invalid_config).await {
-        Ok(_) => println!("Unexpected: Invalid config was accepted"),
-        Err(e) => println!("Expected error: {}", e),
+    let mut validation_context = ShardexContext::new();
+    let validate_params = ValidateConfigParams::new(invalid_config);
+    match ValidateConfig::execute(&mut validation_context, &validate_params) {
+        Ok(true) => println!("Unexpected: Invalid config was accepted"),
+        Ok(false) => println!("Expected: Invalid config was rejected"),
+        Err(e) => println!("Error during validation: {}", e),
     }
 
     // Clean up
@@ -153,17 +162,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn print_config(config: &ShardexConfig) {
-    println!("  Directory: {:?}", config.directory_path);
-    println!("  Vector size: {}", config.vector_size);
-    println!("  Shard size: {}", config.shard_size);
-    println!("  Shardex segment size: {}", config.shardex_segment_size);
-    println!("  WAL segment size: {} bytes", config.wal_segment_size);
-    println!("  Batch interval: {}ms", config.batch_write_interval_ms);
-    println!("  Default slop factor: {}", config.slop_factor_config.default_factor);
-    println!("  Bloom filter size: {}", config.bloom_filter_size);
+/// Prints the configuration parameters in a readable format
+///
+/// # Arguments
+/// * `params` - The CreateIndexParams to display
+fn print_config(params: &CreateIndexParams) {
+    println!("  Directory: {:?}", params.directory_path);
+    println!("  Vector size: {}", params.vector_size);
+    println!("  Shard size: {}", params.shard_size);
+    println!("  WAL segment size: {} bytes", params.wal_segment_size);
+    println!("  Batch interval: {}ms", params.batch_write_interval_ms);
+    println!("  Default slop factor: {}", params.default_slop_factor);
+    println!("  Bloom filter size: {}", params.bloom_filter_size);
 }
 
+/// Generates test postings data for performance benchmarking
+///
+/// # Arguments
+/// * `count` - Number of postings to generate
+/// * `vector_size` - Dimensionality of the embedding vectors
+///
+/// # Returns
+/// Vector of test postings with sequential document IDs and normalized random vectors
 fn generate_test_data(count: usize, vector_size: usize) -> Vec<Posting> {
     (0..count)
         .map(|i| {
@@ -180,6 +200,16 @@ fn generate_test_data(count: usize, vector_size: usize) -> Vec<Posting> {
         .collect()
 }
 
+/// Generates a deterministic normalized random vector using hash-based values
+///
+/// This creates reproducible random vectors using a hash-based approach,
+/// ensuring consistent test results across runs.
+///
+/// # Arguments
+/// * `size` - Number of dimensions in the vector
+///
+/// # Returns
+/// Normalized vector with unit magnitude (L2 norm = 1.0)
 fn generate_random_vector(size: usize) -> Vec<f32> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

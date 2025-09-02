@@ -3,7 +3,10 @@
 //! This module provides shared utilities for integration tests that cannot
 //! access the main crate's test_utils module.
 
-use shardex::{ConcurrentShardex, CowShardexIndex, ShardexConfig, ShardexError, ShardexIndex};
+use shardex::concurrent::ConcurrentShardex;
+use shardex::cow_index::CowShardexIndex;
+use shardex::shardex_index::ShardexIndex;
+use shardex::{ShardexConfig, ShardexError};
 use tempfile::TempDir;
 
 /// Test constants for consistent test configuration across integration tests

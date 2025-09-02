@@ -1,16 +1,22 @@
-//! Basic usage example for Shardex vector search engine
+//! Basic usage example for Shardex vector search engine using the ApiThing pattern
 //!
-//! This example demonstrates:
-//! - Creating a new index
-//! - Adding postings with vector embeddings
-//! - Performing similarity search
-//! - Basic error handling
+//! This example demonstrates the new ApiThing-based API:
+//! - Creating a new index with CreateIndex operation
+//! - Adding postings with AddPostings operation
+//! - Performing similarity search with Search operation
+//! - Flushing operations with Flush operation
+//! - Retrieving statistics with GetStats operation
+//! - Centralized state management with ShardexContext
 
-use shardex::{DocumentId, Posting, Shardex, ShardexConfig, ShardexImpl};
+use apithing::ApiOperation;
+use shardex::api::{
+    AddPostings, AddPostingsParams, CreateIndex, CreateIndexParams, Flush, FlushParams, GetStats, GetStatsParams,
+    Search, SearchParams, ShardexContext,
+};
+use shardex::{DocumentId, Posting};
 use std::error::Error;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("Shardex Basic Usage Example");
     println!("===========================");
 
@@ -21,17 +27,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     std::fs::create_dir_all(&temp_dir)?;
 
-    // Configure the index
-    let config = ShardexConfig::new()
-        .directory_path(&temp_dir)
-        .vector_size(128) // 128-dimensional vectors
-        .shard_size(10000) // Max 10,000 vectors per shard
-        .batch_write_interval_ms(100); // Batch writes every 100ms
-
     println!("Creating new index at: {}", temp_dir.display());
 
-    // Create the index
-    let mut index = ShardexImpl::create(config).await?;
+    // Create a context and configure the index
+    // The ShardexContext manages all state and is passed to each operation
+    let mut context = ShardexContext::new();
+    let create_params = CreateIndexParams::builder()
+        .directory_path(temp_dir.clone())
+        .vector_size(128) // 128-dimensional vectors
+        .shard_size(10000) // Max 10,000 vectors per shard
+        .batch_write_interval_ms(100) // Batch writes every 100ms
+        .build()?;
+
+    // Create the index using the CreateIndex operation
+    // All operations follow the ApiThing pattern: Operation::execute(&mut context, &params)
+    println!("About to call CreateIndex::execute...");
+    CreateIndex::execute(&mut context, &create_params)?;
+    println!("CreateIndex::execute completed successfully!");
 
     // Prepare some sample data
     let sample_documents = [
@@ -75,14 +87,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Add all postings to the index
     println!("\nIndexing {} documents...", postings.len());
-    index.add_postings(postings).await?;
+    let add_params = AddPostingsParams::new(postings)?;
+    AddPostings::execute(&mut context, &add_params)?;
 
     // Flush to ensure all data is written
-    let flush_stats = index.flush_with_stats().await?;
-    println!("Flushed to disk - Operations: {}", flush_stats.operations_applied);
+    let flush_params = FlushParams::with_stats();
+    let flush_stats = Flush::execute(&mut context, &flush_params)?;
+    if let Some(stats) = flush_stats {
+        println!("Flushed to disk - Operations: {}", stats.operations_applied);
+    }
 
     // Get index statistics
-    let stats = index.stats().await?;
+    let stats_params = GetStatsParams::new();
+    let stats = GetStats::execute(&mut context, &stats_params)?;
     println!("\nIndex Statistics:");
     println!("- Total shards: {}", stats.total_shards);
     println!("- Total postings: {}", stats.total_postings);
@@ -107,7 +124,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let query_vector = generate_text_vector(query_terms);
 
         // Search for top 3 most similar documents
-        let results = index.search(&query_vector, 3, None).await?;
+        let search_params = SearchParams::builder()
+            .query_vector(query_vector)
+            .k(3)
+            .slop_factor(None)
+            .build()?;
+        let results = Search::execute(&mut context, &search_params)?;
 
         for (i, result) in results.iter().enumerate() {
             println!(
@@ -122,7 +144,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Demonstrate search with custom slop factor
     println!("\nSearching with custom slop factor (broader search):");
     let query_vector = generate_text_vector("food cooking");
-    let results = index.search(&query_vector, 2, Some(3)).await?;
+    let search_params = SearchParams::builder()
+        .query_vector(query_vector)
+        .k(2)
+        .slop_factor(Some(3))
+        .build()?;
+    let results = Search::execute(&mut context, &search_params)?;
 
     println!("Results with slop factor 3:");
     for result in results {

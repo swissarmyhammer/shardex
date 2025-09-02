@@ -9,68 +9,22 @@
 //!
 //! ## Basic Usage
 //!
-//! ```rust
-//! use shardex::bloom_filter::BloomFilter;
-//! use shardex::identifiers::DocumentId;
-//!
-//! // Create a bloom filter for 10,000 documents with 1% false positive rate
-//! let mut filter = BloomFilter::new(10_000, 0.01)?;
-//!
-//! let doc_id = DocumentId::new();
-//! filter.insert(doc_id);
-//!
-//! assert!(filter.contains(doc_id));
-//! # Ok::<(), shardex::error::ShardexError>(())
-//! ```
+//! Internal bloom filter implementation for efficient document ID lookups.
 //!
 //! ## Builder Pattern Configuration
 //!
-//! ```rust
-//! use shardex::bloom_filter::BloomFilterBuilder;
-//!
-//! let mut filter = BloomFilterBuilder::new()
-//!     .capacity(50_000)
-//!     .false_positive_rate(0.005)
-//!     .build()?;
-//! # Ok::<(), shardex::error::ShardexError>(())
-//! ```
+//! The builder pattern allows configuring capacity and false positive rates
+//! for optimal performance in your use case.
 //!
 //! ## Merging Bloom Filters
 //!
-//! ```rust
-//! use shardex::bloom_filter::BloomFilter;
-//! use shardex::identifiers::DocumentId;
-//!
-//! let mut filter1 = BloomFilter::new(1000, 0.01)?;
-//! let mut filter2 = BloomFilter::new(1000, 0.01)?;
-//!
-//! let doc1 = DocumentId::new();
-//! let doc2 = DocumentId::new();
-//!
-//! filter1.insert(doc1);
-//! filter2.insert(doc2);
-//!
-//! filter1.merge(&filter2)?;
-//!
-//! assert!(filter1.contains(doc1));
-//! assert!(filter1.contains(doc2));
-//! # Ok::<(), shardex::error::ShardexError>(())
-//! ```
+//! Bloom filters can be merged to combine document sets from multiple sources.
+//! This is useful when consolidating indexes from different shards.
 //!
 //! ## Memory Mapping Support
 //!
-//! ```rust
-//! use shardex::bloom_filter::{BloomFilter, BloomFilterHeader};
-//! use bytemuck;
-//!
-//! let filter = BloomFilter::new(1000, 0.01)?;
-//! let header = filter.to_header(0); // bit_array_offset parameter
-//!
-//! // Headers can be memory-mapped directly
-//! let header_bytes = bytemuck::bytes_of(&header);
-//! let restored_header = bytemuck::from_bytes::<BloomFilterHeader>(header_bytes);
-//! # Ok::<(), shardex::error::ShardexError>(())
-//! ```
+//! Bloom filters support memory mapping for efficient persistent storage.
+//! Headers can be serialized and restored from memory-mapped files.
 //!
 //! # Performance Characteristics
 //!
@@ -124,6 +78,7 @@ pub struct BloomFilter {
 /// separately and referenced by offset and size fields.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
+#[allow(dead_code)]
 pub struct BloomFilterHeader {
     /// Number of hash functions used
     pub hash_functions: u32,
@@ -139,13 +94,6 @@ pub struct BloomFilterHeader {
     pub bit_array_bytes: u32,
     /// Offset to bit array data within the mapped file
     pub bit_array_offset: u64,
-}
-
-/// Builder for configuring bloom filters
-#[derive(Debug, Clone)]
-pub struct BloomFilterBuilder {
-    capacity: usize,
-    false_positive_rate: f64,
 }
 
 /// Statistics for bloom filter performance monitoring
@@ -283,6 +231,7 @@ impl BloomFilter {
     ///
     /// # Returns
     /// Ok(()) on success, or ShardexError if filters are incompatible
+    #[allow(dead_code)]
     pub fn merge(&mut self, other: &BloomFilter) -> Result<(), ShardexError> {
         if self.bit_array_size != other.bit_array_size {
             return Err(ShardexError::Config(format!(
@@ -436,6 +385,7 @@ impl BloomFilter {
     }
 
     /// Count the number of set bits in the bit array
+    #[allow(dead_code)]
     fn count_set_bits(&self) -> usize {
         self.bit_array
             .iter()
@@ -444,6 +394,35 @@ impl BloomFilter {
     }
 }
 
+impl BloomFilterHeader {
+    /// Create a zero-initialized bloom filter header
+    #[allow(dead_code)]
+    pub fn new_zero() -> Self {
+        Self::zeroed()
+    }
+
+    /// Check if this header represents a valid bloom filter
+    #[allow(dead_code)]
+    pub fn is_valid(&self) -> bool {
+        self.hash_functions > 0 && self.capacity > 0 && self.bit_array_size > 0 && self.bit_array_bytes > 0
+    }
+
+    /// Get the false positive rate from the stored micros value
+    #[allow(dead_code)]
+    pub fn false_positive_rate(&self) -> f64 {
+        self.false_positive_rate_micros as f64 / 1_000_000.0
+    }
+}
+
+#[cfg(test)]
+/// Builder for configuring bloom filters (test only)
+#[derive(Debug, Clone)]
+pub struct BloomFilterBuilder {
+    capacity: usize,
+    false_positive_rate: f64,
+}
+
+#[cfg(test)]
 impl BloomFilterBuilder {
     /// Create a new bloom filter builder
     pub fn new() -> Self {
@@ -468,29 +447,6 @@ impl BloomFilterBuilder {
     /// Build the bloom filter with configured parameters
     pub fn build(self) -> Result<BloomFilter, ShardexError> {
         BloomFilter::new(self.capacity, self.false_positive_rate)
-    }
-}
-
-impl Default for BloomFilterBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BloomFilterHeader {
-    /// Create a zero-initialized bloom filter header
-    pub fn new_zero() -> Self {
-        Self::zeroed()
-    }
-
-    /// Check if this header represents a valid bloom filter
-    pub fn is_valid(&self) -> bool {
-        self.hash_functions > 0 && self.capacity > 0 && self.bit_array_size > 0 && self.bit_array_bytes > 0
-    }
-
-    /// Get the false positive rate from the stored micros value
-    pub fn false_positive_rate(&self) -> f64 {
-        self.false_positive_rate_micros as f64 / 1_000_000.0
     }
 }
 

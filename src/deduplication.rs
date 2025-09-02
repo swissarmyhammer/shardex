@@ -14,42 +14,16 @@
 //!
 //! ## Basic Deduplication
 //!
-//! ```rust
-//! use shardex::deduplication::{ResultDeduplicator, DeduplicationPolicy};
-//! use shardex::structures::SearchResult;
-//! use shardex::identifiers::DocumentId;
-//!
-//! # fn example() -> Result<(), shardex::error::ShardexError> {
-//! let mut deduplicator = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
-//!
-//! let mut results = vec![
-//!     SearchResult::new(DocumentId::new(), 0, 100, vec![0.1, 0.2], 0.9, 2)?,
-//!     SearchResult::new(DocumentId::new(), 0, 100, vec![0.1, 0.2], 0.8, 2)?, // Duplicate position
-//! ];
-//!
-//! let deduplicated = deduplicator.deduplicate(results);
-//! assert_eq!(deduplicated.len(), 1); // One duplicate removed
-//! # Ok(())
-//! # }
-//! ```
+//! The deduplicator removes duplicate search results based on configurable policies
+//! such as document ID, position, or vector similarity.
 //!
 //! ## Policy Comparison
 //!
-//! ```rust
-//! use shardex::deduplication::{ResultDeduplicator, DeduplicationPolicy};
-//!
-//! // No deduplication - fastest performance
-//! let none_dedup = ResultDeduplicator::new(DeduplicationPolicy::None);
-//!
-//! // Document-level deduplication - one result per document
-//! let doc_dedup = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentId);
-//!
-//! // Position-based deduplication - unique (document_id, start) pairs
-//! let pos_dedup = ResultDeduplicator::new(DeduplicationPolicy::ByDocumentAndPosition);
-//!
-//! // Exact deduplication - considers all fields
-//! let exact_dedup = ResultDeduplicator::new(DeduplicationPolicy::Exact);
-//! ```
+//! Different policies offer various trade-offs between performance and precision:
+//! - None: Fastest, no deduplication
+//! - ByDocumentId: One result per document  
+//! - ByDocumentAndPosition: Unique document/position pairs
+//! - Exact: Complete field-level deduplication
 
 use crate::structures::SearchResult;
 use rustc_hash::FxHashSet;
@@ -171,7 +145,6 @@ impl DeduplicationStats {
 /// Maintains internal state to track seen results and provides statistics.
 pub struct ResultDeduplicator {
     policy: DeduplicationPolicy,
-    seen_documents: FxHashSet<u128>,
     seen_postings: FxHashSet<(u128, u32)>,
     seen_exact: FxHashSet<u64>,
     stats: DeduplicationStats,
@@ -182,29 +155,10 @@ impl ResultDeduplicator {
     pub fn new(policy: DeduplicationPolicy) -> Self {
         Self {
             policy,
-            seen_documents: FxHashSet::default(),
             seen_postings: FxHashSet::default(),
             seen_exact: FxHashSet::default(),
             stats: DeduplicationStats::new(),
         }
-    }
-
-    /// Get the current deduplication policy
-    pub fn policy(&self) -> DeduplicationPolicy {
-        self.policy
-    }
-
-    /// Get current deduplication statistics
-    pub fn stats(&self) -> &DeduplicationStats {
-        &self.stats
-    }
-
-    /// Reset internal state and statistics
-    pub fn reset(&mut self) {
-        self.seen_documents.clear();
-        self.seen_postings.clear();
-        self.seen_exact.clear();
-        self.stats = DeduplicationStats::new();
     }
 
     /// Deduplicate a vector of search results according to the policy
@@ -214,6 +168,26 @@ impl ResultDeduplicator {
     ///
     /// # Returns
     /// Vector of deduplicated results, typically sorted by similarity score
+    /// Get the current deduplication policy (for tests)
+    #[cfg(test)]
+    pub fn policy(&self) -> DeduplicationPolicy {
+        self.policy
+    }
+
+    /// Get current deduplication statistics
+    #[allow(dead_code)]
+    pub fn stats(&self) -> &DeduplicationStats {
+        &self.stats
+    }
+
+    /// Reset internal state and statistics (for tests)
+    #[cfg(test)]
+    pub fn reset(&mut self) {
+        self.seen_postings.clear();
+        self.seen_exact.clear();
+        self.stats = DeduplicationStats::new();
+    }
+
     pub fn deduplicate(&mut self, results: Vec<SearchResult>) -> Vec<SearchResult> {
         let original_count = results.len();
 

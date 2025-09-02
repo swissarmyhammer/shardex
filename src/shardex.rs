@@ -8,13 +8,13 @@ use crate::config::ShardexConfig;
 use crate::config_persistence::{ConfigurationManager, PersistedConfig};
 use crate::distance::DistanceMetric;
 use crate::error::ShardexError;
+use crate::identifiers::ShardId;
 use crate::layout::{DirectoryLayout, IndexMetadata};
 use crate::monitoring::{DetailedIndexStats, PerformanceMonitor as MonitoringPerformanceMonitor};
 use crate::shardex_index::ShardexIndex;
 use crate::structures::{FlushStats, IndexStats, Posting, SearchResult};
 use crate::transactions::{BatchConfig, WalOperation};
 use crate::wal_replay::WalReplayer;
-use crate::ShardId;
 use async_trait::async_trait;
 use std::path::Path;
 use std::time::Duration;
@@ -186,6 +186,15 @@ pub trait Shardex {
     /// # }
     /// ```
     async fn replace_document_with_postings(
+        &mut self,
+        document_id: crate::identifiers::DocumentId,
+        text: String,
+        postings: Vec<Posting>,
+    ) -> Result<(), Self::Error>;
+
+    /// Replace document with postings but only stage operations (don't flush)
+    /// Used by batch operations to avoid flushing after each document
+    async fn replace_document_with_postings_staged(
         &mut self,
         document_id: crate::identifiers::DocumentId,
         text: String,
@@ -1746,10 +1755,12 @@ impl Shardex for ShardexImpl {
             postings.len()
         );
 
-        // Ensure batch processor is initialized
-        if self.batch_processor.is_none() {
-            self.initialize_batch_processor().await?;
+        // Force fresh batch processor initialization for remove_documents due to runtime lifecycle issues
+        debug!("Forcing fresh batch processor initialization for remove_documents");
+        if let Some(mut processor) = self.batch_processor.take() {
+            processor.shutdown().await?;
         }
+        self.initialize_batch_processor().await?;
 
         // Convert postings to WAL operations
         let operations: Vec<WalOperation> = postings
@@ -2021,6 +2032,24 @@ impl Shardex for ShardexImpl {
         text: String,
         postings: Vec<Posting>,
     ) -> Result<(), ShardexError> {
+        // Stage the operations without flushing
+        self.replace_document_with_postings_staged(document_id, text, postings)
+            .await?;
+
+        // Force flush to ensure atomicity for single document operations
+        self.flush().await?;
+
+        Ok(())
+    }
+
+    /// Replace document with postings but only stage operations (don't flush)
+    /// Used by batch operations to avoid flushing after each document
+    async fn replace_document_with_postings_staged(
+        &mut self,
+        document_id: crate::identifiers::DocumentId,
+        text: String,
+        postings: Vec<Posting>,
+    ) -> Result<(), ShardexError> {
         // Validate inputs
         self.validate_replacement_inputs(document_id, &text, &postings)?;
 
@@ -2046,11 +2075,8 @@ impl Shardex for ShardexImpl {
             });
         }
 
-        // Stage operations for atomic execution
+        // Stage operations for atomic execution (but don't flush yet)
         self.pending_shard_operations.extend(operations);
-
-        // Force flush to ensure atomicity
-        self.flush().await?;
 
         Ok(())
     }

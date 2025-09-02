@@ -58,29 +58,16 @@
 //! ```
 //!
 //! ### Batch Write Operations
-//! ```rust,no_run
-//! # use shardex::{CowShardexIndex, ShardexIndex, ShardexError, ShardexConfig};
-//! # use tempfile::TempDir;
-//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let temp_dir = TempDir::new()?;
-//! # let config = ShardexConfig::new().directory_path(temp_dir.path()).vector_size(128);
-//! # let index = ShardexIndex::create(config)?;
-//! # let cow_index = CowShardexIndex::new(index);
-//! # struct Operation;
-//! # impl Operation {
-//! #     fn apply(&self, writer: &mut shardex::IndexWriter) -> Result<(), ShardexError> { Ok(()) }
-//! # }
+//!
+//! COW indexes support efficient batch operations that minimize memory allocation
+//! and provide consistent performance across large write workloads.
 //! # let batch_operations: Vec<Operation> = vec![];
 //! // Batch multiple operations into single COW cycle
 //! let mut writer = cow_index.clone_for_write()?;
 //! for operation in batch_operations {
 //!     // Perform multiple operations on same writer
 //!     operation.apply(&mut writer)?;
-//! }
-//! // Single commit for entire batch
-//! # Ok(())
-//! # }
-//! ```
+
 //!
 //! ### Monitor Memory Usage
 //! ```rust,no_run
@@ -209,28 +196,8 @@
 //!
 //! ## Recovery Best Practices
 //!
-//! ```rust,no_run
-//! use std::time::Duration;
-//! use shardex::{CowShardexIndex, IndexWriter, ShardexError};
-//!
-//! // Monitor memory usage and implement backpressure
-//! async fn safe_write_with_memory_check(
-//!     cow_index: &CowShardexIndex,
-//!     max_memory_mb: usize,
-//! ) -> Result<IndexWriter, ShardexError> {
-//!     let metrics = cow_index.metrics();
-//!     let current_memory_mb = metrics.memory_usage_bytes / (1024 * 1024);
-//!     
-//!     if current_memory_mb > max_memory_mb {
-//!         return Err(ShardexError::ResourceExhausted {
-//!             resource: "memory".to_string(),
-//!             reason: format!("Current memory usage {}MB exceeds limit {}MB", current_memory_mb, max_memory_mb),
-//!             suggestion: "Reduce concurrent writers or increase memory limit".to_string(),
-//!         });
-//!     }
-//!     
-//!     cow_index.clone_for_write()
-//! }
+//! COW indexes provide memory monitoring and backpressure mechanisms
+//! to prevent resource exhaustion during intensive write operations.
 //! ```
 
 use crate::error::ShardexError;

@@ -8,9 +8,8 @@
 //! - Corruption detection and handling
 //! - Recovery from error states
 
+use shardex::{ShardexError, DocumentId};
 use shardex::document_text_storage::DocumentTextStorage;
-use shardex::error::ShardexError;
-use shardex::identifiers::DocumentId;
 use tempfile::TempDir;
 
 #[test]

@@ -1,14 +1,10 @@
 //! Integration tests for WAL replay functionality
 
-use shardex::{
-    config::ShardexConfig,
-    identifiers::DocumentId,
-    layout::DirectoryLayout,
-    shardex_index::ShardexIndex,
-    transactions::{WalOperation, WalTransaction},
-    wal::WalSegment,
-    wal_replay::WalReplayer,
-};
+use shardex::wal::WalSegment;
+use shardex::wal_replay::WalReplayer;
+use shardex::{DocumentId, ShardexConfig, WalOperation, WalTransaction};
+use shardex::layout::DirectoryLayout;
+use shardex::shardex_index::ShardexIndex;
 use tempfile::TempDir;
 
 #[tokio::test]

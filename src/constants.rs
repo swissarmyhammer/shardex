@@ -20,16 +20,20 @@ pub mod magic {
     /// Text data file magic bytes
     pub const TEXT_DATA: &[u8; 4] = b"TDAT";
 
-    /// Generic test magic bytes used in unit tests
+    /// Generic test magic bytes used in unit tests  
+    #[cfg(test)]
     pub const TEST_GENERIC: &[u8; 4] = b"TEST";
 
     /// Shared test magic bytes used in memory tests
+    #[cfg(test)]
     pub const TEST_SHARD: &[u8; 4] = b"SHRD";
 
     /// Corruption testing magic bytes
+    #[cfg(test)]
     pub const TEST_CORRUPTION: &[u8; 4] = b"XXXX";
 
     /// Failure testing magic bytes
+    #[cfg(test)]
     pub const TEST_FAILURE: &[u8; 4] = b"FAIL";
 }
 
