@@ -70,7 +70,8 @@ checksum = "862ed96ca487e809f1c8e5a8447f6ee2cf102f846893800b20cebdf541fc6bbd"
 [[package]]
 name = "apithing"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/apithing#6a46e8cb295cf928e7b24c392e1b58baccd3142c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4eb1bc8c4166edb1d1b217b5003fc26cbf46977bc3bc25a175dce5dfe19de2"
 
 [[package]]
 name = "arrow"

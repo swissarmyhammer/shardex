@@ -10,7 +10,12 @@ homepage = "https://github.com/wballard/shardex"
 documentation = "https://docs.rs/shardex"
 readme = "README.md"
 keywords = ["vector", "search", "embedding", "index", "similarity"]
-categories = ["algorithms", "data-structures", "database-implementations", "science"]
+categories = [
+    "algorithms",
+    "data-structures",
+    "database-implementations",
+    "science",
+]
 rust-version = "1.70"
 
 [package.metadata.docs.rs]
@@ -18,7 +23,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-apithing = { git = "https://github.com/swissarmyhammer/apithing" }
+apithing = "0.1.0"
 arrow = "53"
 arrow-array = "53"
 arrow-buffer = "53"
@@ -40,7 +45,13 @@ log = "0.4"
 libc = "0.2"
 crc32fast = "1.4"
 bincode = "1.3"
-tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+tokio = { version = "1.0", features = [
+    "rt",
+    "rt-multi-thread",
+    "time",
+    "sync",
+    "macros",
+] }
 tokio-util = "0.7"
 futures = "0.3"
 rustc-hash = "1.1"
@@ -60,11 +71,9 @@ name = "document_text_performance_bench"
 harness = false
 
 
-
 [lib]
 name = "shardex"
 path = "src/lib.rs"
-
 
 
 [profile.release]
